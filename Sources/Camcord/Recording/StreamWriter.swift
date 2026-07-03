@@ -21,6 +21,7 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
 
     private var pauseClock: PauseClock
     private var sessionStarted = false
+    private var isFinished = false
     private var didLogWriterFailure = false
 
     let outputURL: URL
@@ -97,6 +98,10 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     // MARK: - SCStreamOutput (called on the shared sampleHandlerQueue)
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        // A stray buffer that lands after markFinished() (most plausible on the
+        // abrupt didStopWithError path, where nothing drained the stream) must not
+        // reach an already-finished input — that's an uncaught NSException.
+        guard !isFinished else { return }
         guard sampleBuffer.isValid, CMSampleBufferDataIsReady(sampleBuffer) else { return }
 
         switch type {
@@ -191,9 +196,12 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         pauseClock.resume()
     }
 
-    /// Marks all inputs finished. The (thread-safe) `finishWriting` await happens in
-    /// the engine after this has run on the queue -- guaranteeing no append races it.
+    /// Marks all inputs finished. Runs on the sample queue (FIFO with the output
+    /// callbacks), and `isFinished` hard-stops any buffer that still arrives after --
+    /// so nothing can append past this point regardless of SCStream's delivery
+    /// ordering guarantees.
     func markFinished() {
+        isFinished = true
         guard writer.status == .writing else { return }
         for input in [videoInput, systemAudioInput, microphoneInput].compactMap({ $0 }) {
             input.markAsFinished()
@@ -271,7 +279,6 @@ enum VideoCodecChoice {
 enum RecordingError: Error {
     case writerRejectedInput
     case writerFailed(Error?)
-    case noDisplayForRegion
     case alreadyRecording
     case notRecording
 }

@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import CoreGraphics
 import KeyboardShortcuts
@@ -21,6 +22,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let pauseResumeItem = NSMenuItem(title: "Pause Recording", action: nil, keyEquivalent: "")
     private let screenRecordingStatusItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let requestScreenRecordingItem = NSMenuItem(title: "Request Screen Recording…", action: nil, keyEquivalent: "")
+    private let micStatusItem = NSMenuItem(title: "Mikrofon izni yok — Aç", action: nil, keyEquivalent: "")
     private let launchAtLoginItem = NSMenuItem(title: "Launch at Login", action: nil, keyEquivalent: "")
     private let tapStatusItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let settingsItem = NSMenuItem(title: "Settings…", action: nil, keyEquivalent: ",")
@@ -95,6 +97,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         requestScreenRecordingItem.action = #selector(requestScreenRecording)
         menu.addItem(requestScreenRecordingItem)
 
+        micStatusItem.target = self
+        micStatusItem.action = #selector(micStatusClicked)
+        micStatusItem.isHidden = true
+        menu.addItem(micStatusItem)
+
         launchAtLoginItem.target = self
         launchAtLoginItem.action = #selector(toggleLaunchAtLogin)
         menu.addItem(launchAtLoginItem)
@@ -127,6 +134,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         refreshScreenRecordingState()
+        refreshMicrophoneState()
         refreshLaunchAtLoginState()
         refreshTapStatus()
         refreshRecordingItems()
@@ -138,6 +146,15 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let granted = CGPreflightScreenCaptureAccess()
         screenRecordingStatusItem.title = granted ? "Screen Recording: Granted" : "Screen Recording: Not granted"
         requestScreenRecordingItem.isHidden = granted
+    }
+
+    /// Mic-denied notice: shown when recordings are configured to include the mic
+    /// but the Microphone TCC grant is denied/restricted (recordings then silently
+    /// proceed without the mic track -- this row is why they do).
+    private func refreshMicrophoneState() {
+        let wantsMic = RecordingSettings.load(from: .standard).microphone
+        let status = AVCaptureDevice.authorizationStatus(for: .audio)
+        micStatusItem.isHidden = !(wantsMic && (status == .denied || status == .restricted))
     }
 
     private func refreshLaunchAtLoginState() {
@@ -169,6 +186,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     /// time while recording, pause glyph while paused, plain camera when idle.
     func setRecordingUI(_ state: RecordingController.UIState, elapsed: String?) {
         guard let button = statusItem.button else { return }
+        // squareLength pins the item to an icon-sized square and would clip the
+        // elapsed title; widen while recording, restore the square when idle.
+        statusItem.length = state == .idle ? NSStatusItem.squareLength : NSStatusItem.variableLength
         switch state {
         case .idle:
             let image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Camcord")
@@ -300,6 +320,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     @objc private func quit() {
         NSApp.terminate(nil)
+    }
+
+    @objc private func micStatusClicked() {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
     }
 
     @objc private func tapStatusClicked() {

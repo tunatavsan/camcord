@@ -41,11 +41,12 @@ final class RecordingEngine: NSObject {
     func start(target: Target, settings: RecordingSettings, outputURL: URL) async throws {
         guard stream == nil else { throw RecordingError.alreadyRecording }
 
+        let initialCodec = VideoCodecChoice.hevc
         do {
-            try await attemptStart(target: target, settings: settings, outputURL: outputURL, codec: .hevc)
+            try await attemptStart(target: target, settings: settings, outputURL: outputURL, codec: initialCodec)
         } catch {
-            guard let fallback = VideoCodecChoice.hevc.fallback else { throw error }
-            logger.error("HEVC start failed, retrying with H.264: \(String(describing: error), privacy: .public)")
+            guard let fallback = initialCodec.fallback else { throw error }
+            logger.error("\(String(describing: initialCodec), privacy: .public) start failed, retrying with fallback: \(String(describing: error), privacy: .public)")
             try? FileManager.default.removeItem(at: outputURL)
             try await attemptStart(target: target, settings: settings, outputURL: outputURL, codec: fallback)
         }
@@ -202,7 +203,9 @@ final class RecordingEngine: NSObject {
 
 /// `SCStreamDelegate` calls arrive on an arbitrary queue; this tiny relay is the only
 /// nonisolated surface, forwarding the error into a `@Sendable` closure that hops to
-/// the main actor. Holds no mutable state.
+/// the main actor. Holds no mutable state -- so whether `SCStream` retains its
+/// delegate strongly or weakly (the SDK header doesn't say), an early dealloc merely
+/// silences an already-irrelevant callback.
 private final class StreamDelegateRelay: NSObject, SCStreamDelegate, Sendable {
     private let onStop: @Sendable (Error) -> Void
 
