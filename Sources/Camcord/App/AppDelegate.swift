@@ -49,10 +49,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             recordingStateModel?.elapsed = elapsed
         }
 
-        let panelController = PanelController(
-            model: recordingStateModel,
-            actions: makePanelActions(coordinator: coordinator, recordingController: recordingController)
-        )
+        var panelActions = makePanelActions(coordinator: coordinator, recordingController: recordingController)
+        panelActions.applyTapBindings = { [weak eventTapEngine] bindings in
+            eventTapEngine?.apply(bindings)
+        }
+        let panelController = PanelController(model: recordingStateModel, actions: panelActions)
         self.panelController = panelController
 
         statusItemController.onPrimaryClick = { [weak panelController, weak statusItemController] in
