@@ -38,6 +38,7 @@ enum AccessibilityPermission {
 @MainActor
 final class EventTapEngine {
     private let coordinator: CaptureCoordinator
+    private let recordingController: RecordingController
     private let logger = Logger(subsystem: "dev.tavsan.camcord", category: "event-tap-engine")
 
     private var bindings = TapBindings()
@@ -51,8 +52,9 @@ final class EventTapEngine {
     /// are enabled but the tap could not be created or is not currently enabled.
     private(set) var isTapHealthy = false
 
-    init(coordinator: CaptureCoordinator) {
+    init(coordinator: CaptureCoordinator, recordingController: RecordingController) {
         self.coordinator = coordinator
+        self.recordingController = recordingController
         registerWorkspaceNotifications()
         startWatchdog()
     }
@@ -245,8 +247,7 @@ final class EventTapEngine {
         case .captureRegion:
             Task { await coordinator.captureRegionInteractive() }
         case .toggleRecording:
-            logger.notice("recording arrives in M3")
-            NSSound.beep()
+            Task { await recordingController.toggleRecording() }
         }
     }
 }

@@ -29,7 +29,7 @@ final class SettingsWindowController {
     private func makeWindow() -> NSWindow {
         let contentView = SettingsView(eventTapEngine: eventTapEngine, defaultsSuite: defaultsSuite)
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 440),
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 540),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -50,6 +50,7 @@ struct SettingsView: View {
     let defaultsSuite: UserDefaults
 
     @State private var bindings: TapBindings
+    @State private var recordingSettings: RecordingSettings
     @State private var isAccessibilityTrusted: Bool
     @State private var trustPollTimer: Timer?
 
@@ -57,6 +58,7 @@ struct SettingsView: View {
         self.eventTapEngine = eventTapEngine
         self.defaultsSuite = defaultsSuite
         _bindings = State(initialValue: TapBindings.load(from: defaultsSuite))
+        _recordingSettings = State(initialValue: RecordingSettings.load(from: defaultsSuite))
         _isAccessibilityTrusted = State(initialValue: AccessibilityPermission.isTrusted())
     }
 
@@ -84,12 +86,21 @@ struct SettingsView: View {
 
                 accessibilityStatusRow
             }
+
+            Section("Kayıt") {
+                Toggle("Sistem sesini kaydet", isOn: $recordingSettings.systemAudio)
+                Toggle("Mikrofonu kaydet", isOn: $recordingSettings.microphone)
+            }
         }
         .formStyle(.grouped)
-        .frame(width: 480, height: 440)
+        .frame(width: 480, height: 540)
         .onChange(of: bindings) { _, newValue in
             newValue.save(to: defaultsSuite)
             eventTapEngine.apply(newValue)
+        }
+        .onChange(of: recordingSettings) { _, newValue in
+            // Read back at the start of each recording -- no engine restart needed.
+            newValue.save(to: defaultsSuite)
         }
         .onAppear {
             startTrustPollingIfNeeded()

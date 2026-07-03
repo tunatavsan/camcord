@@ -8,6 +8,7 @@ import os
 final class StatusItemController: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
     private let coordinator: CaptureCoordinator
+    private let recordingController: RecordingController
     private let eventTapEngine: EventTapEngine
     private let settingsWindowController: SettingsWindowController
 
@@ -15,6 +16,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let captureActiveWindowItem = NSMenuItem(title: "Capture Active Window", action: nil, keyEquivalent: "")
     private let captureFullScreenItem = NSMenuItem(title: "Capture Full Screen", action: nil, keyEquivalent: "")
     private let repeatLastRegionItem = NSMenuItem(title: "Repeat Last Region", action: nil, keyEquivalent: "")
+    private let recordToggleItem = NSMenuItem(title: "Start Recording…", action: nil, keyEquivalent: "")
+    private let recordFullScreenItem = NSMenuItem(title: "Record Full Screen", action: nil, keyEquivalent: "")
+    private let pauseResumeItem = NSMenuItem(title: "Pause Recording", action: nil, keyEquivalent: "")
     private let screenRecordingStatusItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let requestScreenRecordingItem = NSMenuItem(title: "Request Screen Recording…", action: nil, keyEquivalent: "")
     private let launchAtLoginItem = NSMenuItem(title: "Launch at Login", action: nil, keyEquivalent: "")
@@ -23,8 +27,14 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private let logger = Logger(subsystem: "dev.tavsan.camcord", category: "app")
 
-    init(coordinator: CaptureCoordinator, eventTapEngine: EventTapEngine, settingsWindowController: SettingsWindowController) {
+    init(
+        coordinator: CaptureCoordinator,
+        recordingController: RecordingController,
+        eventTapEngine: EventTapEngine,
+        settingsWindowController: SettingsWindowController
+    ) {
         self.coordinator = coordinator
+        self.recordingController = recordingController
         self.eventTapEngine = eventTapEngine
         self.settingsWindowController = settingsWindowController
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -58,6 +68,23 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         repeatLastRegionItem.action = #selector(repeatLastRegion)
         repeatLastRegionItem.setShortcut(for: .repeatLastRegion)
         menu.addItem(repeatLastRegionItem)
+
+        menu.addItem(.separator())
+
+        recordToggleItem.target = self
+        recordToggleItem.action = #selector(toggleRecording)
+        recordToggleItem.setShortcut(for: .toggleRecording)
+        menu.addItem(recordToggleItem)
+
+        recordFullScreenItem.target = self
+        recordFullScreenItem.action = #selector(recordFullScreen)
+        menu.addItem(recordFullScreenItem)
+
+        pauseResumeItem.target = self
+        pauseResumeItem.action = #selector(pauseResumeRecording)
+        pauseResumeItem.setShortcut(for: .pauseRecording)
+        pauseResumeItem.isHidden = true
+        menu.addItem(pauseResumeItem)
 
         menu.addItem(.separator())
 
@@ -102,6 +129,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         refreshScreenRecordingState()
         refreshLaunchAtLoginState()
         refreshTapStatus()
+        refreshRecordingItems()
     }
 
     // MARK: - Dynamic state
@@ -133,6 +161,81 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         } else {
             tapStatusItem.isHidden = true
         }
+    }
+
+    // MARK: - Recording UI (pushed by RecordingController via AppDelegate wiring)
+
+    /// Renders the recording state on the status item: red record glyph + elapsed
+    /// time while recording, pause glyph while paused, plain camera when idle.
+    func setRecordingUI(_ state: RecordingController.UIState, elapsed: String?) {
+        guard let button = statusItem.button else { return }
+        switch state {
+        case .idle:
+            let image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Camcord")
+            image?.isTemplate = true
+            button.image = image
+            button.contentTintColor = nil
+            button.title = ""
+        case .recording:
+            let image = NSImage(systemSymbolName: "record.circle.fill", accessibilityDescription: "Recording")
+            image?.isTemplate = true
+            button.image = image
+            button.contentTintColor = .systemRed
+            button.imagePosition = .imageLeading
+            button.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+            button.title = " \(elapsed ?? "")"
+        case .paused:
+            let image = NSImage(systemSymbolName: "pause.circle.fill", accessibilityDescription: "Recording paused")
+            image?.isTemplate = true
+            button.image = image
+            button.contentTintColor = .systemOrange
+            button.imagePosition = .imageLeading
+            button.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+            button.title = " \(elapsed ?? "")"
+        }
+        refreshRecordingItems()
+    }
+
+    private func refreshRecordingItems() {
+        switch recordingController.uiState {
+        case .idle:
+            recordToggleItem.title = "Start Recording…"
+            recordFullScreenItem.isHidden = false
+            pauseResumeItem.isHidden = true
+        case .recording:
+            recordToggleItem.title = "Stop Recording"
+            recordFullScreenItem.isHidden = true
+            pauseResumeItem.isHidden = false
+            pauseResumeItem.title = "Pause Recording"
+        case .paused:
+            recordToggleItem.title = "Stop Recording"
+            recordFullScreenItem.isHidden = true
+            pauseResumeItem.isHidden = false
+            pauseResumeItem.title = "Resume Recording"
+        }
+    }
+
+    // MARK: - Recording actions
+
+    @objc private func toggleRecording() {
+        Task {
+            if recordingController.uiState == .idle {
+                // Same menu-close wait as captureRegion: the interactive flow opens
+                // the selection overlay, which must not fight the closing menu.
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            await recordingController.toggleRecording()
+        }
+    }
+
+    @objc private func recordFullScreen() {
+        Task {
+            await recordingController.recordFullScreen()
+        }
+    }
+
+    @objc private func pauseResumeRecording() {
+        recordingController.pauseResume()
     }
 
     // MARK: - Capture actions

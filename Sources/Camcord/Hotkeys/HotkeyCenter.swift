@@ -14,14 +14,16 @@ extension KeyboardShortcuts.Name {
 /// Tier 1 of the hotkey engine: global keyboard shortcuts via `KeyboardShortcuts`
 /// (Carbon `RegisterEventHotKey` under the hood). Zero TCC permissions required.
 /// The four capture shortcuts call straight into `CaptureCoordinator`; the two
-/// recording shortcuts call a stub until M3 lands the recording engine.
+/// recording shortcuts drive `RecordingController`.
 @MainActor
 final class HotkeyCenter {
     private let coordinator: CaptureCoordinator
+    private let recordingController: RecordingController
     private let logger = Logger(subsystem: "dev.tavsan.camcord", category: "hotkey-center")
 
-    init(coordinator: CaptureCoordinator) {
+    init(coordinator: CaptureCoordinator, recordingController: RecordingController) {
         self.coordinator = coordinator
+        self.recordingController = recordingController
 
         KeyboardShortcuts.onKeyDown(for: .captureRegion) { [coordinator] in
             Task { await coordinator.captureRegionInteractive() }
@@ -35,13 +37,11 @@ final class HotkeyCenter {
         KeyboardShortcuts.onKeyDown(for: .repeatLastRegion) { [coordinator] in
             Task { await coordinator.captureLastRegion() }
         }
-        KeyboardShortcuts.onKeyDown(for: .toggleRecording) { [logger] in
-            logger.notice("recording arrives in M3")
-            NSSound.beep()
+        KeyboardShortcuts.onKeyDown(for: .toggleRecording) { [recordingController] in
+            Task { await recordingController.toggleRecording() }
         }
-        KeyboardShortcuts.onKeyDown(for: .pauseRecording) { [logger] in
-            logger.notice("recording arrives in M3")
-            NSSound.beep()
+        KeyboardShortcuts.onKeyDown(for: .pauseRecording) { [recordingController] in
+            recordingController.pauseResume()
         }
     }
 }

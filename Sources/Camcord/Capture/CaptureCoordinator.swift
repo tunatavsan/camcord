@@ -25,6 +25,16 @@ final class CaptureCoordinator {
         invalidator = ShareableContentCacheInvalidator(cache: cache)
     }
 
+    // MARK: - Shared surfaces (recording reuses the same cache + overlay)
+
+    var contentCache: ShareableContentCache { cache }
+
+    /// Presents the same selection overlay the screenshot flow uses and returns the
+    /// user's pick. The overlay tears its panels down before returning on every path.
+    func selectCaptureTarget() async -> SelectionResult? {
+        await overlay.selectRegion()
+    }
+
     // MARK: - Flows
 
     /// Shows the region/window selection overlay, then captures whichever the user picked.
