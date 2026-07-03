@@ -39,6 +39,28 @@ final class SelectionView: NSView {
     override var isFlipped: Bool { false }
     override var acceptsFirstResponder: Bool { true }
 
+    private var trackingArea: NSTrackingArea?
+
+    /// `mouseMoved` events are only delivered to the KEY window's view by default, so
+    /// without an explicit tracking area, window-snap hover would silently stop working
+    /// on every screen except the one whose panel happens to be key. `.activeAlways`
+    /// makes this view receive mouseMoved regardless of key/main status;
+    /// `.inVisibleRect` keeps the tracked rect in sync with the view's bounds automatically.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseMoved, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         NSColor.black.withAlphaComponent(0.12).setFill()
         bounds.fill()

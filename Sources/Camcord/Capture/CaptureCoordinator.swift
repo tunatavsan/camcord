@@ -94,7 +94,10 @@ final class CaptureCoordinator {
                 return
             }
             let image = try await ScreenshotService.captureDisplay(display)
-            _ = await ClipboardWriter.copyPNG(image)
+            guard await ClipboardWriter.copyPNG(image) else {
+                fail("captureFullScreen: clipboard write failed")
+                return
+            }
         } catch {
             fail("captureFullScreen: capture failed: \(error)")
         }
@@ -105,7 +108,10 @@ final class CaptureCoordinator {
     private func performRegionCapture(_ cgRect: CGRect, storeAsLastRegion: Bool) async {
         do {
             let image = try await ScreenshotService.captureRegion(cgRect: cgRect)
-            _ = await ClipboardWriter.copyPNG(image)
+            guard await ClipboardWriter.copyPNG(image) else {
+                fail("Region capture: clipboard write failed")
+                return
+            }
             if storeAsLastRegion {
                 storeLastRegion(cgRect)
             }
@@ -117,7 +123,10 @@ final class CaptureCoordinator {
     private func performWindowCapture(_ window: SCWindow) async {
         do {
             let image = try await ScreenshotService.captureWindow(window)
-            _ = await ClipboardWriter.copyPNG(image)
+            guard await ClipboardWriter.copyPNG(image) else {
+                fail("Window capture: clipboard write failed")
+                return
+            }
         } catch {
             fail("Window capture failed: \(error)")
         }

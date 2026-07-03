@@ -28,6 +28,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     private var panels: [SelectionPanel] = []
     private var views: [SelectionView] = []
     private var continuation: CheckedContinuation<SelectionResult?, Never>?
+    private var isPresenting = false
 
     // Global = AppKit screen space (bottom-left origin, Y up).
     private var dragAnchor: CGPoint?
@@ -42,8 +43,13 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     }
 
     /// Shows the overlay and suspends until the user picks a region/window or cancels.
+    /// If a selection session is already active (e.g. a second hotkey/menu trigger fires
+    /// while the overlay is up), this immediately returns nil WITHOUT disturbing the
+    /// in-flight session -- it does not overwrite `continuation` or touch its panels.
     func selectRegion() async -> SelectionResult? {
-        await withCheckedContinuation { continuation in
+        guard !isPresenting else { return nil }
+        isPresenting = true
+        return await withCheckedContinuation { continuation in
             self.continuation = continuation
             presentPanels()
         }
@@ -110,6 +116,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
 
     private func finish(_ result: SelectionResult?) {
         teardown()
+        isPresenting = false
         let continuation = self.continuation
         self.continuation = nil
         continuation?.resume(returning: result)
