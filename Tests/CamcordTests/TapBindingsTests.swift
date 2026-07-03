@@ -16,11 +16,19 @@ struct TapBindingsTests {
         return defaults
     }
 
-    @Test("defaults when the key is absent: button 4 = captureRegion, everything else off")
+    @Test("defaults when the key is absent: button 4 = captureRegion, button 5 = hold-capture, double-tap off")
     func defaultsWhenKeyAbsent() {
         let defaults = makeTestDefaults()
         let loaded = TapBindings.load(from: defaults)
-        #expect(loaded == TapBindings(mouseButton4: .captureRegion, mouseButton5: nil, doubleTapRightCommand: nil))
+        #expect(loaded == TapBindings(mouseButton4: .captureRegion, mouseButton5: .holdCaptureRegion, doubleTapRightCommand: nil))
+    }
+
+    @Test("the hold-capture action round-trips through JSON")
+    func holdActionRoundTrip() {
+        let defaults = makeTestDefaults()
+        let bindings = TapBindings(mouseButton4: .holdCaptureRegion, mouseButton5: nil, doubleTapRightCommand: nil)
+        bindings.save(to: defaults)
+        #expect(TapBindings.load(from: defaults) == bindings)
     }
 
     @Test("round-trips through UserDefaults as JSON under the tapBindings key")

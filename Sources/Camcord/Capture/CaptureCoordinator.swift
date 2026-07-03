@@ -141,6 +141,45 @@ final class CaptureCoordinator {
         }
     }
 
+    // MARK: - Hold-to-capture region (side button held; release = shoot)
+
+    /// Begins a hold session at the button-down location. The EventTapEngine drives
+    /// updates/finish from swallowed drag/up events; the overlay's onEnd fires
+    /// exactly once on every exit path, which is where the exclusive-capture lock
+    /// is released.
+    func beginHoldRegionSelection(atCGPoint cgPoint: CGPoint) {
+        guard beginExclusiveCapture() else { return }
+        guard preflightScreenCapture("holdRegionCapture") else {
+            endExclusiveCapture()
+            return
+        }
+        overlay.beginHoldSelection(atCGPoint: cgPoint) { [weak self] result in
+            guard let self else { return }
+            guard case .region(let cgRect) = result else {
+                endExclusiveCapture()
+                return
+            }
+            Task { @MainActor in
+                // Same compositor-flush wait as every other overlay exit.
+                try? await Task.sleep(for: Self.postHideDelay)
+                await self.performRegionCapture(cgRect, storeAsLastRegion: true)
+                self.endExclusiveCapture()
+            }
+        }
+    }
+
+    func updateHoldRegionSelection(toCGPoint cgPoint: CGPoint) {
+        overlay.updateHoldSelection(toCGPoint: cgPoint)
+    }
+
+    func finishHoldRegionSelection(atCGPoint cgPoint: CGPoint) {
+        overlay.finishHoldSelection(atCGPoint: cgPoint)
+    }
+
+    func cancelHoldRegionSelection() {
+        overlay.cancelHoldSelection()
+    }
+
     /// The OS eyedropper loupe: samples one pixel, copies "#RRGGBB". Uses no
     /// ScreenCaptureKit and no TCC permission at all.
     func sampleColorToClipboard() async {
@@ -149,10 +188,9 @@ final class CaptureCoordinator {
 
         let sampler = NSColorSampler()
         let picked = await withCheckedContinuation { (continuation: CheckedContinuation<NSColor?, Never>) in
-            // The closure captures the sampler so it stays alive until the user
-            // picks or cancels — a deallocated sampler would dismiss the loupe.
-            sampler.show { [sampler] color in
-                _ = sampler
+            // `sampler` stays alive across the suspension: this async frame is
+            // suspended awaiting the continuation, retaining its locals until resume.
+            sampler.show { color in
                 continuation.resume(returning: color)
             }
         }

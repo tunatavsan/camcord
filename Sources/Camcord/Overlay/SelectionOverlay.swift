@@ -28,6 +28,10 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     private var panels: [SelectionPanel] = []
     private var views: [SelectionView] = []
     private var continuation: CheckedContinuation<SelectionResult?, Never>?
+    /// Non-nil while a HOLD session (mouse side button held; events driven by the
+    /// CGEventTap, not by the panels) is active. Every exit path funnels through
+    /// `finish(_:)`, which fires this exactly once.
+    private var holdEndHandler: ((SelectionResult?) -> Void)?
     private var isPresenting = false
 
     // Global = AppKit screen space (bottom-left origin, Y up).
@@ -64,9 +68,73 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         }
     }
 
+    // MARK: - Hold session (side button held down; driven by the event tap)
+
+    /// Starts a hold-to-capture session anchored at the button-down location.
+    /// `onEnd` fires exactly once, on whichever exit path ends the session (release,
+    /// Esc, display change, zero screens).
+    func beginHoldSelection(atCGPoint cgPoint: CGPoint, onEnd: @escaping (SelectionResult?) -> Void) {
+        guard !isPresenting else {
+            onEnd(nil)
+            return
+        }
+        isPresenting = true
+        holdEndHandler = onEnd
+        // No window-snap in hold mode: it is region-only, and the seeded highlight
+        // would just flicker under the anchor before the drag passes the threshold.
+        presentPanels(seedWindowSnap: false)
+        guard isPresenting else { return }  // zero-screens path already ended the session
+        let point = cgToAppKitPoint(cgPoint)
+        dragAnchor = point
+        dragCurrent = point
+        isDragging = false
+    }
+
+    func updateHoldSelection(toCGPoint cgPoint: CGPoint) {
+        guard isPresenting, holdEndHandler != nil, let anchor = dragAnchor else { return }
+        let point = cgToAppKitPoint(cgPoint)
+        dragCurrent = point
+        if !isDragging {
+            let movement = hypot(point.x - anchor.x, point.y - anchor.y)
+            guard movement >= Self.clickMovementThreshold else { return }
+            isDragging = true
+        }
+        updateRendering()
+    }
+
+    /// Button released: shoot the dragged region, or cancel on a no-drag click.
+    func finishHoldSelection(atCGPoint cgPoint: CGPoint) {
+        guard isPresenting, holdEndHandler != nil else { return }
+        guard isDragging, let anchor = dragAnchor,
+            let primaryHeight = NSScreen.screens.first?.frame.height
+        else {
+            finish(nil)
+            return
+        }
+        let point = cgToAppKitPoint(cgPoint)
+        let globalRect = Geometry.normalizedRect(from: anchor, to: point)
+        guard globalRect.width >= 1, globalRect.height >= 1 else {
+            finish(nil)
+            return
+        }
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+        finish(.region(Geometry.appKitToCG(globalRect, primaryScreenHeight: primaryHeight)))
+    }
+
+    /// Safety hatch for the event tap's teardown paths (tap recreated mid-hold).
+    func cancelHoldSelection() {
+        guard holdEndHandler != nil else { return }
+        finish(nil)
+    }
+
+    private func cgToAppKitPoint(_ point: CGPoint) -> CGPoint {
+        guard let primaryHeight = NSScreen.screens.first?.frame.height else { return point }
+        return Geometry.cgToAppKit(CGRect(origin: point, size: .zero), primaryScreenHeight: primaryHeight).origin
+    }
+
     // MARK: - Presentation
 
-    private func presentPanels() {
+    private func presentPanels(seedWindowSnap: Bool = true) {
         // No screens (all displays asleep/detached): without this guard no panel is
         // ever created, so no event could resume the continuation -- selectRegion()
         // would hang forever with isPresenting stuck.
@@ -140,9 +208,11 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         // mouseMoved for a cursor already inside the view, so the natural
         // "hover the target, then press the hotkey, then click" flow would otherwise
         // read highlightedWindow == nil and cancel instead of picking the window.
-        snapGeneration &+= 1
-        let generation = snapGeneration
-        Task { await updateWindowSnap(at: mouseLocation, generation: generation) }
+        if seedWindowSnap {
+            snapGeneration &+= 1
+            let generation = snapGeneration
+            Task { await updateWindowSnap(at: mouseLocation, generation: generation) }
+        }
     }
 
     private func teardown() {
@@ -175,7 +245,10 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         isPresenting = false
         let continuation = self.continuation
         self.continuation = nil
+        let holdHandler = holdEndHandler
+        holdEndHandler = nil
         continuation?.resume(returning: result)
+        holdHandler?(result)
     }
 
     // MARK: - SelectionViewDelegate

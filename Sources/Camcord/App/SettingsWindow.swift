@@ -95,14 +95,16 @@ struct SettingsView: View {
             }
 
             Section("Fare ve Hareketler") {
+                // Mouse buttons get the "hold → drag → release" option; the double-tap
+                // gesture has no held phase, so it doesn't.
                 Picker("Fare düğmesi 4:", selection: $bindings.mouseButton4) {
-                    tapActionOptions
+                    tapActionOptions(includeHold: true)
                 }
                 Picker("Fare düğmesi 5:", selection: $bindings.mouseButton5) {
-                    tapActionOptions
+                    tapActionOptions(includeHold: true)
                 }
                 Picker("Çift dokunuş Sağ ⌘:", selection: $bindings.doubleTapRightCommand) {
-                    tapActionOptions
+                    tapActionOptions(includeHold: false)
                 }
 
                 // Don't nag for a broad system permission unless a Tier-2 binding
@@ -155,9 +157,12 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private var tapActionOptions: some View {
+    private func tapActionOptions(includeHold: Bool) -> some View {
         Text("Kapalı").tag(TapAction?.none)
         Text("Bölge çek").tag(TapAction?.some(.captureRegion))
+        if includeHold {
+            Text("Basılı tut → bölge").tag(TapAction?.some(.holdCaptureRegion))
+        }
         Text("Kayıt başlat-durdur").tag(TapAction?.some(.toggleRecording))
     }
 

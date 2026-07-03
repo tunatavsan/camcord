@@ -304,9 +304,9 @@ struct CapturePanelView: View {
             PanelDivider()
                 .padding(.vertical, 2)
 
-            BindingRow(title: "Fare düğmesi 4", selection: $tapBindings.mouseButton4, onChange: saveTapBindings)
-            BindingRow(title: "Fare düğmesi 5", selection: $tapBindings.mouseButton5, onChange: saveTapBindings)
-            BindingRow(title: "Çift dokunuş Sağ ⌘", selection: $tapBindings.doubleTapRightCommand, onChange: saveTapBindings)
+            BindingRow(title: "Fare düğmesi 4", selection: $tapBindings.mouseButton4, includeHold: true, onChange: saveTapBindings)
+            BindingRow(title: "Fare düğmesi 5", selection: $tapBindings.mouseButton5, includeHold: true, onChange: saveTapBindings)
+            BindingRow(title: "Çift dokunuş Sağ ⌘", selection: $tapBindings.doubleTapRightCommand, includeHold: false, onChange: saveTapBindings)
         }
         .padding(12)
     }
@@ -546,10 +546,12 @@ private struct ShortcutRow: View {
     }
 }
 
-/// One tap-binding row: label left, compact menu picker right.
+/// One tap-binding row: label left, compact menu picker right. `includeHold` adds the
+/// hold-to-capture option (mouse buttons only — the double-tap gesture has no held phase).
 private struct BindingRow: View {
     let title: String
     @Binding var selection: TapAction?
+    var includeHold: Bool = false
     let onChange: () -> Void
     @Environment(\.isPanelPreview) private var isPanelPreview
 
@@ -557,6 +559,7 @@ private struct BindingRow: View {
         switch selection {
         case .none: "Kapalı"
         case .captureRegion: "Bölge çek"
+        case .holdCaptureRegion: "Basılı tut"
         case .toggleRecording: "Kayıt"
         }
     }
@@ -572,12 +575,15 @@ private struct BindingRow: View {
                 Picker("", selection: $selection) {
                     Text("Kapalı").tag(TapAction?.none)
                     Text("Bölge çek").tag(TapAction?.some(.captureRegion))
+                    if includeHold {
+                        Text("Basılı tut → bölge").tag(TapAction?.some(.holdCaptureRegion))
+                    }
                     Text("Kayıt").tag(TapAction?.some(.toggleRecording))
                 }
                 .pickerStyle(.menu)
                 .controlSize(.small)
                 .labelsHidden()
-                .frame(width: 110)
+                .frame(width: 130)
                 .onChange(of: selection) { _, _ in onChange() }
             }
         }

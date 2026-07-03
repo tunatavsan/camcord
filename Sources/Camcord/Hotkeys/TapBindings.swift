@@ -3,6 +3,10 @@ import Foundation
 /// v1 surface for what a Tier-2 (mouse button / double-tap) binding can trigger.
 enum TapAction: String, Codable, CaseIterable {
     case captureRegion
+    /// Mouse buttons only: hold the button, drag out the region while holding,
+    /// release to shoot — one continuous gesture instead of press-then-click-drag.
+    /// (Meaningless for the double-tap gesture, which has no held phase.)
+    case holdCaptureRegion
     case toggleRecording
 }
 
@@ -18,7 +22,7 @@ struct TapBindings: Codable, Equatable {
 
     init(
         mouseButton4: TapAction? = .captureRegion,
-        mouseButton5: TapAction? = nil,
+        mouseButton5: TapAction? = .holdCaptureRegion,
         doubleTapRightCommand: TapAction? = nil
     ) {
         self.mouseButton4 = mouseButton4

@@ -90,6 +90,11 @@ final class EventTapEngine {
             mask |= 1 << CGEventType.otherMouseDown.rawValue
             mask |= 1 << CGEventType.otherMouseUp.rawValue
         }
+        if bindings.mouseButton4 == .holdCaptureRegion || bindings.mouseButton5 == .holdCaptureRegion {
+            // Hold-to-capture drags the selection with the side button held; the
+            // moves arrive as otherMouseDragged (never mouseMoved) during the hold.
+            mask |= 1 << CGEventType.otherMouseDragged.rawValue
+        }
         if bindings.doubleTapRightCommand != nil {
             mask |= 1 << CGEventType.flagsChanged.rawValue
             mask |= 1 << CGEventType.keyDown.rawValue
@@ -122,6 +127,12 @@ final class EventTapEngine {
     }
 
     private func teardownTap() {
+        // A tap recreated mid-hold would orphan the session (the up event that ends
+        // it may never be seen) — end it explicitly.
+        if activeHoldButton != nil {
+            activeHoldButton = nil
+            coordinator.cancelHoldRegionSelection()
+        }
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
         }
@@ -206,10 +217,19 @@ final class EventTapEngine {
 
     /// Classifies and dispatches one event given its already-extracted primitive
     /// fields. Returns `true` when the callback should swallow the event.
-    fileprivate func handle(type: CGEventType, button: Int64, keycode: Int64, isRightCommandDown: Bool, timestamp: TimeInterval) -> Bool {
+    fileprivate func handle(
+        type: CGEventType,
+        button: Int64,
+        keycode: Int64,
+        isRightCommandDown: Bool,
+        timestamp: TimeInterval,
+        location: CGPoint
+    ) -> Bool {
         switch type {
         case .otherMouseDown, .otherMouseUp:
-            return handleMouseButton(type: type, button: button)
+            return handleMouseButton(type: type, button: button, location: location)
+        case .otherMouseDragged:
+            return handleMouseDragged(button: button, location: location)
         case .flagsChanged:
             handleFlagsChanged(keycode: keycode, isRightCommandDown: isRightCommandDown, timestamp: timestamp)
             return false
@@ -223,12 +243,39 @@ final class EventTapEngine {
 
     // MARK: - Mouse side buttons (fact 5)
 
-    private func handleMouseButton(type: CGEventType, button: Int64) -> Bool {
+    /// The side button currently driving a hold-to-capture session, if any.
+    private var activeHoldButton: Int64?
+
+    private func handleMouseButton(type: CGEventType, button: Int64, location: CGPoint) -> Bool {
+        // An active hold session ends on ITS button's release, wherever it lands.
+        if type == .otherMouseUp, activeHoldButton == button {
+            activeHoldButton = nil
+            coordinator.finishHoldRegionSelection(atCGPoint: location)
+            return true
+        }
         guard let action = tapAction(forMouseButton: button) else { return false }
         if type == .otherMouseDown {
-            perform(action)
+            switch action {
+            case .holdCaptureRegion:
+                guard activeHoldButton == nil else { return true }
+                activeHoldButton = button
+                coordinator.beginHoldRegionSelection(atCGPoint: location)
+            default:
+                perform(action)
+            }
         }
         // Swallow both down and up for a bound button.
+        return true
+    }
+
+    private func handleMouseDragged(button: Int64, location: CGPoint) -> Bool {
+        // Route any other-button drag to the active hold session: the reported
+        // button number on a drag event isn't reliable across all mice, and while a
+        // hold is active the drag IS the hold's drag. No active hold -> pass through.
+        guard activeHoldButton != nil else { return false }
+        coordinator.updateHoldRegionSelection(toCGPoint: location)
+        // The matching down was swallowed; a drag without its down would only
+        // confuse the app underneath.
         return true
     }
 
@@ -267,6 +314,11 @@ final class EventTapEngine {
     private func perform(_ action: TapAction) {
         switch action {
         case .captureRegion:
+            Task { await coordinator.captureRegionInteractive() }
+        case .holdCaptureRegion:
+            // Hold is driven inline from the button-down/drag/up events; if it ever
+            // reaches here (e.g. mis-assigned to the double-tap gesture, which has no
+            // held phase) fall back to the plain interactive region flow.
             Task { await coordinator.captureRegionInteractive() }
         case .toggleRecording:
             Task { await recordingController.toggleRecording() }
@@ -321,9 +373,20 @@ private func eventTapCallback(
     // (NX_DEVICERCMDKEYMASK, 0x10) tracks the right key alone.
     let isRightCommandDown = event.flags.rawValue & 0x10 != 0
     let timestamp = MachTime.seconds(fromTicks: event.timestamp)
+    // Global CG display coordinates (top-left origin) — exactly what the overlay's
+    // hold-selection methods expect. Read here on the callback's own stack; CGPoint
+    // is a Sendable value so it crosses the actor hop safely.
+    let location = event.location
 
     let shouldSwallow = MainActor.assumeIsolated {
-        engine.handle(type: type, button: button, keycode: keycode, isRightCommandDown: isRightCommandDown, timestamp: timestamp)
+        engine.handle(
+            type: type,
+            button: button,
+            keycode: keycode,
+            isRightCommandDown: isRightCommandDown,
+            timestamp: timestamp,
+            location: location
+        )
     }
     return shouldSwallow ? nil : Unmanaged.passUnretained(event)
 }
