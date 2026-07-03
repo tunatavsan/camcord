@@ -10,6 +10,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var eventTapEngine: EventTapEngine?
     private var settingsWindowController: SettingsWindowController?
     private var statusItemController: StatusItemController?
+    private var panelController: PanelController?
+    private var recordingStateModel: RecordingStateModel?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let coordinator = CaptureCoordinator()
@@ -38,11 +40,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         self.statusItemController = statusItemController
 
-        recordingController.onUIChange = { [weak statusItemController] state, elapsed in
+        let recordingStateModel = RecordingStateModel()
+        self.recordingStateModel = recordingStateModel
+
+        recordingController.onUIChange = { [weak statusItemController, weak recordingStateModel] state, elapsed in
             statusItemController?.setRecordingUI(state, elapsed: elapsed)
+            recordingStateModel?.state = state
+            recordingStateModel?.elapsed = elapsed
+        }
+
+        let panelController = PanelController(
+            model: recordingStateModel,
+            actions: makePanelActions(coordinator: coordinator, recordingController: recordingController)
+        )
+        self.panelController = panelController
+
+        statusItemController.onPrimaryClick = { [weak panelController, weak statusItemController] in
+            guard let button = statusItemController?.anchorButton else { return }
+            panelController?.toggle(relativeTo: button)
         }
 
         registerLoginItemOnFirstRun()
+    }
+
+    /// Panel actions: overlay-opening flows close the panel first and give the
+    /// popover a beat to dismiss (same choreography as the context menu's 200ms).
+    private func makePanelActions(
+        coordinator: CaptureCoordinator,
+        recordingController: RecordingController
+    ) -> PanelActions {
+        var actions = PanelActions()
+
+        let afterClosingPanel: (@escaping @MainActor () async -> Void) -> Void = { [weak self] work in
+            self?.panelController?.close()
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(150))
+                await work()
+            }
+        }
+
+        actions.captureRegion = {
+            afterClosingPanel { await coordinator.captureRegionInteractive() }
+        }
+        actions.captureWindow = {
+            afterClosingPanel { await coordinator.captureActiveWindow() }
+        }
+        actions.captureScreen = {
+            afterClosingPanel { await coordinator.captureFullScreen() }
+        }
+        actions.repeatLast = {
+            afterClosingPanel { await coordinator.captureLastRegion() }
+        }
+        actions.toggleRecording = { [weak recordingController] in
+            let isIdle = recordingController?.uiState == .idle
+            if isIdle {
+                // Starting opens the selection overlay -- close the panel first.
+                afterClosingPanel { await recordingController?.toggleRecording() }
+            } else {
+                // Stopping is instant; keep the panel up so the row morphs back.
+                Task { await recordingController?.toggleRecording() }
+            }
+        }
+        actions.pauseResume = { [weak recordingController] in
+            recordingController?.pauseResume()
+        }
+        actions.openSettings = { [weak self] in
+            self?.panelController?.close()
+            self?.settingsWindowController?.show()
+        }
+        actions.quit = {
+            NSApp.terminate(nil)
+        }
+        return actions
     }
 
     /// The whole point of the app is being resident from login -- register the login

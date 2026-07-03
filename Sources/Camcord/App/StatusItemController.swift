@@ -27,6 +27,15 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let tapStatusItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let settingsItem = NSMenuItem(title: "Settings…", action: nil, keyEquivalent: ",")
 
+    private let menu = NSMenu()
+
+    /// Left-click surface (the panel); wired by AppDelegate. Right-click opens the
+    /// context menu with the permission/login rows.
+    var onPrimaryClick: (() -> Void)?
+
+    /// Anchor for the popover panel.
+    var anchorButton: NSStatusBarButton? { statusItem.button }
+
     private let logger = Logger(subsystem: "dev.tavsan.camcord", category: "app")
 
     init(
@@ -46,9 +55,14 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             let image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Camcord")
             image?.isTemplate = true
             button.image = image
+            // Left-click -> panel, right-click -> context menu. The menu is NOT
+            // permanently assigned to the status item (that would hijack all clicks);
+            // it's attached just-in-time in showContextMenu().
+            button.target = self
+            button.action = #selector(statusButtonClicked)
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
 
-        let menu = NSMenu()
         menu.delegate = self
 
         captureRegionItem.target = self
@@ -123,11 +137,28 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         quitItem.target = self
         menu.addItem(quitItem)
 
-        statusItem.menu = menu
-
         refreshScreenRecordingState()
         refreshLaunchAtLoginState()
         refreshTapStatus()
+    }
+
+    // MARK: - Click routing
+
+    @objc private func statusButtonClicked() {
+        if NSApp.currentEvent?.type == .rightMouseUp {
+            showContextMenu()
+        } else {
+            onPrimaryClick?()
+        }
+    }
+
+    private func showContextMenu() {
+        statusItem.menu = menu
+        statusItem.button?.performClick(nil)
+        // Detach right away so the next left-click goes back to the panel.
+        DispatchQueue.main.async { [weak self] in
+            self?.statusItem.menu = nil
+        }
     }
 
     // MARK: - NSMenuDelegate
