@@ -9,6 +9,10 @@ import SwiftUI
 final class RecordingStateModel: ObservableObject {
     @Published var state: RecordingController.UIState = .idle
     @Published var elapsed: String?
+    /// Bumped by PanelController on every show. The popover's hosting controller is
+    /// retained across shows, so `@State` persists and `onAppear` fires only once —
+    /// this token is what resets the page and reloads persisted toggles per open.
+    @Published var panelOpenToken = 0
 }
 
 /// The panel's actions, injected by AppDelegate. Each closure owns its own
@@ -22,8 +26,10 @@ struct PanelActions {
     var toggleRecording: () -> Void = {}
     var pauseResume: () -> Void = {}
     var applyTapBindings: (TapBindings) -> Void = { _ in }
+    /// Shortcut recorders need the app active to receive keystrokes; called when
+    /// the shortcuts page opens.
+    var activateApp: () -> Void = {}
     var openSettings: () -> Void = {}
-    var quit: () -> Void = {}
 }
 
 enum PanelPage {
@@ -81,6 +87,17 @@ struct CapturePanelView: View {
         .frame(width: 264)
         .animation(reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.86), value: page)
         .onAppear(perform: reloadPersistedState)
+        .onChange(of: model.panelOpenToken) { _, _ in
+            // Fresh open: back to the main page, re-read persisted toggles (they may
+            // have changed via the Settings window while the panel was closed).
+            page = .main
+            reloadPersistedState()
+        }
+        .onChange(of: page) { _, newPage in
+            if newPage == .shortcuts {
+                actions.activateApp()
+            }
+        }
     }
 
     private func pageTransition(edge: Edge) -> AnyTransition {
@@ -151,6 +168,9 @@ struct CapturePanelView: View {
                     .font(.system(size: 14, weight: .semibold))
                     .monospacedDigit()
                     .contentTransition(.numericText())
+                    // numericText only animates inside a transaction; elapsed is
+                    // assigned plainly every second, so drive it explicitly.
+                    .animation(reduceMotion ? nil : .default, value: model.elapsed)
                 if model.state == .paused {
                     Text("duraklatıldı")
                         .font(.system(size: 11))
@@ -537,16 +557,3 @@ private struct PressScaleStyle: ButtonStyle {
     }
 }
 
-/// NSVisualEffectView wrapper — used by the preview harness to simulate the
-/// popover's material backdrop (the real popover supplies its own).
-struct VisualEffectBackground: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = .popover
-        view.state = .active
-        view.blendingMode = .behindWindow
-        return view
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
-}

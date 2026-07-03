@@ -154,9 +154,16 @@ struct SettingsView: View {
 
     /// Fact 7: poll trust every 3s, ONLY while Settings is open and permission is
     /// pending; stop as soon as it's granted (or the window closes, via onDisappear).
+    /// The tick cap bounds the timer's lifetime even if onDisappear never fires for
+    /// a swapped-out NSHostingView (historically flaky) — no unbounded leaked polls.
     private func startTrustPollingIfNeeded() {
         guard !isAccessibilityTrusted, trustPollTimer == nil else { return }
-        let timer = Timer(timeInterval: 3.0, repeats: true) { _ in
+        let deadline = Date().addingTimeInterval(180)
+        let timer = Timer(timeInterval: 3.0, repeats: true) { timer in
+            if Date() > deadline {
+                timer.invalidate()
+                return
+            }
             Task { @MainActor in
                 let trusted = AccessibilityPermission.isTrusted()
                 isAccessibilityTrusted = trusted

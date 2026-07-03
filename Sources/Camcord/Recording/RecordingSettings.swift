@@ -54,12 +54,17 @@ struct RecordingSettings: Codable, Equatable {
     /// here makes every downstream `removeItem(at: outputURL)` provably safe.
     static func uniqueOutputURL(in directory: URL, date: Date, fileManager: FileManager = .default) -> URL {
         let base = filename(date: date)
+        let stem = (base as NSString).deletingPathExtension
         var candidate = directory.appendingPathComponent(base)
         var counter = 2
         while fileManager.fileExists(atPath: candidate.path), counter < 100 {
-            let stem = (base as NSString).deletingPathExtension
             candidate = directory.appendingPathComponent("\(stem) (\(counter)).mov")
             counter += 1
+        }
+        // Pathological bound (99 same-second collisions): never return a path that
+        // still exists — fall back to a unique suffix.
+        if fileManager.fileExists(atPath: candidate.path) {
+            candidate = directory.appendingPathComponent("\(stem) \(UUID().uuidString.prefix(8)).mov")
         }
         return candidate
     }

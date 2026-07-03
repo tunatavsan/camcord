@@ -53,6 +53,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panelActions.applyTapBindings = { [weak eventTapEngine] bindings in
             eventTapEngine?.apply(bindings)
         }
+        panelActions.activateApp = {
+            NSApp.activate(ignoringOtherApps: true)
+        }
         let panelController = PanelController(model: recordingStateModel, actions: panelActions)
         self.panelController = panelController
 
@@ -108,9 +111,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         actions.openSettings = { [weak self] in
             self?.panelController?.close()
             self?.settingsWindowController?.show()
-        }
-        actions.quit = {
-            NSApp.terminate(nil)
         }
         return actions
     }

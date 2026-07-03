@@ -48,7 +48,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         self.recordingController = recordingController
         self.eventTapEngine = eventTapEngine
         self.settingsWindowController = settingsWindowController
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        // variableLength from the start: the item sizes to its content (icon-only
+        // when idle, icon+elapsed while recording). Switching lengths at runtime
+        // would shift the anchor out from under an open popover.
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
 
         if let button = statusItem.button {
@@ -145,7 +148,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     // MARK: - Click routing
 
     @objc private func statusButtonClicked() {
-        if NSApp.currentEvent?.type == .rightMouseUp {
+        let event = NSApp.currentEvent
+        // Right-click OR control-click (delivered as leftMouseUp + .control) opens
+        // the context menu, per macOS convention.
+        let isMenuClick =
+            event?.type == .rightMouseUp
+            || (event?.type == .leftMouseUp && event?.modifierFlags.contains(.control) == true)
+        if isMenuClick {
             showContextMenu()
         } else {
             onPrimaryClick?()
@@ -217,9 +226,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     /// time while recording, pause glyph while paused, plain camera when idle.
     func setRecordingUI(_ state: RecordingController.UIState, elapsed: String?) {
         guard let button = statusItem.button else { return }
-        // squareLength pins the item to an icon-sized square and would clip the
-        // elapsed title; widen while recording, restore the square when idle.
-        statusItem.length = state == .idle ? NSStatusItem.squareLength : NSStatusItem.variableLength
         switch state {
         case .idle:
             let image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Camcord")

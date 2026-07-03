@@ -73,22 +73,33 @@ final class CaptureCoordinator {
         }
     }
 
-    /// Captures the frontmost app's first on-screen, normal-layer window.
+    /// Captures the frontmost app's first on-screen, normal-layer window. If WE are
+    /// frontmost (the panel's shortcuts page activates the app), fall back to the
+    /// topmost other app's window — "active window" never means Camcord itself.
     func captureActiveWindow() async {
-        guard let frontmost = NSWorkspace.shared.frontmostApplication else {
-            fail("captureActiveWindow: no frontmost application")
-            return
-        }
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        let ownBundleID = Bundle.main.bundleIdentifier
         do {
             let content = try await cache.content()
-            guard
-                let window = content.windows.first(where: { window in
-                    window.owningApplication?.processID == frontmost.processIdentifier
-                        && window.isOnScreen
-                        && window.windowLayer == 0
-                })
-            else {
-                fail("captureActiveWindow: no on-screen window found for \(frontmost.localizedName ?? "frontmost app")")
+            let isEligible: (SCWindow) -> Bool = { window in
+                window.isOnScreen
+                    && window.windowLayer == 0
+                    && window.owningApplication?.bundleIdentifier != ownBundleID
+                    && window.frame.width >= 40 && window.frame.height >= 40
+            }
+
+            let window: SCWindow?
+            if let frontmost, frontmost.bundleIdentifier != ownBundleID {
+                window = content.windows.first {
+                    isEligible($0) && $0.owningApplication?.processID == frontmost.processIdentifier
+                }
+            } else {
+                // content.windows is front-to-back: first eligible = topmost window.
+                window = content.windows.first(where: isEligible)
+            }
+
+            guard let window else {
+                fail("captureActiveWindow: no eligible on-screen window found")
                 return
             }
             await performWindowCapture(window)

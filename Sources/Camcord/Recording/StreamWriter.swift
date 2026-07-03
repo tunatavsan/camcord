@@ -228,16 +228,24 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
             // stream only produced .idle frames). Finishing a session-less writer
             // fails it anyway, and either outcome leaves an unplayable/empty file —
             // cancel, remove the stray file, and report "nothing captured" instead
-            // of a false success.
-            writer.cancelWriting()
+            // of a false success. (cancelWriting is documented for .writing only —
+            // a .failed writer needs no cancel, just the file cleanup.)
+            if writer.status == .writing {
+                writer.cancelWriting()
+            }
             try? FileManager.default.removeItem(at: outputURL)
             throw RecordingError.nothingCaptured
         }
+        // Every failure path below leaves a moov-less, unplayable file — remove it
+        // rather than leaving junk in ~/Movies/camcord (e.g. disk filled at the
+        // exact instant the user pressed stop).
         guard writer.status == .writing else {
+            try? FileManager.default.removeItem(at: outputURL)
             throw RecordingError.writerFailed(writer.error)
         }
         await writer.finishWriting()
         guard writer.status == .completed else {
+            try? FileManager.default.removeItem(at: outputURL)
             throw RecordingError.writerFailed(writer.error)
         }
         return outputURL
