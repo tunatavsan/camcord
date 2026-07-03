@@ -133,6 +133,36 @@ struct PauseClockTests {
         #expect(clock.shouldAppend(pts: laterAudioPTS, isVideo: false) == CMTime(value: 2, timescale: 60))
     }
 
+    // MARK: - Pause/resume completing before the session starts
+
+    @Test(
+        """
+        a pause/resume cycle that completes BEFORE the first video buffer must not leave a \
+        re-anchor pending: the first video buffer is the anchor (offset zero), so the second \
+        frame passes through unchanged instead of recomputing an offset against a gap that \
+        never existed.
+        """
+    )
+    func pauseResumeBeforeFirstVideoLeavesNoPendingReanchor() {
+        var clock = PauseClock(frameDuration: Self.frameDuration)
+
+        clock.pause()
+        clock.resume()
+
+        // First video buffer starts the session at its raw PTS.
+        let v0 = CMTime(value: 100, timescale: 60)
+        #expect(clock.shouldAppend(pts: v0, isVideo: true) == v0)
+
+        // Audio right after must NOT be dropped (needsReanchor must be clear) and
+        // must pass through with offset zero.
+        let a0 = CMTime(value: 101, timescale: 60)
+        #expect(clock.shouldAppend(pts: a0, isVideo: false) == a0)
+
+        // Second video frame passes through unchanged — no spurious re-anchor.
+        let v1 = CMTime(value: 110, timescale: 60)
+        #expect(clock.shouldAppend(pts: v1, isVideo: true) == v1)
+    }
+
     @Test("retiming stays consistent across realistic mixed timescales (host-time video, 48kHz audio)")
     func mixedTimescaleRetiming() {
         // Video PTS on a nanosecond-style host clock, audio on a 48kHz clock,

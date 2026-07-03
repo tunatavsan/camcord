@@ -35,6 +35,11 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     private var dragCurrent: CGPoint?
     private var isDragging = false
     private var highlightedWindow: SCWindow?
+    /// Session token for the async window-snap lookups: they hop through the cache
+    /// actor, so one can resolve after teardown (or after a newer lookup) and would
+    /// otherwise write a stale `highlightedWindow` into the wrong session — a click
+    /// could then silently pick a window that was never visibly highlighted.
+    private var snapGeneration = 0
     private var screenChangeObserver: NSObjectProtocol?
     /// Balances NSCursor push/pop: the zero-screens early-out finishes without ever
     /// pushing, and an unmatched pop would corrupt the cursor stack.
@@ -114,6 +119,10 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
             view.delegate = self
             view.backingScale = screen.backingScaleFactor
             panel.contentView = view
+            // A programmatic panel's first responder defaults to the panel ITSELF,
+            // which swallows keyDown/cancelOperation — Esc only reaches
+            // SelectionView if the view is explicitly made first responder.
+            panel.makeFirstResponder(view)
 
             panels.append(panel)
             views.append(view)
@@ -126,9 +135,19 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
 
         // Make key WITHOUT activating the app (no NSApp.activate call).
         (keyPanel ?? panels.first)?.makeKey()
+
+        // Seed window-snap for the cursor's RESTING position: tracking areas emit no
+        // mouseMoved for a cursor already inside the view, so the natural
+        // "hover the target, then press the hotkey, then click" flow would otherwise
+        // read highlightedWindow == nil and cancel instead of picking the window.
+        snapGeneration &+= 1
+        let generation = snapGeneration
+        Task { await updateWindowSnap(at: mouseLocation, generation: generation) }
     }
 
     private func teardown() {
+        // Orphan any in-flight window-snap lookup so it can't write into the next session.
+        snapGeneration &+= 1
         if let screenChangeObserver {
             NotificationCenter.default.removeObserver(screenChangeObserver)
             self.screenChangeObserver = nil
@@ -193,6 +212,8 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         guard wasDragging else {
             // Click-without-drag: over a highlighted window -> pick it; over empty space -> cancel.
             if let highlightedWindow {
+                // Tactile commit tick — a no-op on non-Force-Touch input devices.
+                NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
                 finish(.window(highlightedWindow))
             } else {
                 finish(nil)
@@ -209,12 +230,17 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
             finish(nil)
             return
         }
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
         finish(.region(Geometry.appKitToCG(globalRect, primaryScreenHeight: primaryHeight)))
     }
 
     func selectionViewMouseMoved(to globalPoint: CGPoint) {
         guard !isDragging else { return }
-        Task { await updateWindowSnap(at: globalPoint) }
+        // Newest-wins: bumping per spawn also drops a slower, older lookup that
+        // would otherwise overwrite a fresher highlight out of order.
+        snapGeneration &+= 1
+        let generation = snapGeneration
+        Task { await updateWindowSnap(at: globalPoint, generation: generation) }
     }
 
     func selectionViewCancel() {
@@ -224,19 +250,26 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     // MARK: - Window snap
 
     /// Reads only the cache's last-known snapshot -- never triggers a fresh
-    /// `SCShareableContent` fetch from a mouseMoved callback.
-    private func updateWindowSnap(at globalPoint: CGPoint) async {
+    /// `SCShareableContent` fetch from a mouseMoved callback. Drops its result when
+    /// the session it was spawned for is no longer the current one (see `snapGeneration`).
+    private func updateWindowSnap(at globalPoint: CGPoint, generation: Int) async {
         guard let primaryHeight = NSScreen.screens.first?.frame.height else { return }
         guard let content = await shareableContentCache.lastKnownContent() else {
+            guard generation == snapGeneration, isPresenting else { return }
             if highlightedWindow != nil {
                 highlightedWindow = nil
                 updateRendering()
             }
             return
         }
+        guard generation == snapGeneration, isPresenting else { return }
         let cgPoint = appKitPointToCG(globalPoint, primaryScreenHeight: primaryHeight)
         let window = WindowSnapper.window(atCGPoint: cgPoint, content: content)
         if window?.windowID != highlightedWindow?.windowID {
+            // Subtle level-change tick as the snap target switches (Finder-style).
+            if window != nil {
+                NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+            }
             highlightedWindow = window
             updateRendering()
         }

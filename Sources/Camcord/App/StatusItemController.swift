@@ -13,19 +13,22 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let eventTapEngine: EventTapEngine
     private let settingsWindowController: SettingsWindowController
 
-    private let captureRegionItem = NSMenuItem(title: "Capture Region", action: nil, keyEquivalent: "")
-    private let captureActiveWindowItem = NSMenuItem(title: "Capture Active Window", action: nil, keyEquivalent: "")
-    private let captureFullScreenItem = NSMenuItem(title: "Capture Full Screen", action: nil, keyEquivalent: "")
-    private let repeatLastRegionItem = NSMenuItem(title: "Repeat Last Region", action: nil, keyEquivalent: "")
-    private let recordToggleItem = NSMenuItem(title: "Start Recording…", action: nil, keyEquivalent: "")
-    private let recordFullScreenItem = NSMenuItem(title: "Record Full Screen", action: nil, keyEquivalent: "")
-    private let pauseResumeItem = NSMenuItem(title: "Pause Recording", action: nil, keyEquivalent: "")
+    private let captureRegionItem = NSMenuItem(title: "Bölgeyi Çek", action: nil, keyEquivalent: "")
+    private let captureActiveWindowItem = NSMenuItem(title: "Aktif Pencereyi Çek", action: nil, keyEquivalent: "")
+    private let captureFullScreenItem = NSMenuItem(title: "Tüm Ekranı Çek", action: nil, keyEquivalent: "")
+    private let repeatLastRegionItem = NSMenuItem(title: "Son Bölgeyi Tekrarla", action: nil, keyEquivalent: "")
+    private let captureTextItem = NSMenuItem(title: "Metni Çek (OCR)", action: nil, keyEquivalent: "")
+    private let sampleColorItem = NSMenuItem(title: "Renk Seç", action: nil, keyEquivalent: "")
+    private let recopyLastItem = NSMenuItem(title: "Son Çekimi Yeniden Kopyala", action: nil, keyEquivalent: "")
+    private let recordToggleItem = NSMenuItem(title: "Kayda Başla…", action: nil, keyEquivalent: "")
+    private let recordFullScreenItem = NSMenuItem(title: "Tüm Ekranı Kaydet", action: nil, keyEquivalent: "")
+    private let pauseResumeItem = NSMenuItem(title: "Kaydı Duraklat", action: nil, keyEquivalent: "")
     private let screenRecordingStatusItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    private let requestScreenRecordingItem = NSMenuItem(title: "Request Screen Recording…", action: nil, keyEquivalent: "")
+    private let requestScreenRecordingItem = NSMenuItem(title: "Ekran Kaydı İzni İste…", action: nil, keyEquivalent: "")
     private let micStatusItem = NSMenuItem(title: "Mikrofon izni yok — Aç", action: nil, keyEquivalent: "")
-    private let launchAtLoginItem = NSMenuItem(title: "Launch at Login", action: nil, keyEquivalent: "")
+    private let launchAtLoginItem = NSMenuItem(title: "Bilgisayar Açılışında Başlat", action: nil, keyEquivalent: "")
     private let tapStatusItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    private let settingsItem = NSMenuItem(title: "Settings…", action: nil, keyEquivalent: ",")
+    private let settingsItem = NSMenuItem(title: "Ayarlar…", action: nil, keyEquivalent: ",")
 
     private let menu = NSMenu()
 
@@ -88,6 +91,21 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         repeatLastRegionItem.setShortcut(for: .repeatLastRegion)
         menu.addItem(repeatLastRegionItem)
 
+        captureTextItem.target = self
+        captureTextItem.action = #selector(captureTextRegion)
+        captureTextItem.setShortcut(for: .captureTextRegion)
+        menu.addItem(captureTextItem)
+
+        sampleColorItem.target = self
+        sampleColorItem.action = #selector(sampleColor)
+        sampleColorItem.setShortcut(for: .sampleColor)
+        menu.addItem(sampleColorItem)
+
+        recopyLastItem.target = self
+        recopyLastItem.action = #selector(recopyLastCapture)
+        recopyLastItem.setShortcut(for: .recopyLastCapture)
+        menu.addItem(recopyLastItem)
+
         menu.addItem(.separator())
 
         recordToggleItem.target = self
@@ -97,6 +115,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
         recordFullScreenItem.target = self
         recordFullScreenItem.action = #selector(recordFullScreen)
+        recordFullScreenItem.setShortcut(for: .recordFullScreen)
         menu.addItem(recordFullScreenItem)
 
         pauseResumeItem.target = self
@@ -106,6 +125,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(pauseResumeItem)
 
         menu.addItem(.separator())
+
+        // Launch-at-login FIRST in this group: the rows after it are conditionally
+        // hidden permission warnings, so putting it after them would make its
+        // position jump depending on which warnings are showing that day.
+        launchAtLoginItem.target = self
+        launchAtLoginItem.action = #selector(toggleLaunchAtLogin)
+        menu.addItem(launchAtLoginItem)
 
         screenRecordingStatusItem.isEnabled = false
         menu.addItem(screenRecordingStatusItem)
@@ -119,10 +145,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         micStatusItem.isHidden = true
         menu.addItem(micStatusItem)
 
-        launchAtLoginItem.target = self
-        launchAtLoginItem.action = #selector(toggleLaunchAtLogin)
-        menu.addItem(launchAtLoginItem)
-
         tapStatusItem.target = self
         tapStatusItem.action = #selector(tapStatusClicked)
         tapStatusItem.isHidden = true
@@ -135,7 +157,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         settingsItem.keyEquivalentModifierMask = .command
         menu.addItem(settingsItem)
 
-        let quitItem = NSMenuItem(title: "Quit Camcord", action: #selector(quit), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "Camcord'dan Çık", action: #selector(quit), keyEquivalent: "q")
         quitItem.keyEquivalentModifierMask = .command
         quitItem.target = self
         menu.addItem(quitItem)
@@ -184,7 +206,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private func refreshScreenRecordingState() {
         let granted = CGPreflightScreenCaptureAccess()
-        screenRecordingStatusItem.title = granted ? "Screen Recording: Granted" : "Screen Recording: Not granted"
+        screenRecordingStatusItem.title = granted ? "Ekran Kaydı: İzin verildi" : "Ekran Kaydı: İzin yok"
         requestScreenRecordingItem.isHidden = granted
     }
 
@@ -198,7 +220,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     private func refreshLaunchAtLoginState() {
-        launchAtLoginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        launchAtLoginItem.state = LoginItem.isEnabled ? .on : .off
     }
 
     /// Tier-2 (mouse button / double-tap) status line: hidden unless at least one
@@ -210,7 +232,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             return
         }
         if !AccessibilityPermission.isTrusted() {
-            tapStatusItem.title = "Accessibility izni gerekli — Aç"
+            tapStatusItem.title = "Erişilebilirlik izni gerekli — Aç"
             tapStatusItem.isHidden = false
         } else if !eventTapEngine.isTapHealthy {
             tapStatusItem.title = "Fare/hareket bağlantısı devre dışı"
@@ -221,6 +243,31 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     // MARK: - Recording UI (pushed by RecordingController via AppDelegate wiring)
+
+    /// A brief red pulse on the status glyph: the zero-latency visual companion to
+    /// the failure beep (fired AFTER the failure is known, so the hot path pays
+    /// nothing). Restores whatever tint the current recording state calls for.
+    func flashFailure() {
+        guard let button = statusItem.button else { return }
+        failureFlashTask?.cancel()
+        button.contentTintColor = .systemRed
+        failureFlashTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            self?.restoreTintForCurrentState()
+        }
+    }
+
+    private var failureFlashTask: Task<Void, Never>?
+
+    private func restoreTintForCurrentState() {
+        guard let button = statusItem.button else { return }
+        switch recordingController.uiState {
+        case .idle: button.contentTintColor = nil
+        case .recording: button.contentTintColor = .systemRed
+        case .paused: button.contentTintColor = .systemOrange
+        }
+    }
 
     /// Renders the recording state on the status item: red record glyph + elapsed
     /// time while recording, pause glyph while paused, plain camera when idle.
@@ -256,19 +303,19 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private func refreshRecordingItems() {
         switch recordingController.uiState {
         case .idle:
-            recordToggleItem.title = "Start Recording…"
+            recordToggleItem.title = "Kayda Başla…"
             recordFullScreenItem.isHidden = false
             pauseResumeItem.isHidden = true
         case .recording:
-            recordToggleItem.title = "Stop Recording"
+            recordToggleItem.title = "Kaydı Durdur"
             recordFullScreenItem.isHidden = true
             pauseResumeItem.isHidden = false
-            pauseResumeItem.title = "Pause Recording"
+            pauseResumeItem.title = "Kaydı Duraklat"
         case .paused:
-            recordToggleItem.title = "Stop Recording"
+            recordToggleItem.title = "Kaydı Durdur"
             recordFullScreenItem.isHidden = true
             pauseResumeItem.isHidden = false
-            pauseResumeItem.title = "Resume Recording"
+            pauseResumeItem.title = "Kaydı Sürdür"
         }
     }
 
@@ -325,6 +372,24 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
     }
 
+    @objc private func captureTextRegion() {
+        Task {
+            // Opens the selection overlay — same menu-close wait as captureRegion.
+            try? await Task.sleep(for: .milliseconds(200))
+            await coordinator.captureTextRegionInteractive()
+        }
+    }
+
+    @objc private func sampleColor() {
+        Task {
+            await coordinator.sampleColorToClipboard()
+        }
+    }
+
+    @objc private func recopyLastCapture() {
+        coordinator.recopyLastCapture()
+    }
+
     // MARK: - Actions
 
     @objc private func requestScreenRecording() {
@@ -336,23 +401,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     @objc private func toggleLaunchAtLogin() {
-        let service = SMAppService.mainApp
-        switch service.status {
-        case .enabled:
-            do {
-                try service.unregister()
-            } catch {
-                logger.error("Failed to unregister login item: \(error.localizedDescription, privacy: .public)")
-            }
-        case .requiresApproval:
-            SMAppService.openSystemSettingsLoginItems()
-        default:
-            do {
-                try service.register()
-            } catch {
-                logger.error("Failed to register login item: \(error.localizedDescription, privacy: .public)")
-            }
-        }
+        LoginItem.setEnabled(!LoginItem.isEnabled)
     }
 
     @objc private func quit() {

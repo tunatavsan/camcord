@@ -16,6 +16,16 @@ struct DoubleTapDetectorTests {
         #expect(detector.handle(event: .rightCmdUp, at: 0.35) == true)
     }
 
+    @Test("a second press at EXACTLY 350ms still completes (the advertised window is inclusive)")
+    func completesAtExactBoundary() {
+        var detector = DoubleTapDetector()
+        #expect(detector.handle(event: .rightCmdDown, at: 0.0) == false)
+        #expect(detector.handle(event: .rightCmdUp, at: 0.05) == false)
+        // Press-to-press gap == maxInterval (0.35): the `<=` boundary case.
+        #expect(detector.handle(event: .rightCmdDown, at: 0.35) == false)
+        #expect(detector.handle(event: .rightCmdUp, at: 0.40) == true)
+    }
+
     @Test("does not complete when the second press starts after the 350ms window")
     func rejectsBeyondInterval() {
         var detector = DoubleTapDetector()

@@ -11,6 +11,11 @@ import os
 enum ClipboardWriter {
     private static let logger = Logger(subsystem: "dev.tavsan.camcord", category: "clipboard")
 
+    /// The last successfully copied capture's PNG bytes (density already embedded).
+    /// Backs "re-copy last capture" — the safety net for a clipboard-only workflow
+    /// where an absent-minded Cmd-C would otherwise lose the shot with no undo.
+    private static var lastPNG: Data?
+
     /// Encodes `image` as PNG and copies it to `pasteboard` (defaults to the general
     /// pasteboard; tests pass a named pasteboard so they never touch the real clipboard).
     /// Uses `NSBitmapImageRep` -> `.png` representation, not `writeObjects`/TIFF (slower encode path).
@@ -25,8 +30,29 @@ enum ClipboardWriter {
             logger.error("Failed to encode captured image as PNG")
             return false
         }
+        let wrote = write(png: png, to: pasteboard)
+        if wrote {
+            lastPNG = png
+        }
+        return wrote
+    }
+
+    /// Re-writes the last capture's exact pixels to the pasteboard (no re-shoot).
+    /// Returns false when nothing has been captured yet this run.
+    static func recopyLastCapture(to pasteboard: NSPasteboard = .general) -> Bool {
+        guard let png = lastPNG else { return false }
+        return write(png: png, to: pasteboard)
+    }
+
+    /// PNG eagerly + TIFF as a lazily-provided second representation: some legacy
+    /// paste targets only look for public.tiff, and the provider only pays the TIFF
+    /// encode if such a target actually asks — nothing is added to the hot path.
+    private static func write(png: Data, to pasteboard: NSPasteboard) -> Bool {
+        let item = NSPasteboardItem()
+        item.setData(png, forType: .png)
+        _ = item.setDataProvider(LazyTIFFProvider(png: png), forTypes: [.tiff])
         pasteboard.clearContents()
-        return pasteboard.setData(png, forType: .png)
+        return pasteboard.writeObjects([item])
     }
 
     nonisolated private static func encodePNG(_ image: CGImage, pointSize: CGSize?) -> Data? {
@@ -35,5 +61,31 @@ enum ClipboardWriter {
             rep.size = pointSize
         }
         return rep.representation(using: .png, properties: [:])
+    }
+}
+
+/// Renders the TIFF representation on demand from the already-encoded PNG (which
+/// carries the density tag, so point size survives the round-trip). Immutable data
+/// only; the pasteboard may call the provider on any thread.
+private final class LazyTIFFProvider: NSObject, NSPasteboardItemDataProvider, @unchecked Sendable {
+    private let png: Data
+
+    init(png: Data) {
+        self.png = png
+    }
+
+    func pasteboard(
+        _ pasteboard: NSPasteboard?,
+        item: NSPasteboardItem,
+        provideDataForType type: NSPasteboard.PasteboardType
+    ) {
+        guard
+            type == .tiff,
+            let rep = NSBitmapImageRep(data: png),
+            let tiff = rep.representation(using: .tiff, properties: [:])
+        else {
+            return
+        }
+        item.setData(tiff, forType: .tiff)
     }
 }

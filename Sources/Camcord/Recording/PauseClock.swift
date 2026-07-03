@@ -48,6 +48,11 @@ struct PauseClock {
         if !sessionStarted {
             guard isVideo else { return nil }
             sessionStarted = true
+            // A pause/resume cycle completed before the first video buffer must not
+            // leave a re-anchor pending: this buffer IS the anchor, offset stays zero.
+            // Otherwise the next frame would recompute the offset against a gap that
+            // never existed and shift the whole timeline.
+            needsReanchor = false
             lastAppendedVideoPTS = pts
             return pts
         }

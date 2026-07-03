@@ -43,6 +43,16 @@ final class PanelController: NSObject, NSPopoverDelegate {
         popover.performClose(nil)
     }
 
+    /// Stamped in BOTH close delegate callbacks: `popoverDidClose` only fires after
+    /// the close animation completes, which can be later than the same click's
+    /// mouse-UP — by then `toggle()` would have read a stale timestamp and reopened
+    /// the popover it just dismissed. `popoverWillClose` arms the guard immediately.
+    nonisolated func popoverWillClose(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            lastCloseAt = ContinuousClock.now
+        }
+    }
+
     nonisolated func popoverDidClose(_ notification: Notification) {
         MainActor.assumeIsolated {
             lastCloseAt = ContinuousClock.now

@@ -177,11 +177,19 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     }
 
     private func retimed(_ sampleBuffer: CMSampleBuffer, to newPTS: CMTime) -> CMSampleBuffer? {
-        var timing = CMSampleTimingInfo(
-            duration: CMSampleBufferGetDuration(sampleBuffer),
-            presentationTimeStamp: newPTS,
-            decodeTimeStamp: .invalid
-        )
+        // A single CMSampleTimingInfo entry covering N samples must carry the
+        // PER-SAMPLE duration (CoreMedia derives sample i's PTS by adding it i
+        // times). Audio buffers batch hundreds of PCM frames per callback, so
+        // CMSampleBufferGetDuration -- the TOTAL across all samples -- would inflate
+        // every sample's spacing N-fold and break audio PTS monotonicity after a
+        // resume. Reuse the source buffer's own first timing entry (already
+        // per-sample) and swap only the PTS.
+        var timing = CMSampleTimingInfo()
+        if CMSampleBufferGetSampleTimingInfo(sampleBuffer, at: 0, timingInfoOut: &timing) != noErr {
+            timing.duration = CMSampleBufferGetDuration(sampleBuffer)
+        }
+        timing.presentationTimeStamp = newPTS
+        timing.decodeTimeStamp = .invalid
         var retimedBuffer: CMSampleBuffer?
         let status = CMSampleBufferCreateCopyWithNewTiming(
             allocator: kCFAllocatorDefault,

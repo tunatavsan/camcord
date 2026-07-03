@@ -91,4 +91,13 @@ struct GeometryTests {
         #expect(size.w == 47)
         #expect(size.h == 33)
     }
+
+    @Test("fractional pixel results round to nearest, pinning the rounding mode")
+    func pixelSizeRoundsToNearest() {
+        // 10.6 -> 11 (up), 10.4 -> 10 (down): only .rounded() (to-nearest)
+        // satisfies both; .down/.up/.towardZero would each fail one of them.
+        let size = Geometry.pixelSize(of: CGRect(x: 0, y: 0, width: 10.6, height: 10.4), scale: 1)
+        #expect(size.w == 11)
+        #expect(size.h == 10)
+    }
 }

@@ -21,6 +21,10 @@ final class RecordingController {
     /// Wired by AppDelegate to the status item; pushed on every state/elapsed change.
     var onUIChange: ((UIState, String?) -> Void)?
 
+    /// Wired by AppDelegate to the status item's failure flash (same as the
+    /// coordinator's) — pairs every failure beep with a visual cue.
+    var onFailure: (() -> Void)?
+
     private(set) var uiState: UIState = .idle
 
     /// Guards the selection/starting window so a second hotkey press can't start a
@@ -33,10 +37,24 @@ final class RecordingController {
 
     private static let postHideDelay: Duration = .milliseconds(80)
 
+    /// The in-flight stop/finalize. `uiState` flips to `.idle` the moment the user
+    /// stops (instant UI feedback), but the file's moov atom is only written when
+    /// this task completes — anything that treats `.idle` as "nothing in flight"
+    /// (starting a new recording, quitting the app) must also consult this.
+    private var stopTask: Task<Void, Never>?
+
+    /// True while a stopped recording is still finalizing its file on disk.
+    var isFinalizing: Bool { stopTask != nil }
+
+    /// Mirrors `lastPauseToggle`: with the status menu open, the menu key-equivalent
+    /// AND the buffered Carbon hotkey can both deliver one ⌘⇧9 press, which would
+    /// stop the recording and then immediately pop the start overlay.
+    private var lastRecordToggle: ContinuousClock.Instant?
+
     init(coordinator: CaptureCoordinator) {
         self.coordinator = coordinator
-        engine.onUnexpectedStop = { [weak self] error in
-            self?.handleUnexpectedStop(error)
+        engine.onUnexpectedStop = { [weak self] salvagedURL, error in
+            self?.handleUnexpectedStop(salvagedURL: salvagedURL, error: error)
         }
     }
 
@@ -45,6 +63,12 @@ final class RecordingController {
     /// Hotkey/menu entry point: starts an interactive recording when idle, stops the
     /// active one otherwise.
     func toggleRecording() async {
+        let now = ContinuousClock.now
+        if let lastRecordToggle, now - lastRecordToggle < .milliseconds(200) {
+            return
+        }
+        lastRecordToggle = now
+
         switch uiState {
         case .recording, .paused:
             await stop()
@@ -55,7 +79,7 @@ final class RecordingController {
 
     /// Records the entire display under the mouse pointer (menu action).
     func recordFullScreen() async {
-        guard uiState == .idle, !isStarting else { return }
+        guard uiState == .idle, !isStarting, stopTask == nil else { return }
         isStarting = true
         defer { isStarting = false }
 
@@ -80,8 +104,13 @@ final class RecordingController {
 
     /// Terminate-path stop: unlike `toggleRecording()`, this can never START a
     /// recording, so a state flip between the caller's check and this call can't
-    /// pop the selection overlay while the app is trying to quit.
+    /// pop the selection overlay while the app is trying to quit. If a stop is
+    /// already finalizing, it waits for that instead of tearing down twice.
     func stopForTermination() async {
+        if let stopTask {
+            await stopTask.value
+            return
+        }
         guard uiState != .idle else { return }
         await stop()
     }
@@ -120,9 +149,17 @@ final class RecordingController {
     // MARK: - Start
 
     private func beginInteractive() async {
-        guard uiState == .idle, !isStarting else { return }
+        guard uiState == .idle, !isStarting, stopTask == nil else { return }
         isStarting = true
         defer { isStarting = false }
+
+        // Without the Screen Recording grant the overlay's window-snap can never
+        // resolve and the stream start is doomed anyway -- route straight to the
+        // recovery path instead of presenting a dead-end overlay.
+        guard CGPreflightScreenCaptureAccess() else {
+            fail("beginInteractive: Screen Recording permission missing")
+            return
+        }
 
         guard let selection = await coordinator.selectCaptureTarget() else { return }
         // The overlay tore its panels down before returning; let the compositor flush
@@ -156,6 +193,13 @@ final class RecordingController {
     }
 
     private func begin(target: RecordingEngine.Target) async {
+        // Check the permission that actually gates the recording BEFORE possibly
+        // popping a microphone TCC prompt for a session that can't start.
+        guard CGPreflightScreenCaptureAccess() else {
+            fail("Recording start failed: Screen Recording permission missing")
+            return
+        }
+
         var settings = RecordingSettings.load(from: .standard)
         if settings.microphone {
             let granted = await ensureMicrophoneAccess()
@@ -184,29 +228,47 @@ final class RecordingController {
     // MARK: - Stop
 
     private func stop() async {
+        // A second stop while the first is finalizing just waits for it.
+        if let stopTask {
+            await stopTask.value
+            return
+        }
+
         stopElapsedTimer()
         segmentStart = nil
         uiState = .idle
+        pushUI()
 
-        do {
-            let url = try await engine.stop()
-            pushUI()
-            copyFileURLToClipboard(url)
-            CaptureFeedback.playCaptureSound()
-            logger.notice("Recording finished: \(url.lastPathComponent, privacy: .public)")
-        } catch {
-            pushUI()
-            fail("Recording stop/finalize failed: \(error)")
+        // The finalize runs inside a tracked task so `isFinalizing` stays true (and
+        // new starts / app termination stay blocked) until the moov atom is on disk.
+        let task = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let url = try await engine.stop()
+                copyFileURLToClipboard(url)
+                CaptureFeedback.playRecordingStopSound()
+                logger.notice("Recording finished: \(url.lastPathComponent, privacy: .public)")
+            } catch {
+                fail("Recording stop/finalize failed: \(error)")
+            }
         }
+        stopTask = task
+        await task.value
+        stopTask = nil
     }
 
-    private func handleUnexpectedStop(_ error: Error) {
+    private func handleUnexpectedStop(salvagedURL: URL?, error: Error) {
         stopElapsedTimer()
         segmentStart = nil
         accumulatedElapsed = 0
         uiState = .idle
         pushUI()
-        // The engine already salvaged the partial file into ~/Movies/camcord.
+        if let salvagedURL {
+            // The engine salvaged the partial file -- hand it to the user the same
+            // way a normal stop would instead of leaving it silently on disk.
+            copyFileURLToClipboard(salvagedURL)
+            logger.notice("Salvaged partial recording: \(salvagedURL.lastPathComponent, privacy: .public)")
+        }
         fail("Recording stopped unexpectedly: \(error)")
     }
 
@@ -271,6 +333,7 @@ final class RecordingController {
     private func fail(_ message: String) {
         logger.error("\(message, privacy: .public)")
         NSSound.beep()
+        onFailure?()
         PermissionRecovery.noteCaptureFailure()
     }
 

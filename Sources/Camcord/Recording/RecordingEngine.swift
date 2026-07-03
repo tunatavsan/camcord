@@ -33,8 +33,9 @@ final class RecordingEngine: NSObject {
     var isRecording: Bool { stream != nil }
 
     /// Called (on the main actor) when the stream dies out from under us -- display
-    /// unplugged, TCC revoked mid-flight. The partial file has already been salvaged.
-    var onUnexpectedStop: ((Error) -> Void)?
+    /// unplugged, TCC revoked mid-flight. The URL is the salvaged partial file in
+    /// ~/Movies/camcord (nil when nothing could be salvaged).
+    var onUnexpectedStop: ((URL?, Error) -> Void)?
 
     // MARK: - Start
 
@@ -48,7 +49,15 @@ final class RecordingEngine: NSObject {
             guard let fallback = initialCodec.fallback else { throw error }
             logger.error("\(String(describing: initialCodec), privacy: .public) start failed, retrying with fallback: \(String(describing: error), privacy: .public)")
             try? FileManager.default.removeItem(at: outputURL)
-            try await attemptStart(target: target, settings: settings, outputURL: outputURL, codec: fallback)
+            do {
+                try await attemptStart(target: target, settings: settings, outputURL: outputURL, codec: fallback)
+            } catch {
+                // The fallback attempt can fail AFTER its StreamWriter already
+                // created the on-disk container (e.g. addStreamOutput throws) --
+                // same junk-cleanup rule as the primary attempt.
+                try? FileManager.default.removeItem(at: outputURL)
+                throw error
+            }
         }
     }
 
@@ -172,13 +181,29 @@ final class RecordingEngine: NSObject {
         clearStreamState()
 
         do {
-            try await stream.stopCapture()
+            // stopCapture is the same continuation-bridged replayd round-trip the
+            // rest of the app refuses to trust unbounded (see HardTimeout) -- a
+            // wedged replayd here would otherwise hang stop() and, on the quit
+            // path, leave Cmd-Q permanently unanswered. On timeout we abandon the
+            // stream and still finalize: markFinished() hard-stops any late buffers.
+            let box = StreamBox(stream)
+            try await withHardTimeout(.seconds(5), onTimeout: RecordingError.writerFailed(nil)) {
+                try await box.stream.stopCapture()
+            }
         } catch {
             // Already-stopped streams throw; the writer finalize below still salvages the file.
-            logger.notice("stopCapture threw (continuing to finalize): \(String(describing: error), privacy: .public)")
+            logger.notice("stopCapture threw or timed out (continuing to finalize): \(String(describing: error), privacy: .public)")
         }
 
         return try await finalize(writer)
+    }
+
+    /// SCStream is not Sendable in the 15.x SDK; passing it into the hard-timeout's
+    /// detached task is safe here because stopCapture is documented thread-safe and
+    /// this engine has already dropped its own reference (clearStreamState).
+    private struct StreamBox: @unchecked Sendable {
+        let stream: SCStream
+        init(_ stream: SCStream) { self.stream = stream }
     }
 
     private func handleUnexpectedStop(_ error: Error) async {
@@ -186,8 +211,8 @@ final class RecordingEngine: NSObject {
         logger.error("Stream stopped unexpectedly: \(String(describing: error), privacy: .public)")
         clearStreamState()
         // Salvage whatever was written so a long recording isn't lost.
-        _ = try? await finalize(writer)
-        onUnexpectedStop?(error)
+        let salvaged = try? await finalize(writer)
+        onUnexpectedStop?(salvaged, error)
     }
 
     /// The writer went `.failed` mid-recording (disk full, quota). The stream is
@@ -200,7 +225,7 @@ final class RecordingEngine: NSObject {
         Task {
             try? await stream.stopCapture()
             try? FileManager.default.removeItem(at: writer.outputURL)
-            onUnexpectedStop?(RecordingError.writerFailed(nil))
+            onUnexpectedStop?(nil, RecordingError.writerFailed(nil))
         }
     }
 

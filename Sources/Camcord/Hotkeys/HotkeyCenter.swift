@@ -7,7 +7,13 @@ extension KeyboardShortcuts.Name {
     static let captureActiveWindow = Self("captureActiveWindow", initial: .init(.one, modifiers: [.command, .shift]))
     static let captureFullScreen = Self("captureFullScreen", initial: .init(.six, modifiers: [.command, .shift]))
     static let repeatLastRegion = Self("repeatLastRegion", initial: .init(.r, modifiers: [.command, .shift]))
+    static let captureTextRegion = Self("captureTextRegion", initial: .init(.eight, modifiers: [.command, .shift]))
+    static let sampleColor = Self("sampleColor", initial: .init(.seven, modifiers: [.command, .shift]))
+    // No default: the safety net for rare "overwrote my clipboard" moments — bind it
+    // from Settings if wanted.
+    static let recopyLastCapture = Self("recopyLastCapture")
     static let toggleRecording = Self("toggleRecording", initial: .init(.nine, modifiers: [.command, .shift]))
+    static let recordFullScreen = Self("recordFullScreen")
     static let pauseRecording = Self("pauseRecording", initial: .init(.zero, modifiers: [.command, .shift]))
 }
 
@@ -37,8 +43,20 @@ final class HotkeyCenter {
         KeyboardShortcuts.onKeyDown(for: .repeatLastRegion) { [coordinator] in
             Task { await coordinator.captureLastRegion() }
         }
+        KeyboardShortcuts.onKeyDown(for: .captureTextRegion) { [coordinator] in
+            Task { await coordinator.captureTextRegionInteractive() }
+        }
+        KeyboardShortcuts.onKeyDown(for: .sampleColor) { [coordinator] in
+            Task { await coordinator.sampleColorToClipboard() }
+        }
+        KeyboardShortcuts.onKeyDown(for: .recopyLastCapture) { [coordinator] in
+            coordinator.recopyLastCapture()
+        }
         KeyboardShortcuts.onKeyDown(for: .toggleRecording) { [recordingController] in
             Task { await recordingController.toggleRecording() }
+        }
+        KeyboardShortcuts.onKeyDown(for: .recordFullScreen) { [recordingController] in
+            Task { await recordingController.recordFullScreen() }
         }
         KeyboardShortcuts.onKeyDown(for: .pauseRecording) { [recordingController] in
             recordingController.pauseResume()

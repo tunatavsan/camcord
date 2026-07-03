@@ -56,4 +56,74 @@ struct RecordingSettingsTests {
 
         #expect(RecordingSettings.filename(date: date) == expected)
     }
+
+    // MARK: - uniqueOutputURL (collision avoidance is safety-critical: downstream
+    // failure paths delete the returned URL, so returning an EXISTING path would
+    // delete a previous, finished recording)
+
+    private func makeTempDirectory() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("camcord-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private var fixedDate: Date {
+        var components = DateComponents()
+        components.year = 2026
+        components.month = 7
+        components.day = 3
+        components.hour = 21
+        components.minute = 15
+        components.second = 30
+        return Calendar(identifier: .gregorian).date(from: components)!
+    }
+
+    @Test("uniqueOutputURL returns the plain filename when nothing collides")
+    func uniqueURLWithoutCollision() throws {
+        let directory = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let url = RecordingSettings.uniqueOutputURL(in: directory, date: fixedDate)
+        #expect(url.lastPathComponent == RecordingSettings.filename(date: fixedDate))
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+    }
+
+    @Test("a same-second collision gets a ' (2)' suffix; a second collision gets ' (3)'")
+    func uniqueURLWithCollisions() throws {
+        let directory = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let base = RecordingSettings.filename(date: fixedDate)
+        let stem = (base as NSString).deletingPathExtension
+        FileManager.default.createFile(atPath: directory.appendingPathComponent(base).path, contents: Data())
+
+        let second = RecordingSettings.uniqueOutputURL(in: directory, date: fixedDate)
+        #expect(second.lastPathComponent == "\(stem) (2).mov")
+
+        FileManager.default.createFile(atPath: second.path, contents: Data())
+        let third = RecordingSettings.uniqueOutputURL(in: directory, date: fixedDate)
+        #expect(third.lastPathComponent == "\(stem) (3).mov")
+    }
+
+    @Test("the returned URL never points at an existing file, even past the counter bound")
+    func uniqueURLNeverReturnsExistingPath() throws {
+        let directory = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        // Exhaust the whole counter range: base + (2)...(99).
+        let base = RecordingSettings.filename(date: fixedDate)
+        let stem = (base as NSString).deletingPathExtension
+        FileManager.default.createFile(atPath: directory.appendingPathComponent(base).path, contents: Data())
+        for counter in 2..<100 {
+            FileManager.default.createFile(
+                atPath: directory.appendingPathComponent("\(stem) (\(counter)).mov").path,
+                contents: Data()
+            )
+        }
+
+        let url = RecordingSettings.uniqueOutputURL(in: directory, date: fixedDate)
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        #expect(url.pathExtension == "mov")
+    }
 }

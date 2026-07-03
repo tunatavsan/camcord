@@ -49,6 +49,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             recordingStateModel?.elapsed = elapsed
         }
 
+        // Every failure beep gets a visual companion on the status glyph.
+        let flashFailure: () -> Void = { [weak statusItemController] in
+            statusItemController?.flashFailure()
+        }
+        coordinator.onFailure = flashFailure
+        recordingController.onFailure = flashFailure
+
         var panelActions = makePanelActions(coordinator: coordinator, recordingController: recordingController)
         panelActions.applyTapBindings = { [weak eventTapEngine] bindings in
             eventTapEngine?.apply(bindings)
@@ -131,24 +138,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var isTerminating = false
+    private var didReplyToTermination = false
 
     /// Don't tear the process down mid-recording: stop (and finalize the file) first,
     /// then terminate. Screenshots are one-shot and need no such guard.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        // Re-entrancy: stop() flips uiState to .idle before the finalize completes,
-        // so a second Cmd-Q mid-finalize would otherwise see .idle, terminateNow,
-        // and kill the process before the moov atom is written.
+        // Re-entrancy: a second Cmd-Q while the first is finalizing must not
+        // terminateNow and kill the process before the moov atom is written.
         if isTerminating {
             return .terminateLater
         }
-        guard let recordingController, recordingController.uiState != .idle else {
+        // `.idle` alone is not "nothing in flight": stop() flips it immediately for
+        // UI feedback while the finalize is still writing the file (isFinalizing).
+        guard let recordingController,
+            recordingController.uiState != .idle || recordingController.isFinalizing
+        else {
             return .terminateNow
         }
         isTerminating = true
-        Task {
+        Task { @MainActor in
             await recordingController.stopForTermination()
-            sender.reply(toApplicationShouldTerminate: true)
+            self.replyToTerminationOnce(sender)
+        }
+        // Failsafe: if the finalize wedges (hung replayd/disk), still answer Cmd-Q
+        // eventually — a personal menu-bar app must never need a Force Quit.
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(20))
+            self.replyToTerminationOnce(sender)
         }
         return .terminateLater
+    }
+
+    private func replyToTerminationOnce(_ sender: NSApplication) {
+        guard !didReplyToTermination else { return }
+        didReplyToTermination = true
+        sender.reply(toApplicationShouldTerminate: true)
     }
 }

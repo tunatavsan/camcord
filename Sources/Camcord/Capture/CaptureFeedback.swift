@@ -21,4 +21,11 @@ enum CaptureFeedback {
         guard isEnabled(in: defaults) else { return }
         NSSound(named: "Pop")?.play()
     }
+
+    /// A recording finishing is a different event than a screenshot landing -- give
+    /// it a distinct sound so the two clipboard writes are distinguishable by ear.
+    static func playRecordingStopSound(in defaults: UserDefaults = .standard) {
+        guard isEnabled(in: defaults) else { return }
+        NSSound(named: "Glass")?.play()
+    }
 }

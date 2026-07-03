@@ -49,6 +49,11 @@ struct RegionClampTests {
         // Clamped (intersected) to the right display's bounds: x in [1000, 1300).
         #expect(result?.clampedRegion == CGRect(x: 1000, y: 100, width: 300, height: 200))
         #expect(result?.sourceRect == CGRect(x: 0, y: 100, width: 300, height: 200))
+        // Pixel size must come from the CLAMPED rect (300pt), not the original
+        // region (400pt) — the encoder output is sized to the crop; using the
+        // original would stretch every spanning-region recording.
+        #expect(result?.pixelWidth == 300)
+        #expect(result?.pixelHeight == 200)
     }
 
     @Test("a region whose center is on the left display clamps there instead")
@@ -62,6 +67,9 @@ struct RegionClampTests {
         let result = RegionClamp.clamp(region: region, displays: [left, right])
         #expect(result?.displayIndex == 0)
         #expect(result?.clampedRegion == CGRect(x: 800, y: 100, width: 200, height: 200))
+        // From the clamped 200pt width, not the original 300pt.
+        #expect(result?.pixelWidth == 200)
+        #expect(result?.pixelHeight == 200)
     }
 
     // MARK: - Even-pixel rounding

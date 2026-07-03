@@ -25,12 +25,18 @@ if [[ "${1:-}" == "--install" ]]; then
     if pgrep -xq Camcord; then
         # Quit via Apple event so applicationShouldTerminate runs — a raw pkill
         # (SIGTERM) would skip it and corrupt an in-progress recording's file.
+        # For the same reason there is deliberately NO kill fallback: if the app
+        # is still alive after the grace window (e.g. finalizing a long recording),
+        # abort the install instead of corrupting the file we just protected.
         osascript -e 'tell application "Camcord" to quit' >/dev/null 2>&1 || true
-        for _ in $(seq 1 40); do
+        for _ in $(seq 1 120); do
             pgrep -xq Camcord || break
             sleep 0.25
         done
-        pkill -x Camcord 2>/dev/null || true
+        if pgrep -xq Camcord; then
+            echo "Camcord is still shutting down (finalizing a recording?) — install aborted, retry shortly." >&2
+            exit 1
+        fi
     fi
     ditto dist/Camcord.app /Applications/Camcord.app
     open /Applications/Camcord.app

@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import KeyboardShortcuts
 import SwiftUI
@@ -36,7 +37,7 @@ final class SettingsWindowController {
     private func makeWindow() -> NSWindow {
         let contentView = SettingsView(eventTapEngine: eventTapEngine, defaultsSuite: defaultsSuite)
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 600),
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 640),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -59,7 +60,10 @@ struct SettingsView: View {
     @State private var bindings: TapBindings
     @State private var recordingSettings: RecordingSettings
     @State private var captureSoundEnabled: Bool
+    @State private var launchAtLogin: Bool
     @State private var isAccessibilityTrusted: Bool
+    @State private var isScreenRecordingGranted: Bool
+    @State private var isMicrophoneDenied: Bool
     @State private var trustPollTimer: Timer?
 
     init(eventTapEngine: EventTapEngine, defaultsSuite: UserDefaults) {
@@ -68,7 +72,11 @@ struct SettingsView: View {
         _bindings = State(initialValue: TapBindings.load(from: defaultsSuite))
         _recordingSettings = State(initialValue: RecordingSettings.load(from: defaultsSuite))
         _captureSoundEnabled = State(initialValue: CaptureFeedback.isEnabled(in: defaultsSuite))
+        _launchAtLogin = State(initialValue: LoginItem.isEnabled)
         _isAccessibilityTrusted = State(initialValue: AccessibilityPermission.isTrusted())
+        _isScreenRecordingGranted = State(initialValue: CGPreflightScreenCaptureAccess())
+        let micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        _isMicrophoneDenied = State(initialValue: micStatus == .denied || micStatus == .restricted)
     }
 
     var body: some View {
@@ -78,35 +86,48 @@ struct SettingsView: View {
                 KeyboardShortcuts.Recorder("Aktif pencere:", name: .captureActiveWindow)
                 KeyboardShortcuts.Recorder("Tüm ekran:", name: .captureFullScreen)
                 KeyboardShortcuts.Recorder("Son bölgeyi tekrarla:", name: .repeatLastRegion)
+                KeyboardShortcuts.Recorder("Metni çek (OCR):", name: .captureTextRegion)
+                KeyboardShortcuts.Recorder("Renk seç:", name: .sampleColor)
+                KeyboardShortcuts.Recorder("Son çekimi yeniden kopyala:", name: .recopyLastCapture)
                 KeyboardShortcuts.Recorder("Kayıt başlat/durdur:", name: .toggleRecording)
+                KeyboardShortcuts.Recorder("Tüm ekranı kaydet:", name: .recordFullScreen)
                 KeyboardShortcuts.Recorder("Kayıt duraklat:", name: .pauseRecording)
             }
 
             Section("Fare ve Hareketler") {
-                Picker("Fare Düğmesi 4:", selection: $bindings.mouseButton4) {
+                Picker("Fare düğmesi 4:", selection: $bindings.mouseButton4) {
                     tapActionOptions
                 }
-                Picker("Fare Düğmesi 5:", selection: $bindings.mouseButton5) {
+                Picker("Fare düğmesi 5:", selection: $bindings.mouseButton5) {
                     tapActionOptions
                 }
                 Picker("Çift dokunuş Sağ ⌘:", selection: $bindings.doubleTapRightCommand) {
                     tapActionOptions
                 }
 
-                accessibilityStatusRow
+                // Don't nag for a broad system permission unless a Tier-2 binding
+                // actually needs it.
+                if bindings.anyEnabled {
+                    accessibilityStatusRow
+                }
             }
 
             Section("Kayıt") {
                 Toggle("Sistem sesini kaydet", isOn: $recordingSettings.systemAudio)
                 Toggle("Mikrofonu kaydet", isOn: $recordingSettings.microphone)
+                if recordingSettings.microphone, isMicrophoneDenied {
+                    microphonePermissionRow
+                }
             }
 
             Section("Genel") {
+                Toggle("Bilgisayar açılışında başlat", isOn: $launchAtLogin)
                 Toggle("Çekim sesi çal", isOn: $captureSoundEnabled)
+                screenRecordingStatusRow
             }
         }
         .formStyle(.grouped)
-        .frame(width: 480, height: 600)
+        .frame(width: 480, height: 640)
         .onChange(of: bindings) { _, newValue in
             newValue.save(to: defaultsSuite)
             eventTapEngine.apply(newValue)
@@ -117,6 +138,12 @@ struct SettingsView: View {
         }
         .onChange(of: captureSoundEnabled) { _, newValue in
             CaptureFeedback.setEnabled(newValue, in: defaultsSuite)
+        }
+        .onChange(of: launchAtLogin) { _, newValue in
+            guard newValue != LoginItem.isEnabled else { return }
+            LoginItem.setEnabled(newValue)
+            // Registration can no-op (requiresApproval) — reflect reality, not the wish.
+            launchAtLogin = LoginItem.isEnabled
         }
         .onAppear {
             startTrustPollingIfNeeded()
@@ -132,6 +159,37 @@ struct SettingsView: View {
         Text("Kapalı").tag(TapAction?.none)
         Text("Bölge çek").tag(TapAction?.some(.captureRegion))
         Text("Kayıt başlat-durdur").tag(TapAction?.some(.toggleRecording))
+    }
+
+    @ViewBuilder
+    private var screenRecordingStatusRow: some View {
+        if isScreenRecordingGranted {
+            Label("Ekran kaydı izni verildi", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        } else {
+            HStack {
+                Label("Ekran kaydı izni gerekli", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Spacer()
+                Button("İzni Aç") {
+                    NSWorkspace.shared.open(PermissionRecovery.screenRecordingPaneURL)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var microphonePermissionRow: some View {
+        HStack {
+            Label("Mikrofon izni gerekli", systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Spacer()
+            Button("İzni Aç") {
+                NSWorkspace.shared.open(
+                    URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!
+                )
+            }
+        }
     }
 
     @ViewBuilder
@@ -168,7 +226,11 @@ struct SettingsView: View {
                 let trusted = AccessibilityPermission.isTrusted()
                 isAccessibilityTrusted = trusted
                 if trusted {
-                    eventTapEngine.apply(bindings)
+                    // Re-read from disk, NOT the captured @State: this timer can
+                    // outlive the view (a titlebar-close skips onDisappear), and a
+                    // stale snapshot here would silently revert bindings the user
+                    // changed elsewhere in the meantime.
+                    eventTapEngine.apply(TapBindings.load(from: defaultsSuite))
                     trustPollTimer?.invalidate()
                     trustPollTimer = nil
                 }

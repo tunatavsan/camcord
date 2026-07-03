@@ -29,6 +29,11 @@ actor ShareableContentCache {
     private var cached: SCShareableContent?
     private var cachedAt: ContinuousClock.Instant?
     private var invalidated = true
+    /// Bumped by every `invalidate()`. The fetch await is an actor-reentrancy
+    /// suspension point, so an invalidation can land MID-fetch; comparing epochs
+    /// afterwards stops the fetch completion from clobbering that invalidation
+    /// (the stale snapshot is still cached, but stays marked stale).
+    private var invalidationEpoch = 0
     /// Coalesces concurrent fetches: the actor is reentrant across the fetch await,
     /// and each un-coalesced SCShareableContent query is a potential multi-second
     /// stall — overlapping callers should share one in-flight query.
@@ -50,10 +55,13 @@ actor ShareableContentCache {
         }
         inFlightFetch = fetch
         defer { inFlightFetch = nil }
+        let epochAtFetch = invalidationEpoch
         let fresh = try await fetch.value
         cached = fresh
         cachedAt = ContinuousClock.now
-        invalidated = false
+        if invalidationEpoch == epochAtFetch {
+            invalidated = false
+        }
         return fresh
     }
 
@@ -78,6 +86,7 @@ actor ShareableContentCache {
 
     func invalidate() {
         invalidated = true
+        invalidationEpoch += 1
     }
 
     private static func fetchWithRetry(logger: Logger) async throws -> SCShareableContent {
