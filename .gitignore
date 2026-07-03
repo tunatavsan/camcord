@@ -1,0 +1,6 @@
+.build/
+dist/
+.superpowers/
+.DS_Store
+*.mov
+*.mp4
