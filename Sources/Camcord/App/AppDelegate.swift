@@ -1,7 +1,9 @@
 import AppKit
+import ServiceManagement
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private static let didAttemptLoginItemKey = "didAttemptLoginItemRegistration"
     private var captureCoordinator: CaptureCoordinator?
     private var recordingController: RecordingController?
     private var hotkeyCenter: HotkeyCenter?
@@ -39,5 +41,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recordingController.onUIChange = { [weak statusItemController] state, elapsed in
             statusItemController?.setRecordingUI(state, elapsed: elapsed)
         }
+
+        registerLoginItemOnFirstRun()
+    }
+
+    /// The whole point of the app is being resident from login -- register the login
+    /// item automatically on first run (once; the menu toggle stays in control after).
+    private func registerLoginItemOnFirstRun() {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: Self.didAttemptLoginItemKey) else { return }
+        defaults.set(true, forKey: Self.didAttemptLoginItemKey)
+        guard SMAppService.mainApp.status == .notRegistered else { return }
+        do {
+            try SMAppService.mainApp.register()
+        } catch {
+            // .requiresApproval and transient failures both surface in the menu's
+            // Launch at Login state; nothing to do here.
+        }
+    }
+
+    /// Don't tear the process down mid-recording: stop (and finalize the file) first,
+    /// then terminate. Screenshots are one-shot and need no such guard.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let recordingController, recordingController.uiState != .idle else {
+            return .terminateNow
+        }
+        Task {
+            await recordingController.toggleRecording()  // stops + finalizes
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 }

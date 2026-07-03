@@ -60,9 +60,16 @@ final class EventTapEngine {
     }
 
     /// Tears down/(re)creates the tap as needed for the given bindings. Safe to call
-    /// repeatedly (e.g. every time Settings writes a change).
-    func apply(_ bindings: TapBindings) {
-        self.bindings = bindings
+    /// repeatedly (e.g. every time Settings writes a change). Unchanged bindings with
+    /// a live tap short-circuit -- no pointless destroy/recreate churn per Settings
+    /// write. (Unchanged bindings with a MISSING tap still recreate: that's the
+    /// "Accessibility was just granted" path.)
+    func apply(_ newBindings: TapBindings) {
+        let unchanged = newBindings == bindings
+        bindings = newBindings
+        if unchanged, !newBindings.anyEnabled || eventTap != nil {
+            return
+        }
         doubleTapDetector = DoubleTapDetector()
         recreateTap()
     }
@@ -121,6 +128,11 @@ final class EventTapEngine {
         if let source = runLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
         }
+        if let tap = eventTap {
+            // Documented teardown order: invalidate the mach port explicitly rather
+            // than relying on ARC release timing during frequent recreation.
+            CFMachPortInvalidate(tap)
+        }
         eventTap = nil
         runLoopSource = nil
         isTapHealthy = false
@@ -157,7 +169,17 @@ final class EventTapEngine {
     }
 
     private func watchdogTick() {
-        guard bindings.anyEnabled, let tap = eventTap else { return }
+        guard bindings.anyEnabled else { return }
+
+        guard let tap = eventTap else {
+            // The tap never came up (transient create failure, or Accessibility was
+            // granted while Settings was closed). Resurrect once trust appears.
+            if AccessibilityPermission.isTrusted() {
+                logger.notice("Watchdog resurrecting missing event tap")
+                recreateTap()
+            }
+            return
+        }
         guard !CGEvent.tapIsEnabled(tap: tap) else { return }
 
         logger.notice("Watchdog found the event tap disabled; re-enabling")

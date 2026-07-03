@@ -108,6 +108,7 @@ final class CaptureCoordinator {
                 fail("captureFullScreen: clipboard write failed")
                 return
             }
+            CaptureFeedback.playCaptureSound()
         } catch {
             fail("captureFullScreen: capture failed: \(error)")
         }
@@ -122,6 +123,7 @@ final class CaptureCoordinator {
                 fail("Region capture: clipboard write failed")
                 return
             }
+            CaptureFeedback.playCaptureSound()
             if storeAsLastRegion {
                 storeLastRegion(cgRect)
             }
@@ -137,6 +139,7 @@ final class CaptureCoordinator {
                 fail("Window capture: clipboard write failed")
                 return
             }
+            CaptureFeedback.playCaptureSound()
         } catch {
             fail("Window capture failed: \(error)")
         }
@@ -145,6 +148,9 @@ final class CaptureCoordinator {
     private func fail(_ message: String) {
         logger.error("\(message, privacy: .public)")
         NSSound.beep()
+        // If the failure was really a lost Screen Recording grant (macOS 15+ periodic
+        // re-approval), take the user to the fix once instead of beeping forever.
+        PermissionRecovery.noteCaptureFailure()
     }
 
     private func screenNumber(of screen: NSScreen) -> CGDirectDisplayID? {

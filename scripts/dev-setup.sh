@@ -11,7 +11,9 @@ fi
 echo "  xcode-select -p: $(xcode-select -p)"
 
 echo "Checking for an 'Apple Development' code signing identity..."
-IDENTITIES="$(security find-identity -v -p codesigning)"
+# "|| true" so an unexpected non-zero from `security` still reaches the
+# missing-identity instructions below instead of aborting under set -e.
+IDENTITIES="$(security find-identity -v -p codesigning || true)"
 
 if echo "$IDENTITIES" | grep -q "Apple Development"; then
 	echo "$IDENTITIES" | grep "Apple Development"

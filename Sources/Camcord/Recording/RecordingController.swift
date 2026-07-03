@@ -174,6 +174,7 @@ final class RecordingController {
             let url = try await engine.stop()
             pushUI()
             copyFileURLToClipboard(url)
+            CaptureFeedback.playCaptureSound()
             logger.notice("Recording finished: \(url.lastPathComponent, privacy: .public)")
         } catch {
             pushUI()
@@ -252,6 +253,7 @@ final class RecordingController {
     private func fail(_ message: String) {
         logger.error("\(message, privacy: .public)")
         NSSound.beep()
+        PermissionRecovery.noteCaptureFailure()
     }
 
     private func scale(for display: SCDisplay) -> CGFloat {
