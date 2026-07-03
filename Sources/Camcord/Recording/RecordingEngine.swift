@@ -80,6 +80,14 @@ final class RecordingEngine: NSObject {
             }
         }
 
+        // Disk-full/quota failure surfaces on the writer, not the stream — SCStream
+        // keeps happily delivering into a dead writer. Route it like a stream death.
+        writer.onRuntimeFailure = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.handleWriterRuntimeFailure()
+            }
+        }
+
         let stream = SCStream(filter: filter, configuration: configuration, delegate: relay)
         // One shared serial queue for all three outputs = single-threaded confinement
         // for every StreamWriter access (its documented invariant).
@@ -180,6 +188,20 @@ final class RecordingEngine: NSObject {
         // Salvage whatever was written so a long recording isn't lost.
         _ = try? await finalize(writer)
         onUnexpectedStop?(error)
+    }
+
+    /// The writer went `.failed` mid-recording (disk full, quota). The stream is
+    /// still alive but every buffer is now dropped — stop it, remove the unplayable
+    /// (moov-less) partial file, and surface the failure like a stream death.
+    private func handleWriterRuntimeFailure() {
+        guard let stream, let writer = streamWriter else { return }
+        logger.error("Writer runtime failure; stopping the orphaned stream")
+        clearStreamState()
+        Task {
+            try? await stream.stopCapture()
+            try? FileManager.default.removeItem(at: writer.outputURL)
+            onUnexpectedStop?(RecordingError.writerFailed(nil))
+        }
     }
 
     private func finalize(_ writer: StreamWriter) async throws -> URL {

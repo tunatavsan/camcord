@@ -1,5 +1,6 @@
 import AVFoundation
 @preconcurrency import ScreenCaptureKit
+import VideoToolbox
 import os
 
 /// The recording hot path: receives `CMSampleBuffer`s from all three `SCStream`
@@ -26,6 +27,12 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
 
     let outputURL: URL
 
+    /// Fired at most once, on the sample queue, the moment the writer transitions to
+    /// `.failed` mid-recording (disk full, quota). Without this, SCStream keeps
+    /// delivering, the UI keeps counting, and the user records into the void until
+    /// they press stop. The engine routes it into the unexpected-stop path.
+    var onRuntimeFailure: (@Sendable () -> Void)?
+
     /// Builds the writer and its inputs and calls `startWriting()`. Throws if the
     /// container can't be created or the writer rejects the settings -- callers use
     /// that to drive the HEVC -> H.264 fallback.
@@ -51,6 +58,9 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         // Capture-side colorSpaceName and these encode-side properties MUST stay
         // matched (VideoCodecChoice owns both) or colors wash out (TN QA1839 / -12917).
         videoSettings[AVVideoColorPropertiesKey] = codec.colorProperties
+        if let compressionProperties = codec.compressionProperties {
+            videoSettings[AVVideoCompressionPropertiesKey] = compressionProperties
+        }
         videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
         videoInput.expectsMediaDataInRealTime = true
 
@@ -154,6 +164,7 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
             if writer.status == .failed, !didLogWriterFailure {
                 didLogWriterFailure = true
                 logger.error("AVAssetWriter failed mid-recording: \(String(describing: self.writer.error), privacy: .public)")
+                onRuntimeFailure?()
             }
             return
         }
@@ -208,8 +219,20 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         }
     }
 
-    /// Thread-safe by AVFoundation contract; called from the engine after `markFinished`.
+    /// Thread-safe by AVFoundation contract; called from the engine after the
+    /// `markFinished` barrier has run on the sample queue (so `sessionStarted` reads
+    /// here are ordered after every append).
     func finishWriting() async throws -> URL {
+        guard sessionStarted else {
+            // Zero complete frames were ever delivered (sub-frame recording, or the
+            // stream only produced .idle frames). Finishing a session-less writer
+            // fails it anyway, and either outcome leaves an unplayable/empty file —
+            // cancel, remove the stray file, and report "nothing captured" instead
+            // of a false success.
+            writer.cancelWriting()
+            try? FileManager.default.removeItem(at: outputURL)
+            throw RecordingError.nothingCaptured
+        }
         guard writer.status == .writing else {
             throw RecordingError.writerFailed(writer.error)
         }
@@ -268,6 +291,17 @@ enum VideoCodecChoice {
         }
     }
 
+    /// The HEVC path captures 10-bit (`ARGB2101010LEPacked`); without an explicit
+    /// Main10 profile the encoder may default to 8-bit Main and silently truncate.
+    var compressionProperties: [String: Any]? {
+        switch self {
+        case .hevc:
+            [AVVideoProfileLevelKey: kVTProfileLevel_HEVC_Main10_AutoLevel as String]
+        case .h264:
+            nil
+        }
+    }
+
     var fallback: VideoCodecChoice? {
         switch self {
         case .hevc: .h264
@@ -281,4 +315,6 @@ enum RecordingError: Error {
     case writerFailed(Error?)
     case alreadyRecording
     case notRecording
+    /// The recording ended before a single complete video frame was written.
+    case nothingCaptured
 }

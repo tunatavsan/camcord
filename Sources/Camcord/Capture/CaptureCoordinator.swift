@@ -53,13 +53,24 @@ final class CaptureCoordinator {
     }
 
     /// Re-captures the last region with no overlay; falls back to the interactive
-    /// flow if there is no stored region yet.
+    /// flow if there is no stored region yet — or if the stored region no longer
+    /// intersects any live display (the display it was captured on was unplugged or
+    /// rearranged; blindly capturing an off-screen rect would copy an empty/black
+    /// image to the clipboard and chirp success).
     func captureLastRegion() async {
-        guard let cgRect = readLastRegion() else {
+        guard let cgRect = readLastRegion(), intersectsAnyDisplay(cgRect) else {
             await captureRegionInteractive()
             return
         }
         await performRegionCapture(cgRect, storeAsLastRegion: false)
+    }
+
+    private func intersectsAnyDisplay(_ cgRect: CGRect) -> Bool {
+        guard let primaryHeight = NSScreen.screens.first?.frame.height else { return false }
+        return NSScreen.screens.contains { screen in
+            let screenCGFrame = Geometry.appKitToCG(screen.frame, primaryScreenHeight: primaryHeight)
+            return !screenCGFrame.intersection(cgRect).isEmpty
+        }
     }
 
     /// Captures the frontmost app's first on-screen, normal-layer window.
@@ -104,7 +115,7 @@ final class CaptureCoordinator {
                 return
             }
             let image = try await ScreenshotService.captureDisplay(display)
-            guard await ClipboardWriter.copyPNG(image) else {
+            guard await ClipboardWriter.copyPNG(image, pointSize: screen.frame.size) else {
                 fail("captureFullScreen: clipboard write failed")
                 return
             }
@@ -119,7 +130,7 @@ final class CaptureCoordinator {
     private func performRegionCapture(_ cgRect: CGRect, storeAsLastRegion: Bool) async {
         do {
             let image = try await ScreenshotService.captureRegion(cgRect: cgRect)
-            guard await ClipboardWriter.copyPNG(image) else {
+            guard await ClipboardWriter.copyPNG(image, pointSize: cgRect.size) else {
                 fail("Region capture: clipboard write failed")
                 return
             }
@@ -135,7 +146,7 @@ final class CaptureCoordinator {
     private func performWindowCapture(_ window: SCWindow) async {
         do {
             let image = try await ScreenshotService.captureWindow(window)
-            guard await ClipboardWriter.copyPNG(image) else {
+            guard await ClipboardWriter.copyPNG(image, pointSize: window.frame.size) else {
                 fail("Window capture: clipboard write failed")
                 return
             }

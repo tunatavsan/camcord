@@ -104,4 +104,23 @@ struct RegionClampTests {
         let result = RegionClamp.clamp(region: CGRect(x: 0, y: 0, width: 100, height: 100), displays: [])
         #expect(result == nil)
     }
+
+    // MARK: - Degenerate regions
+
+    @Test("a zero-size region returns nil (empty intersection)")
+    func zeroSizeRegionReturnsNil() {
+        let display = RegionClamp.DisplayFrame(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080), scale: 2)
+        let result = RegionClamp.clamp(region: CGRect(x: 100, y: 100, width: 0, height: 0), displays: [display])
+        #expect(result == nil)
+    }
+
+    @Test("a region fully outside every display returns nil")
+    func fullyOffscreenRegionReturnsNil() {
+        let display = RegionClamp.DisplayFrame(frame: CGRect(x: 0, y: 0, width: 1000, height: 1000), scale: 1)
+        let result = RegionClamp.clamp(
+            region: CGRect(x: -500, y: -500, width: 100, height: 100),
+            displays: [display]
+        )
+        #expect(result == nil)
+    }
 }

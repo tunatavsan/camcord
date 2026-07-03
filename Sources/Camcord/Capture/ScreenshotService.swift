@@ -84,21 +84,10 @@ enum ScreenshotService {
         }
     }
 
+    /// Hard wall-clock bound: a hung SCK call is abandoned, not awaited (see
+    /// `withHardTimeout` — task-group cancellation can't bound non-cooperative calls).
     private static func withTimeout(_ operation: @escaping @Sendable () async throws -> CGImage) async throws -> CGImage {
-        try await withThrowingTaskGroup(of: CGImage.self) { group in
-            group.addTask {
-                try await operation()
-            }
-            group.addTask {
-                try await Task.sleep(for: fetchTimeout)
-                throw CaptureError.timeout
-            }
-            guard let result = try await group.next() else {
-                throw CaptureError.timeout
-            }
-            group.cancelAll()
-            return result
-        }
+        try await withHardTimeout(fetchTimeout, onTimeout: CaptureError.timeout, operation: operation)
     }
 }
 

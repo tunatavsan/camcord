@@ -206,12 +206,12 @@ final class EventTapEngine {
 
     /// Classifies and dispatches one event given its already-extracted primitive
     /// fields. Returns `true` when the callback should swallow the event.
-    fileprivate func handle(type: CGEventType, button: Int64, keycode: Int64, isCommandDown: Bool, timestamp: TimeInterval) -> Bool {
+    fileprivate func handle(type: CGEventType, button: Int64, keycode: Int64, isRightCommandDown: Bool, timestamp: TimeInterval) -> Bool {
         switch type {
         case .otherMouseDown, .otherMouseUp:
             return handleMouseButton(type: type, button: button)
         case .flagsChanged:
-            handleFlagsChanged(keycode: keycode, isCommandDown: isCommandDown, timestamp: timestamp)
+            handleFlagsChanged(keycode: keycode, isRightCommandDown: isRightCommandDown, timestamp: timestamp)
             return false
         case .keyDown:
             handleKeyDown(timestamp: timestamp)
@@ -244,12 +244,12 @@ final class EventTapEngine {
 
     private static let rightCommandKeycode: Int64 = 54
 
-    private func handleFlagsChanged(keycode: Int64, isCommandDown: Bool, timestamp: TimeInterval) {
+    private func handleFlagsChanged(keycode: Int64, isRightCommandDown: Bool, timestamp: TimeInterval) {
         // Do NOT swallow flagsChanged -- harmless as a modifier (fact 6).
         guard bindings.doubleTapRightCommand != nil else { return }
         guard keycode == Self.rightCommandKeycode else { return }
 
-        let tapEvent: TapKeyEvent = isCommandDown ? .rightCmdDown : .rightCmdUp
+        let tapEvent: TapKeyEvent = isRightCommandDown ? .rightCmdDown : .rightCmdUp
         if doubleTapDetector.handle(event: tapEvent, at: timestamp), let action = bindings.doubleTapRightCommand {
             perform(action)
         }
@@ -315,11 +315,15 @@ private func eventTapCallback(
 
     let button = event.getIntegerValueField(.mouseEventButtonNumber)
     let keycode = event.getIntegerValueField(.keyboardEventKeycode)
-    let isCommandDown = event.flags.contains(.maskCommand)
+    // Press/release of RIGHT ⌘ specifically: `.maskCommand` is set by EITHER command
+    // key, so releasing Right ⌘ while Left ⌘ is held would read as still-pressed and
+    // silently kill the double-tap gesture. The device-dependent right-command bit
+    // (NX_DEVICERCMDKEYMASK, 0x10) tracks the right key alone.
+    let isRightCommandDown = event.flags.rawValue & 0x10 != 0
     let timestamp = MachTime.seconds(fromTicks: event.timestamp)
 
     let shouldSwallow = MainActor.assumeIsolated {
-        engine.handle(type: type, button: button, keycode: keycode, isCommandDown: isCommandDown, timestamp: timestamp)
+        engine.handle(type: type, button: button, keycode: keycode, isRightCommandDown: isRightCommandDown, timestamp: timestamp)
     }
     return shouldSwallow ? nil : Unmanaged.passUnretained(event)
 }

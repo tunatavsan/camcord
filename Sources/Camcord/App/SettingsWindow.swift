@@ -22,6 +22,13 @@ final class SettingsWindowController {
     func show() {
         let window = window ?? makeWindow()
         self.window = window
+        // Rebuild the SwiftUI content on every show: @State initializes once per
+        // view identity, so a reused window would otherwise present stale state
+        // (e.g. a green "Erişilebilirlik izni verildi" row after the permission was
+        // revoked while the window was closed).
+        window.contentView = NSHostingView(
+            rootView: SettingsView(eventTapEngine: eventTapEngine, defaultsSuite: defaultsSuite)
+        )
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
     }

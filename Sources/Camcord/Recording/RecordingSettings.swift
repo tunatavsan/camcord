@@ -46,4 +46,21 @@ struct RecordingSettings: Codable, Equatable {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
     }
+
+    /// A guaranteed-fresh output URL. The filename has one-second resolution, so two
+    /// recordings started within the same second would collide — and a collision is
+    /// catastrophic: AVAssetWriter refuses existing files, and the HEVC→H.264
+    /// fallback's cleanup would delete the PREVIOUS, finished recording. Uniquifying
+    /// here makes every downstream `removeItem(at: outputURL)` provably safe.
+    static func uniqueOutputURL(in directory: URL, date: Date, fileManager: FileManager = .default) -> URL {
+        let base = filename(date: date)
+        var candidate = directory.appendingPathComponent(base)
+        var counter = 2
+        while fileManager.fileExists(atPath: candidate.path), counter < 100 {
+            let stem = (base as NSString).deletingPathExtension
+            candidate = directory.appendingPathComponent("\(stem) (\(counter)).mov")
+            counter += 1
+        }
+        return candidate
+    }
 }

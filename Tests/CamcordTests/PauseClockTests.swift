@@ -105,31 +105,59 @@ struct PauseClockTests {
 
     @Test(
         """
-        documents the chosen semantics: audio that arrives after resume() but before the next \
-        video buffer is retimed with the OLD (pre-this-pause) offset, not dropped and not \
-        re-anchored early -- only a video buffer can establish a new offset. In practice this \
-        window is a handful of milliseconds (audio buffers are far more frequent than one video \
-        frame), so the brief accepts this as a documented tradeoff rather than adding a second \
-        state machine to hold audio back until the next video frame.
+        audio that arrives after resume() but before the re-anchoring video buffer is DROPPED. \
+        Retiming it with the stale pre-pause offset would append a PTS a full pause-length in \
+        the future, and the next (re-anchored) audio buffer would then move BACKWARD on the \
+        same writer input -- audio inputs require monotonically increasing PTS, so that one \
+        stray buffer could fail the entire AVAssetWriter. Dropping bounds the loss to <1 frame.
         """
     )
-    func audioBeforeVideoAfterResumeUsesOldOffset() {
+    func audioBeforeVideoAfterResumeIsDropped() {
         var clock = PauseClock(frameDuration: Self.frameDuration)
         _ = clock.shouldAppend(pts: CMTime(value: 0, timescale: 60), isVideo: true)
 
         clock.pause()
         clock.resume()
 
-        // Audio sneaks in before the resume-anchoring video buffer -- offset is still the old
-        // (here: zero, no prior pause cycle) one.
+        // Audio sneaks in before the resume-anchoring video buffer: dropped.
         let earlyAudioPTS = CMTime(value: 250, timescale: 60)
-        #expect(clock.shouldAppend(pts: earlyAudioPTS, isVideo: false) == earlyAudioPTS)
+        #expect(clock.shouldAppend(pts: earlyAudioPTS, isVideo: false) == nil)
 
         // The next video buffer re-anchors and establishes the real offset going forward.
         let resumeVideoPTS = CMTime(value: 300, timescale: 60)
         #expect(clock.shouldAppend(pts: resumeVideoPTS, isVideo: true) == CMTime(value: 1, timescale: 60))
 
+        // Post-anchor audio is retimed with the fresh offset -- monotonic with the
+        // video timeline, never behind a previously appended audio PTS.
         let laterAudioPTS = CMTime(value: 301, timescale: 60)
         #expect(clock.shouldAppend(pts: laterAudioPTS, isVideo: false) == CMTime(value: 2, timescale: 60))
+    }
+
+    @Test("retiming stays consistent across realistic mixed timescales (host-time video, 48kHz audio)")
+    func mixedTimescaleRetiming() {
+        // Video PTS on a nanosecond-style host clock, audio on a 48kHz clock,
+        // frameDuration 1/60 -- exactly what SCStream actually delivers.
+        var clock = PauseClock(frameDuration: CMTime(value: 1, timescale: 60))
+
+        let v0 = CMTime(value: 1_000_000_000, timescale: 1_000_000_000)  // t = 1.0s
+        #expect(clock.shouldAppend(pts: v0, isVideo: true) == v0)
+
+        clock.pause()
+        clock.resume()
+
+        // Re-anchor 5s later: retimed video must land exactly 1/60 after v0.
+        let v1 = CMTime(value: 6_000_000_000, timescale: 1_000_000_000)  // t = 6.0s
+        let retimedV1 = clock.shouldAppend(pts: v1, isVideo: true)
+        let expectedV1 = CMTimeAdd(v0, CMTime(value: 1, timescale: 60))
+        #expect(retimedV1 != nil && CMTimeCompare(retimedV1!, expectedV1) == 0)
+
+        // 48kHz audio right after: shifted by the same ~4.983s offset, staying just
+        // ahead of the retimed video -- and monotonic.
+        let a1 = CMTime(value: 48_000 * 6 + 480, timescale: 48_000)  // t = 6.01s
+        let retimedA1 = clock.shouldAppend(pts: a1, isVideo: false)
+        #expect(retimedA1 != nil)
+        #expect(CMTimeCompare(retimedA1!, retimedV1!) > 0)
+        let expectedA1 = CMTimeSubtract(a1, CMTimeSubtract(v1, expectedV1))
+        #expect(CMTimeCompare(retimedA1!, expectedA1) == 0)
     }
 }

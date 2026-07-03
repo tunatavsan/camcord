@@ -60,12 +60,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private var isTerminating = false
+
     /// Don't tear the process down mid-recording: stop (and finalize the file) first,
     /// then terminate. Screenshots are one-shot and need no such guard.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Re-entrancy: stop() flips uiState to .idle before the finalize completes,
+        // so a second Cmd-Q mid-finalize would otherwise see .idle, terminateNow,
+        // and kill the process before the moov atom is written.
+        if isTerminating {
+            return .terminateLater
+        }
         guard let recordingController, recordingController.uiState != .idle else {
             return .terminateNow
         }
+        isTerminating = true
         Task {
             await recordingController.stopForTermination()
             sender.reply(toApplicationShouldTerminate: true)

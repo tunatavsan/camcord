@@ -29,6 +29,10 @@ actor ShareableContentCache {
     private var cached: SCShareableContent?
     private var cachedAt: ContinuousClock.Instant?
     private var invalidated = true
+    /// Coalesces concurrent fetches: the actor is reentrant across the fetch await,
+    /// and each un-coalesced SCShareableContent query is a potential multi-second
+    /// stall — overlapping callers should share one in-flight query.
+    private var inFlightFetch: Task<SCShareableContent, Error>?
 
     /// Returns the cached content if it is fresh (and not invalidated), otherwise
     /// performs a new timeout+retry-guarded fetch and caches the result.
@@ -38,7 +42,15 @@ actor ShareableContentCache {
         {
             return cached
         }
-        let fresh = try await Self.fetchWithRetry(logger: logger)
+        if let inFlightFetch {
+            return try await inFlightFetch.value
+        }
+        let fetch = Task { [logger] in
+            try await Self.fetchWithRetry(logger: logger)
+        }
+        inFlightFetch = fetch
+        defer { inFlightFetch = nil }
+        let fresh = try await fetch.value
         cached = fresh
         cachedAt = ContinuousClock.now
         invalidated = false
@@ -77,20 +89,11 @@ actor ShareableContentCache {
         }
     }
 
+    /// Hard wall-clock bound: a hung SCK query is abandoned, not awaited (see
+    /// `withHardTimeout` — task-group cancellation can't bound non-cooperative calls).
     private static func fetchWithTimeout() async throws -> SCShareableContent {
-        try await withThrowingTaskGroup(of: SCShareableContent.self) { group in
-            group.addTask {
-                try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            }
-            group.addTask {
-                try await Task.sleep(for: fetchTimeout)
-                throw CaptureError.timeout
-            }
-            guard let result = try await group.next() else {
-                throw CaptureError.timeout
-            }
-            group.cancelAll()
-            return result
+        try await withHardTimeout(fetchTimeout, onTimeout: CaptureError.timeout) {
+            try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         }
     }
 }
@@ -100,36 +103,42 @@ actor ShareableContentCache {
 @MainActor
 final class ShareableContentCacheInvalidator {
     private let cache: ShareableContentCache
-    // Only ever mutated in `init` and read in `deinit`, which never run concurrently
-    // with each other for a given instance -- safe to hand to the nonisolated deinit.
-    private nonisolated(unsafe) var observers: [NSObjectProtocol] = []
+    // Block-based observer tokens must be removed from the SAME center that created
+    // them, so the two centers' tokens are tracked separately. Only ever mutated in
+    // `init` and read in `deinit`, which never run concurrently for a given
+    // instance -- safe to hand to the nonisolated deinit.
+    private nonisolated(unsafe) var defaultCenterObservers: [NSObjectProtocol] = []
+    private nonisolated(unsafe) var workspaceCenterObservers: [NSObjectProtocol] = []
 
     init(cache: ShareableContentCache) {
         self.cache = cache
         let center = NotificationCenter.default
         let workspaceCenter = NSWorkspace.shared.notificationCenter
+        let invalidate: @Sendable (Notification) -> Void = { [cache] _ in
+            Task { await cache.invalidate() }
+        }
 
-        observers.append(
-            center.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [cache] _ in
-                Task { await cache.invalidate() }
-            }
+        defaultCenterObservers.append(
+            center.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main, using: invalidate)
         )
-        observers.append(
-            workspaceCenter.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [cache] _ in
-                Task { await cache.invalidate() }
-            }
+        workspaceCenterObservers.append(
+            workspaceCenter.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main, using: invalidate)
         )
-        observers.append(
-            workspaceCenter.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { [cache] _ in
-                Task { await cache.invalidate() }
-            }
+        workspaceCenterObservers.append(
+            workspaceCenter.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main, using: invalidate)
+        )
+        // A Space switch changes the on-screen window list too.
+        workspaceCenterObservers.append(
+            workspaceCenter.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main, using: invalidate)
         )
     }
 
     deinit {
-        let center = NotificationCenter.default
-        for observer in observers {
-            center.removeObserver(observer)
+        for observer in defaultCenterObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        for observer in workspaceCenterObservers {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
     }
 }

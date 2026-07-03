@@ -35,6 +35,10 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     private var dragCurrent: CGPoint?
     private var isDragging = false
     private var highlightedWindow: SCWindow?
+    private var screenChangeObserver: NSObjectProtocol?
+    /// Balances NSCursor push/pop: the zero-screens early-out finishes without ever
+    /// pushing, and an unmatched pop would corrupt the cursor stack.
+    private var cursorPushed = false
 
     private static let clickMovementThreshold: CGFloat = 4
 
@@ -58,10 +62,33 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     // MARK: - Presentation
 
     private func presentPanels() {
+        // No screens (all displays asleep/detached): without this guard no panel is
+        // ever created, so no event could resume the continuation -- selectRegion()
+        // would hang forever with isPresenting stuck.
+        guard !NSScreen.screens.isEmpty else {
+            finish(nil)
+            return
+        }
+
         NSCursor.crosshair.push()
+        cursorPushed = true
         // Kick off a refresh so window-snap has something reasonably fresh; mouseMoved
         // itself only ever reads the last-known snapshot, never blocks on a fetch.
         Task { await shareableContentCache.refreshInBackground() }
+
+        // The panel/view arrays are built from this instant's NSScreen.screens and
+        // are index-paired with it in updateRendering -- if the display set changes
+        // mid-session that pairing silently goes stale (selection drawn on the wrong
+        // display). Cancel instead; the next invocation rebuilds against fresh screens.
+        screenChangeObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.finish(nil)
+            }
+        }
 
         let mouseLocation = NSEvent.mouseLocation
         var keyPanel: SelectionPanel?
@@ -102,7 +129,14 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     }
 
     private func teardown() {
-        NSCursor.pop()
+        if let screenChangeObserver {
+            NotificationCenter.default.removeObserver(screenChangeObserver)
+            self.screenChangeObserver = nil
+        }
+        if cursorPushed {
+            NSCursor.pop()
+            cursorPushed = false
+        }
         for panel in panels {
             panel.orderOut(nil)
         }
@@ -115,6 +149,9 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     }
 
     private func finish(_ result: SelectionResult?) {
+        // Idempotent: a second finish (e.g. a stray cancel after teardown) must not
+        // pop the cursor stack again or resume a dead continuation.
+        guard isPresenting else { return }
         teardown()
         isPresenting = false
         let continuation = self.continuation

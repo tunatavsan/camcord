@@ -22,7 +22,16 @@ codesign -dvv dist/Camcord.app 2>&1 | grep '^Authority='
 # --install: copy the freshly built+signed bundle into /Applications and relaunch
 # from there (the stable location the login item should point at).
 if [[ "${1:-}" == "--install" ]]; then
-    pkill -x Camcord 2>/dev/null || true
+    if pgrep -xq Camcord; then
+        # Quit via Apple event so applicationShouldTerminate runs — a raw pkill
+        # (SIGTERM) would skip it and corrupt an in-progress recording's file.
+        osascript -e 'tell application "Camcord" to quit' >/dev/null 2>&1 || true
+        for _ in $(seq 1 40); do
+            pgrep -xq Camcord || break
+            sleep 0.25
+        done
+        pkill -x Camcord 2>/dev/null || true
+    fi
     ditto dist/Camcord.app /Applications/Camcord.app
     open /Applications/Camcord.app
     echo "Installed and launched /Applications/Camcord.app"

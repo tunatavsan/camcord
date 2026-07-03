@@ -86,8 +86,18 @@ final class RecordingController {
         await stop()
     }
 
+    /// Guards the pause toggle against double-fire: while the status menu is open,
+    /// its key-equivalent AND the Carbon hotkey can both deliver the same keystroke,
+    /// which would pause-then-resume in one press.
+    private var lastPauseToggle: ContinuousClock.Instant?
+
     /// Soft pause/resume. Beeps when idle.
     func pauseResume() {
+        let now = ContinuousClock.now
+        if let lastPauseToggle, now - lastPauseToggle < .milliseconds(200) {
+            return
+        }
+        lastPauseToggle = now
         switch uiState {
         case .idle:
             NSSound.beep()
@@ -158,7 +168,7 @@ final class RecordingController {
 
         do {
             let directory = try RecordingSettings.outputDirectory()
-            let url = directory.appendingPathComponent(RecordingSettings.filename(date: Date()))
+            let url = RecordingSettings.uniqueOutputURL(in: directory, date: Date())
             try await engine.start(target: target, settings: settings, outputURL: url)
 
             accumulatedElapsed = 0

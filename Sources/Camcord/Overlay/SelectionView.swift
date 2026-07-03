@@ -111,9 +111,14 @@ final class SelectionView: NSView {
         let horizontalPadding: CGFloat = 6
         let verticalPadding: CGFloat = 3
 
-        var badgeOrigin = CGPoint(x: rect.maxX - textSize.width - horizontalPadding * 2, y: rect.maxY + 6)
-        badgeOrigin.x = max(bounds.minX, min(badgeOrigin.x, bounds.maxX - textSize.width - horizontalPadding * 2))
         let badgeSize = CGSize(width: textSize.width + horizontalPadding * 2, height: textSize.height + verticalPadding * 2)
+        var badgeOrigin = CGPoint(x: rect.maxX - badgeSize.width, y: rect.maxY + 6)
+        badgeOrigin.x = max(bounds.minX, min(badgeOrigin.x, bounds.maxX - badgeSize.width))
+        // Clamp Y too: a selection reaching the top of the screen would otherwise
+        // push the badge offscreen. Fall below the selection edge when clamped.
+        if badgeOrigin.y + badgeSize.height > bounds.maxY {
+            badgeOrigin.y = rect.maxY - badgeSize.height - 6
+        }
         let badgeRect = CGRect(origin: badgeOrigin, size: badgeSize)
 
         let path = NSBezierPath(roundedRect: badgeRect, xRadius: 4, yRadius: 4)

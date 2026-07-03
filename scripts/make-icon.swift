@@ -2,7 +2,8 @@
 // Generates Resources/AppIcon.icns. Run once (or whenever the icon design changes):
 //   swift scripts/make-icon.swift
 // Design: macOS-style rounded square, deep indigo->slate gradient, white
-// camera.viewfinder SF Symbol. Deterministic output, no external assets.
+// camera.viewfinder SF Symbol. No external assets; output is stable on a given
+// macOS version (the SF Symbol glyph itself can change shape across OS releases).
 import AppKit
 
 let repoRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
