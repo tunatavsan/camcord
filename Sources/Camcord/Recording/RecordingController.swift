@@ -78,6 +78,14 @@ final class RecordingController {
         }
     }
 
+    /// Terminate-path stop: unlike `toggleRecording()`, this can never START a
+    /// recording, so a state flip between the caller's check and this call can't
+    /// pop the selection overlay while the app is trying to quit.
+    func stopForTermination() async {
+        guard uiState != .idle else { return }
+        await stop()
+    }
+
     /// Soft pause/resume. Beeps when idle.
     func pauseResume() {
         switch uiState {
@@ -258,15 +266,5 @@ final class RecordingController {
 
     private func scale(for display: SCDisplay) -> CGFloat {
         NSScreen.screens.first { $0.cgDirectDisplayID == display.displayID }?.backingScaleFactor ?? 2
-    }
-}
-
-extension NSScreen {
-    /// The `CGDirectDisplayID` AppKit hides in `deviceDescription`.
-    var cgDirectDisplayID: CGDirectDisplayID? {
-        guard let value = deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
-            return nil
-        }
-        return CGDirectDisplayID(value.uint32Value)
     }
 }

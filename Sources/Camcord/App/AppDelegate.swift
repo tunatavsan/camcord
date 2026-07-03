@@ -67,7 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return .terminateNow
         }
         Task {
-            await recordingController.toggleRecording()  // stops + finalizes
+            await recordingController.stopForTermination()
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater

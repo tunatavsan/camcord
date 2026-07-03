@@ -281,6 +281,22 @@ final class EventTapEngine {
 /// via `assumeIsolated`; only primitive `Sendable` values cross that boundary. The hop
 /// is safe because the tap's run loop source is added to the main run loop, so this
 /// callback only ever fires on the main thread.
+/// `CGEvent.timestamp` is documented as "nanoseconds since startup" but on Apple
+/// Silicon it is raw mach-absolute-time TICKS with a 125/3 timebase (~41.67 ns/tick)
+/// -- dividing by 1e9 directly would stretch the 350 ms double-tap window to ~14.6 s.
+/// Convert through `mach_timebase_info` (1/1 on Intel, so this is correct everywhere).
+private enum MachTime {
+    static let secondsPerTick: Double = {
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        return Double(info.numer) / Double(info.denom) / 1_000_000_000
+    }()
+
+    static func seconds(fromTicks ticks: UInt64) -> TimeInterval {
+        Double(ticks) * secondsPerTick
+    }
+}
+
 private func eventTapCallback(
     proxy: CGEventTapProxy,
     type: CGEventType,
@@ -300,7 +316,7 @@ private func eventTapCallback(
     let button = event.getIntegerValueField(.mouseEventButtonNumber)
     let keycode = event.getIntegerValueField(.keyboardEventKeycode)
     let isCommandDown = event.flags.contains(.maskCommand)
-    let timestamp = TimeInterval(event.timestamp) / 1_000_000_000
+    let timestamp = MachTime.seconds(fromTicks: event.timestamp)
 
     let shouldSwallow = MainActor.assumeIsolated {
         engine.handle(type: type, button: button, keycode: keycode, isCommandDown: isCommandDown, timestamp: timestamp)

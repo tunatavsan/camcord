@@ -93,7 +93,7 @@ final class CaptureCoordinator {
             fail("captureFullScreen: no screen under the pointer")
             return
         }
-        guard let displayID = screenNumber(of: screen) else {
+        guard let displayID = screen.cgDirectDisplayID else {
             fail("captureFullScreen: could not resolve CGDirectDisplayID for screen")
             return
         }
@@ -151,13 +151,6 @@ final class CaptureCoordinator {
         // If the failure was really a lost Screen Recording grant (macOS 15+ periodic
         // re-approval), take the user to the fix once instead of beeping forever.
         PermissionRecovery.noteCaptureFailure()
-    }
-
-    private func screenNumber(of screen: NSScreen) -> CGDirectDisplayID? {
-        guard let value = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
-            return nil
-        }
-        return CGDirectDisplayID(value.uint32Value)
     }
 
     // MARK: - Last-region persistence
