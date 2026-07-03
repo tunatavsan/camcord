@@ -6,15 +6,20 @@ import os
 @MainActor
 final class StatusItemController: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
+    private let coordinator: CaptureCoordinator
 
     private let captureRegionItem = NSMenuItem(title: "Capture Region", action: nil, keyEquivalent: "")
+    private let captureActiveWindowItem = NSMenuItem(title: "Capture Active Window", action: nil, keyEquivalent: "")
+    private let captureFullScreenItem = NSMenuItem(title: "Capture Full Screen", action: nil, keyEquivalent: "")
+    private let repeatLastRegionItem = NSMenuItem(title: "Repeat Last Region", action: nil, keyEquivalent: "")
     private let screenRecordingStatusItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let requestScreenRecordingItem = NSMenuItem(title: "Request Screen Recording…", action: nil, keyEquivalent: "")
     private let launchAtLoginItem = NSMenuItem(title: "Launch at Login", action: nil, keyEquivalent: "")
 
     private let logger = Logger(subsystem: "dev.tavsan.camcord", category: "app")
 
-    override init() {
+    init(coordinator: CaptureCoordinator) {
+        self.coordinator = coordinator
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
 
@@ -27,10 +32,21 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let menu = NSMenu()
         menu.delegate = self
 
-        captureRegionItem.isEnabled = false
-        captureRegionItem.toolTip = "M1'de geliyor"
-        captureRegionItem.subtitle = "M1'de geliyor"
+        captureRegionItem.target = self
+        captureRegionItem.action = #selector(captureRegion)
         menu.addItem(captureRegionItem)
+
+        captureActiveWindowItem.target = self
+        captureActiveWindowItem.action = #selector(captureActiveWindow)
+        menu.addItem(captureActiveWindowItem)
+
+        captureFullScreenItem.target = self
+        captureFullScreenItem.action = #selector(captureFullScreen)
+        menu.addItem(captureFullScreenItem)
+
+        repeatLastRegionItem.target = self
+        repeatLastRegionItem.action = #selector(repeatLastRegion)
+        menu.addItem(repeatLastRegionItem)
 
         menu.addItem(.separator())
 
@@ -75,6 +91,36 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private func refreshLaunchAtLoginState() {
         launchAtLoginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+    }
+
+    // MARK: - Capture actions
+
+    @objc private func captureRegion() {
+        Task {
+            // The menu is still open/closing when this fires; give it time to close
+            // before showing the overlay panels, or the menu's own chrome briefly
+            // overlaps them. M2's global hotkey path won't need this (no menu involved).
+            try? await Task.sleep(for: .milliseconds(200))
+            await coordinator.captureRegionInteractive()
+        }
+    }
+
+    @objc private func captureActiveWindow() {
+        Task {
+            await coordinator.captureActiveWindow()
+        }
+    }
+
+    @objc private func captureFullScreen() {
+        Task {
+            await coordinator.captureFullScreen()
+        }
+    }
+
+    @objc private func repeatLastRegion() {
+        Task {
+            await coordinator.captureLastRegion()
+        }
     }
 
     // MARK: - Actions
