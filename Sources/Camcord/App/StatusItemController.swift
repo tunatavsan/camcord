@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import KeyboardShortcuts
 import ServiceManagement
 import os
 
@@ -7,6 +8,8 @@ import os
 final class StatusItemController: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
     private let coordinator: CaptureCoordinator
+    private let eventTapEngine: EventTapEngine
+    private let settingsWindowController: SettingsWindowController
 
     private let captureRegionItem = NSMenuItem(title: "Capture Region", action: nil, keyEquivalent: "")
     private let captureActiveWindowItem = NSMenuItem(title: "Capture Active Window", action: nil, keyEquivalent: "")
@@ -15,11 +18,15 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let screenRecordingStatusItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let requestScreenRecordingItem = NSMenuItem(title: "Request Screen Recording…", action: nil, keyEquivalent: "")
     private let launchAtLoginItem = NSMenuItem(title: "Launch at Login", action: nil, keyEquivalent: "")
+    private let tapStatusItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let settingsItem = NSMenuItem(title: "Settings…", action: nil, keyEquivalent: ",")
 
     private let logger = Logger(subsystem: "dev.tavsan.camcord", category: "app")
 
-    init(coordinator: CaptureCoordinator) {
+    init(coordinator: CaptureCoordinator, eventTapEngine: EventTapEngine, settingsWindowController: SettingsWindowController) {
         self.coordinator = coordinator
+        self.eventTapEngine = eventTapEngine
+        self.settingsWindowController = settingsWindowController
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
 
@@ -34,18 +41,22 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
         captureRegionItem.target = self
         captureRegionItem.action = #selector(captureRegion)
+        captureRegionItem.setShortcut(for: .captureRegion)
         menu.addItem(captureRegionItem)
 
         captureActiveWindowItem.target = self
         captureActiveWindowItem.action = #selector(captureActiveWindow)
+        captureActiveWindowItem.setShortcut(for: .captureActiveWindow)
         menu.addItem(captureActiveWindowItem)
 
         captureFullScreenItem.target = self
         captureFullScreenItem.action = #selector(captureFullScreen)
+        captureFullScreenItem.setShortcut(for: .captureFullScreen)
         menu.addItem(captureFullScreenItem)
 
         repeatLastRegionItem.target = self
         repeatLastRegionItem.action = #selector(repeatLastRegion)
+        repeatLastRegionItem.setShortcut(for: .repeatLastRegion)
         menu.addItem(repeatLastRegionItem)
 
         menu.addItem(.separator())
@@ -61,7 +72,17 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         launchAtLoginItem.action = #selector(toggleLaunchAtLogin)
         menu.addItem(launchAtLoginItem)
 
+        tapStatusItem.target = self
+        tapStatusItem.action = #selector(tapStatusClicked)
+        tapStatusItem.isHidden = true
+        menu.addItem(tapStatusItem)
+
         menu.addItem(.separator())
+
+        settingsItem.target = self
+        settingsItem.action = #selector(openSettings)
+        settingsItem.keyEquivalentModifierMask = .command
+        menu.addItem(settingsItem)
 
         let quitItem = NSMenuItem(title: "Quit Camcord", action: #selector(quit), keyEquivalent: "q")
         quitItem.keyEquivalentModifierMask = .command
@@ -72,6 +93,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
         refreshScreenRecordingState()
         refreshLaunchAtLoginState()
+        refreshTapStatus()
     }
 
     // MARK: - NSMenuDelegate
@@ -79,6 +101,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         refreshScreenRecordingState()
         refreshLaunchAtLoginState()
+        refreshTapStatus()
     }
 
     // MARK: - Dynamic state
@@ -91,6 +114,25 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private func refreshLaunchAtLoginState() {
         launchAtLoginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+    }
+
+    /// Tier-2 (mouse button / double-tap) status line: hidden unless at least one
+    /// Tier-2 binding is enabled but it isn't actually working yet (missing
+    /// Accessibility permission, or the tap failed to come up).
+    private func refreshTapStatus() {
+        guard TapBindings.load(from: .standard).anyEnabled else {
+            tapStatusItem.isHidden = true
+            return
+        }
+        if !AccessibilityPermission.isTrusted() {
+            tapStatusItem.title = "Accessibility izni gerekli — Aç"
+            tapStatusItem.isHidden = false
+        } else if !eventTapEngine.isTapHealthy {
+            tapStatusItem.title = "Fare/hareket bağlantısı devre dışı"
+            tapStatusItem.isHidden = false
+        } else {
+            tapStatusItem.isHidden = true
+        }
     }
 
     // MARK: - Capture actions
@@ -155,5 +197,14 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     @objc private func quit() {
         NSApp.terminate(nil)
+    }
+
+    @objc private func tapStatusClicked() {
+        guard !AccessibilityPermission.isTrusted() else { return }
+        AccessibilityPermission.requestAccess()
+    }
+
+    @objc private func openSettings() {
+        settingsWindowController.show()
     }
 }
