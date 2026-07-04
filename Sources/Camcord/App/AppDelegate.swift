@@ -112,8 +112,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         actions.captureScreen = {
             afterClosingPanel { await coordinator.captureFullScreen() }
         }
-        actions.captureText = {
-            afterClosingPanel { await coordinator.captureTextRegionInteractive() }
+        actions.captureScroll = {
+            afterClosingPanel { await coordinator.captureScrollingInteractive() }
         }
         actions.toggleRecording = { [weak recordingController] in
             let isIdle = recordingController?.uiState == .idle

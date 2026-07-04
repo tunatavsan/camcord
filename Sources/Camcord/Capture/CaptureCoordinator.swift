@@ -103,6 +103,41 @@ final class CaptureCoordinator {
         }
     }
 
+    // MARK: - Scrolling capture (full scrollable area → one tall image)
+
+    /// Pick a scroll area (region or window), then scroll + stitch it into one tall PNG.
+    func captureScrollingInteractive() async {
+        guard beginExclusiveCapture() else { return }
+        defer { endExclusiveCapture() }
+        guard preflightScreenCapture("scrollingCapture") else { return }
+        guard let (result, _) = await overlay.selectRegion() else { return }
+        try? await Task.sleep(for: Self.postHideDelay)
+
+        let region: CGRect
+        switch result {
+        case .region(let r): region = r
+        case .window(let window): region = window.frame
+        }
+        guard region.width >= 1, region.height >= 1 else {
+            fail("Scroll capture: empty selection")
+            return
+        }
+        do {
+            let image = try await ScrollingCaptureService.capture(region: region)
+            // The stitched image is taller than the viewport; derive its point size
+            // from the captured pixel scale so DPI-aware pastes stay correct.
+            let scale = region.width > 0 ? CGFloat(image.width) / region.width : 2
+            let pointSize = CGSize(width: region.width, height: CGFloat(image.height) / max(scale, 0.01))
+            guard await ClipboardWriter.copyPNG(image, pointSize: pointSize, saveTo: screenshotSaveURL()) else {
+                fail("Scroll capture: clipboard write failed")
+                return
+            }
+            succeeded(.fullScreenShot)
+        } catch {
+            fail("Scroll capture failed: \(error)")
+        }
+    }
+
     // MARK: - Hold-to-capture region (side button held; release = shoot)
 
     /// Begins a hold session at the button-down location. The EventTapEngine drives

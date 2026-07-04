@@ -26,7 +26,8 @@ struct PanelActions {
     var captureRegion: () -> Void = {}
     var captureWindow: () -> Void = {}
     var captureScreen: () -> Void = {}
-    var captureText: () -> Void = {}
+    /// Scrolling capture — the whole scrollable area stitched into one tall image.
+    var captureScroll: () -> Void = {}
     /// Start an interactive recording when idle; stop it otherwise.
     var toggleRecording: () -> Void = {}
     var recordFullScreen: () -> Void = {}
@@ -116,7 +117,7 @@ struct CapturePanelView: View {
             CaptureTile(symbol: "rectangle.dashed", title: "Bölge", action: actions.captureRegion)
             CaptureTile(symbol: "macwindow", title: "Pencere", action: actions.captureWindow)
             CaptureTile(symbol: "display", title: "Ekran", action: actions.captureScreen)
-            CaptureTile(symbol: "text.viewfinder", title: "Metin", action: actions.captureText)
+            CaptureTile(symbol: "doc.viewfinder", title: "Kaydır", action: actions.captureScroll)
         }
     }
 
