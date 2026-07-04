@@ -46,26 +46,34 @@ final class CaptureCoordinator {
     /// Presents the same selection overlay the screenshot flow uses and returns the
     /// user's pick. The overlay tears its panels down before returning on every path.
     func selectCaptureTarget() async -> SelectionResult? {
-        await overlay.selectRegion()
+        // Recording always records the picked target — the screenshot/OCR mode is
+        // irrelevant here.
+        await overlay.selectRegion()?.0
     }
 
     // MARK: - Region screenshot
 
-    /// Shows the region/window selection overlay, then captures whichever the user picked.
+    /// Shows the region/window selection overlay, then captures whichever the user
+    /// picked. Left button (mode `.screenshot`) copies a PNG; right button (`.text`)
+    /// OCRs the selection to a string.
     func captureRegionInteractive() async {
         guard beginExclusiveCapture() else { return }
         defer { endExclusiveCapture() }
         guard preflightScreenCapture("captureRegionInteractive") else { return }
-        guard let result = await overlay.selectRegion() else { return }
+        guard let (result, mode) = await overlay.selectRegion() else { return }
         // The overlay has already ordered its panels out on this exit path (every
         // exit path does); give the compositor a couple of refresh cycles before we shoot.
         try? await Task.sleep(for: Self.postHideDelay)
 
-        switch result {
-        case .region(let cgRect):
+        switch (result, mode) {
+        case (.region(let cgRect), .screenshot):
             await performRegionScreenshot(cgRect)
-        case .window(let window):
+        case (.region(let cgRect), .text):
+            await performRegionText(cgRect)
+        case (.window(let window), .screenshot):
             await performWindowCapture(window)
+        case (.window(let window), .text):
+            await performWindowText(window)
         }
     }
 
@@ -77,7 +85,8 @@ final class CaptureCoordinator {
         guard beginExclusiveCapture() else { return }
         defer { endExclusiveCapture() }
         guard preflightScreenCapture("captureTextRegion") else { return }
-        guard let result = await overlay.selectRegion() else { return }
+        // This entry point always OCRs, regardless of which button ended the selection.
+        guard let (result, _) = await overlay.selectRegion() else { return }
         try? await Task.sleep(for: Self.postHideDelay)
 
         do {
@@ -247,6 +256,15 @@ final class CaptureCoordinator {
             succeeded(.windowShot)
         } catch {
             fail("Window capture failed: \(error)")
+        }
+    }
+
+    private func performWindowText(_ window: SCWindow) async {
+        do {
+            let image = try await ScreenshotService.captureWindow(window)
+            await ocrToClipboard(image)
+        } catch {
+            fail("Window text capture failed: \(error)")
         }
     }
 

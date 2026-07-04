@@ -27,7 +27,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
 
     private var panels: [SelectionPanel] = []
     private var views: [SelectionView] = []
-    private var continuation: CheckedContinuation<SelectionResult?, Never>?
+    private var continuation: CheckedContinuation<(SelectionResult, HoldCaptureMode)?, Never>?
     /// Non-nil while a HOLD session (mouse side button held; events driven by the
     /// CGEventTap, not by the panels) is active. Every exit path funnels through
     /// `finish(_:)`, which fires this exactly once.
@@ -38,6 +38,8 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     private var dragAnchor: CGPoint?
     private var dragCurrent: CGPoint?
     private var isDragging = false
+    /// The button that started the current interactive selection: right = OCR mode.
+    private var activeIsRight = false
     private var highlightedWindow: SCWindow?
     /// Session token for the async window-snap lookups: they hop through the cache
     /// actor, so one can resolve after teardown (or after a newer lookup) and would
@@ -59,7 +61,9 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     /// If a selection session is already active (e.g. a second hotkey/menu trigger fires
     /// while the overlay is up), this immediately returns nil WITHOUT disturbing the
     /// in-flight session -- it does not overwrite `continuation` or touch its panels.
-    func selectRegion() async -> SelectionResult? {
+    /// Returns the picked region/window plus the mode (left button = screenshot,
+    /// right button = OCR text). Callers that always mean one mode ignore it.
+    func selectRegion() async -> (SelectionResult, HoldCaptureMode)? {
         guard !isPresenting else { return nil }
         isPresenting = true
         return await withCheckedContinuation { continuation in
@@ -252,7 +256,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         highlightedWindow = nil
     }
 
-    private func finish(_ result: SelectionResult?) {
+    private func finish(_ result: SelectionResult?, mode: HoldCaptureMode = .screenshot) {
         // Idempotent: a second finish (e.g. a stray cancel after teardown) must not
         // pop the cursor stack again or resume a dead continuation.
         guard isPresenting else { return }
@@ -262,23 +266,24 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         self.continuation = nil
         let holdHandler = holdEndHandler
         holdEndHandler = nil
-        continuation?.resume(returning: result)
+        continuation?.resume(returning: result.map { ($0, mode) })
         holdHandler?(result)
     }
 
     // MARK: - SelectionViewDelegate
 
-    func selectionViewMouseDown(at globalPoint: CGPoint) {
+    func selectionViewMouseDown(at globalPoint: CGPoint, isRight: Bool) {
         // Don't switch to selection-drag rendering yet -- stay in window-snap
         // highlight mode until mouseDragged confirms an actual drag past the
         // click-movement threshold. Avoids the highlight flickering off on a
         // plain click before mouseUp gets a chance to read `highlightedWindow`.
+        activeIsRight = isRight
         dragAnchor = globalPoint
         dragCurrent = globalPoint
         isDragging = false
     }
 
-    func selectionViewMouseDragged(to globalPoint: CGPoint) {
+    func selectionViewMouseDragged(to globalPoint: CGPoint, isRight: Bool) {
         guard let anchor = dragAnchor else { return }
         dragCurrent = globalPoint
 
@@ -290,9 +295,10 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         updateRendering()
     }
 
-    func selectionViewMouseUp(at globalPoint: CGPoint) {
+    func selectionViewMouseUp(at globalPoint: CGPoint, isRight: Bool) {
         guard let anchor = dragAnchor else { return }
         let wasDragging = isDragging
+        let mode: HoldCaptureMode = activeIsRight ? .text : .screenshot
         dragAnchor = nil
         dragCurrent = nil
         isDragging = false
@@ -302,7 +308,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
             if let highlightedWindow {
                 // Tactile commit tick — a no-op on non-Force-Touch input devices.
                 NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
-                finish(.window(highlightedWindow))
+                finish(.window(highlightedWindow), mode: mode)
             } else {
                 finish(nil)
             }
@@ -319,7 +325,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
             return
         }
         NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
-        finish(.region(Geometry.appKitToCG(globalRect, primaryScreenHeight: primaryHeight)))
+        finish(.region(Geometry.appKitToCG(globalRect, primaryScreenHeight: primaryHeight)), mode: mode)
     }
 
     func selectionViewMouseMoved(to globalPoint: CGPoint) {

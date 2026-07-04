@@ -4,9 +4,10 @@ import AppKit
 /// controller owns all coordinate-space conversions and cross-screen drag state.
 @MainActor
 protocol SelectionViewDelegate: AnyObject {
-    func selectionViewMouseDown(at globalPoint: CGPoint)
-    func selectionViewMouseDragged(to globalPoint: CGPoint)
-    func selectionViewMouseUp(at globalPoint: CGPoint)
+    /// `isRight` = the right mouse button (OCR); left is the plain screenshot.
+    func selectionViewMouseDown(at globalPoint: CGPoint, isRight: Bool)
+    func selectionViewMouseDragged(to globalPoint: CGPoint, isRight: Bool)
+    func selectionViewMouseUp(at globalPoint: CGPoint, isRight: Bool)
     func selectionViewMouseMoved(to globalPoint: CGPoint)
     func selectionViewCancel()
 }
@@ -26,10 +27,16 @@ final class SelectionView: NSView {
         didSet { needsDisplay = true }
     }
     /// Local-coordinate rect of a window-snap highlight. Nil when not in snap mode
-    /// or the snapped window doesn't intersect this screen.
+    /// or the snapped window doesn't intersect this screen. Rendered by an animated
+    /// CAShapeLayer (rounded like a macOS window, morphs between windows), not draw().
     var highlightRect: CGRect? {
-        didSet { needsDisplay = true }
+        didSet { updateHighlightLayer(from: oldValue) }
     }
+
+    /// macOS windows' corner radius — the highlight matches it.
+    private static let windowCornerRadius: CGFloat = 11
+    private static let highlightDuration: CFTimeInterval = 0.22
+    private let highlightLayer = CAShapeLayer()
     /// Dimension badge (local anchor rect + "W x H" pixel text), shown only on the
     /// screen the cursor is currently over.
     var badge: (rect: CGRect, text: String)? {
@@ -40,6 +47,64 @@ final class SelectionView: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     private var trackingArea: NSTrackingArea?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        highlightLayer.frame = bounds
+        highlightLayer.fillColor = NSColor.systemBlue.withAlphaComponent(0.12).cgColor
+        highlightLayer.strokeColor = NSColor.systemBlue.cgColor
+        highlightLayer.lineWidth = 2
+        highlightLayer.opacity = 0
+        layer?.addSublayer(highlightLayer)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func layout() {
+        super.layout()
+        highlightLayer.frame = bounds
+    }
+
+    // MARK: - Window-snap highlight (rounded like a macOS window, morphs between windows)
+
+    private func updateHighlightLayer(from oldValue: CGRect?) {
+        highlightLayer.frame = bounds
+        guard let rect = highlightRect else {
+            animate(keyPath: "opacity", to: 0, duration: 0.16)
+            highlightLayer.opacity = 0
+            return
+        }
+        let r = Self.windowCornerRadius
+        let newPath = CGPath(roundedRect: rect, cornerWidth: r, cornerHeight: r, transform: nil)
+        if oldValue == nil {
+            // Fresh appearance: set the shape instantly, fade it in (nothing to morph).
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            highlightLayer.path = newPath
+            CATransaction.commit()
+            animate(keyPath: "opacity", to: 1, duration: 0.16)
+            highlightLayer.opacity = 1
+        } else {
+            // Moving between windows: morph the rounded rect from where it is now.
+            animate(keyPath: "path", to: newPath, duration: Self.highlightDuration, from: highlightLayer.presentation()?.path)
+            highlightLayer.path = newPath
+            if highlightLayer.opacity < 1 {
+                animate(keyPath: "opacity", to: 1, duration: 0.16)
+                highlightLayer.opacity = 1
+            }
+        }
+    }
+
+    private func animate(keyPath: String, to value: Any?, duration: CFTimeInterval, from: Any? = nil) {
+        let anim = CABasicAnimation(keyPath: keyPath)
+        anim.fromValue = from ?? highlightLayer.presentation()?.value(forKeyPath: keyPath) ?? highlightLayer.value(forKeyPath: keyPath)
+        anim.toValue = value
+        anim.duration = duration
+        anim.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        highlightLayer.add(anim, forKey: keyPath)
+    }
 
     /// `mouseMoved` events are only delivered to the KEY window's view by default, so
     /// without an explicit tracking area, window-snap hover would silently stop working
@@ -71,14 +136,8 @@ final class SelectionView: NSView {
             if let badge {
                 drawBadge(badge.text, near: badge.rect)
             }
-        } else if let highlightRect {
-            NSColor.systemBlue.withAlphaComponent(0.08).setFill()
-            highlightRect.fill()
-            let path = NSBezierPath(rect: highlightRect.insetBy(dx: 1, dy: 1))
-            path.lineWidth = 2
-            NSColor.systemBlue.setStroke()
-            path.stroke()
         }
+        // The window-snap highlight is drawn by `highlightLayer` (animated), not here.
     }
 
     private func drawDashedBorder(around rect: CGRect) {
@@ -130,15 +189,28 @@ final class SelectionView: NSView {
     // MARK: - Mouse / keyboard events -- forwarded verbatim, no conversion here.
 
     override func mouseDown(with event: NSEvent) {
-        delegate?.selectionViewMouseDown(at: NSEvent.mouseLocation)
+        delegate?.selectionViewMouseDown(at: NSEvent.mouseLocation, isRight: false)
     }
 
     override func mouseDragged(with event: NSEvent) {
-        delegate?.selectionViewMouseDragged(to: NSEvent.mouseLocation)
+        delegate?.selectionViewMouseDragged(to: NSEvent.mouseLocation, isRight: false)
     }
 
     override func mouseUp(with event: NSEvent) {
-        delegate?.selectionViewMouseUp(at: NSEvent.mouseLocation)
+        delegate?.selectionViewMouseUp(at: NSEvent.mouseLocation, isRight: false)
+    }
+
+    // Right button drives the same region/window selection but in OCR mode.
+    override func rightMouseDown(with event: NSEvent) {
+        delegate?.selectionViewMouseDown(at: NSEvent.mouseLocation, isRight: true)
+    }
+
+    override func rightMouseDragged(with event: NSEvent) {
+        delegate?.selectionViewMouseDragged(to: NSEvent.mouseLocation, isRight: true)
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        delegate?.selectionViewMouseUp(at: NSEvent.mouseLocation, isRight: true)
     }
 
     override func mouseMoved(with event: NSEvent) {
