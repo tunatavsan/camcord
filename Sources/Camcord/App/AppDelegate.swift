@@ -62,7 +62,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recordingController.onRecordingFinished = { [weak recordingStateModel] url in
             recordingStateModel?.isFinishing = false
             recordingStateModel?.finishedURL = url
-            UserDefaults.standard.set(url.path, forKey: RecordingStateModel.lastRecordingPathKey)
         }
 
         // Every failure beep gets a visual companion on the status glyph.

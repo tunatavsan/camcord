@@ -17,10 +17,6 @@ final class RecordingStateModel: ObservableObject {
     /// retained across shows, so `@State` persists and `onAppear` fires only once —
     /// this token re-reads persisted toggles per open.
     @Published var panelOpenToken = 0
-
-    /// UserDefaults key for the last finished recording's path (survives launches), so
-    /// the panel can always offer "reveal the last recording in Finder".
-    static let lastRecordingPathKey = "lastRecordingPath"
 }
 
 /// The panel's actions, injected by AppDelegate. Each closure owns its own
@@ -230,13 +226,27 @@ struct CapturePanelView: View {
         soundEnabled = FeedbackSound.isEnabled()
         let micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
         isMicrophoneDenied = micStatus == .denied || micStatus == .restricted
-        // Offer "reveal last recording" only when one exists on disk.
-        if let path = UserDefaults.standard.string(forKey: RecordingStateModel.lastRecordingPathKey),
-            FileManager.default.fileExists(atPath: path) {
-            lastRecordingURL = URL(fileURLWithPath: path)
-        } else {
-            lastRecordingURL = nil
-        }
+        // Offer "reveal last recording" whenever the recording folder has one — the
+        // newest .mov, so it works for recordings made before this feature existed too.
+        lastRecordingURL = Self.newestRecording()
+    }
+
+    /// The most recently modified `.mov` in the recording output folder, or nil.
+    private static func newestRecording() -> URL? {
+        let settings = RecordingSettings.load(from: .standard)
+        let dirPath = settings.outputDirectoryPath ?? RecordingSettings.defaultDirectoryPath()
+        let dir = URL(fileURLWithPath: dirPath, isDirectory: true)
+        let key: [URLResourceKey] = [.contentModificationDateKey]
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: key, options: [.skipsHiddenFiles]
+        ) else { return nil }
+        return urls
+            .filter { $0.pathExtension.lowercased() == "mov" }
+            .max { a, b in
+                let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                return da < db
+            }
     }
 
     private func saveRecordingSettings() {

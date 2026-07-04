@@ -317,11 +317,29 @@ final class EventTapEngine {
         MachTime.seconds(fromTicks: mach_absolute_time())
     }
 
-    /// Synthesizes Cmd+V into the focused app so the clipboard (image or text) pastes
-    /// without reaching for the keyboard. Posted on the next tick so it never re-enters
-    /// this tap callback.
+    /// Terminal emulators (where Claude Code and other TUIs run) take Ctrl+V, not
+    /// Cmd+V, as their paste — so a synthesized Cmd+V does nothing there. Detect a
+    /// terminal frontmost app and use Ctrl+V for it.
+    private static let controlPasteBundleIDs: Set<String> = [
+        "com.apple.Terminal",
+        "com.googlecode.iterm2",
+        "com.mitchellh.ghostty",
+        "dev.warp.Warp-Stable",
+        "net.kovidgoyal.kitty",
+        "com.github.wez.wezterm",
+        "co.zeit.hyper",
+        "org.alacritty",
+        "io.alacritty",
+        "org.tabby",
+    ]
+
+    /// Synthesizes a paste keystroke into the focused app so the clipboard (image or
+    /// text) pastes without reaching for the keyboard. Cmd+V for normal apps, Ctrl+V
+    /// for terminals. Posted on the next tick so it never re-enters this tap callback.
     private func performPaste() {
         FeedbackSound.paste.play()
+        let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let useControl = bundleID.map(Self.controlPasteBundleIDs.contains) ?? false
         DispatchQueue.main.async {
             let source = CGEventSource(stateID: .combinedSessionState)
             let vKey: CGKeyCode = 9  // kVK_ANSI_V
@@ -329,8 +347,9 @@ final class EventTapEngine {
                 let down = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: true),
                 let up = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: false)
             else { return }
-            down.flags = .maskCommand
-            up.flags = .maskCommand
+            let flags: CGEventFlags = useControl ? .maskControl : .maskCommand
+            down.flags = flags
+            up.flags = flags
             down.post(tap: .cghidEventTap)
             up.post(tap: .cghidEventTap)
         }
