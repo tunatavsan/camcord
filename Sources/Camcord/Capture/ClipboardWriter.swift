@@ -18,14 +18,29 @@ enum ClipboardWriter {
     /// `pointSize` is the capture's on-screen size in POINTS. Without it the PNG is
     /// tagged 72 dpi (point size == pixel size), so a Retina capture pastes at 2x its
     /// physical size in DPI-aware apps. Passing the point size embeds the real density.
-    static func copyPNG(_ image: CGImage, pointSize: CGSize? = nil, to pasteboard: NSPasteboard = .general) async -> Bool {
+    /// `saveTo`, when non-nil, also writes the PNG to that file (best-effort; a failed
+    /// disk write is logged but never fails the clipboard copy).
+    static func copyPNG(
+        _ image: CGImage,
+        pointSize: CGSize? = nil,
+        to pasteboard: NSPasteboard = .general,
+        saveTo saveURL: URL? = nil
+    ) async -> Bool {
         guard let png = await Task.detached(priority: .userInitiated, operation: {
             encodePNG(image, pointSize: pointSize)
         }).value else {
             logger.error("Failed to encode captured image as PNG")
             return false
         }
-        return write(png: png, to: pasteboard)
+        let wrote = write(png: png, to: pasteboard)
+        if let saveURL {
+            do {
+                try png.write(to: saveURL)
+            } catch {
+                logger.error("Failed to save screenshot to \(saveURL.path, privacy: .public): \(String(describing: error), privacy: .public)")
+            }
+        }
+        return wrote
     }
 
     /// PNG eagerly + TIFF as a lazily-provided second representation: some legacy

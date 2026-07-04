@@ -177,6 +177,10 @@ struct ScreenshotSettingsView: View {
         _settings = State(initialValue: ScreenshotSettings.load(from: defaultsSuite))
     }
 
+    private var savePath: String {
+        settings.saveDirectoryPath ?? ScreenshotSettings.defaultDirectoryPath()
+    }
+
     var body: some View {
         Form {
             Section("Çözünürlük") {
@@ -188,9 +192,45 @@ struct ScreenshotSettingsView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
+
+            Section("Diske Kaydetme") {
+                Toggle("Ekran görüntülerini diske de kaydet", isOn: $settings.saveToDisk)
+                if settings.saveToDisk {
+                    LabeledContent("Klasör") {
+                        HStack(spacing: 8) {
+                            Text(savePath)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .foregroundStyle(.secondary)
+                            Button("Değiştir…") { chooseFolder() }
+                            Button {
+                                NSWorkspace.shared.open(URL(fileURLWithPath: savePath, isDirectory: true))
+                            } label: {
+                                Image(systemName: "arrow.up.forward.app")
+                            }
+                            .help("Finder'da göster")
+                        }
+                    }
+                    Text("Panodakinin yanı sıra buraya da kaydedilir; videolardan ayrı bir klasör.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
         .formStyle(.grouped)
         .onChange(of: settings) { _, newValue in newValue.save(to: defaultsSuite) }
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Seç"
+        panel.directoryURL = URL(fileURLWithPath: savePath, isDirectory: true)
+        if panel.runModal() == .OK, let url = panel.url {
+            settings.saveDirectoryPath = url.path
+        }
     }
 }
 

@@ -212,7 +212,7 @@ final class CaptureCoordinator {
                 return
             }
             let image = try await ScreenshotService.captureDisplay(display)
-            guard await ClipboardWriter.copyPNG(image, pointSize: screen.frame.size) else {
+            guard await ClipboardWriter.copyPNG(image, pointSize: screen.frame.size, saveTo: screenshotSaveURL()) else {
                 fail("captureFullScreen: clipboard write failed")
                 return
             }
@@ -227,7 +227,7 @@ final class CaptureCoordinator {
     private func performRegionScreenshot(_ cgRect: CGRect) async {
         do {
             let image = try await ScreenshotService.captureRegion(cgRect: cgRect)
-            guard await ClipboardWriter.copyPNG(image, pointSize: cgRect.size) else {
+            guard await ClipboardWriter.copyPNG(image, pointSize: cgRect.size, saveTo: screenshotSaveURL()) else {
                 fail("Region capture: clipboard write failed")
                 return
             }
@@ -249,7 +249,7 @@ final class CaptureCoordinator {
     private func performWindowCapture(_ window: SCWindow) async {
         do {
             let image = try await ScreenshotService.captureWindow(window)
-            guard await ClipboardWriter.copyPNG(image, pointSize: window.frame.size) else {
+            guard await ClipboardWriter.copyPNG(image, pointSize: window.frame.size, saveTo: screenshotSaveURL()) else {
                 fail("Window capture: clipboard write failed")
                 return
             }
@@ -305,6 +305,12 @@ final class CaptureCoordinator {
             return false
         }
         return true
+    }
+
+    /// A file URL to also save the screenshot to, when disk-saving is enabled (nil
+    /// otherwise). Screenshots save to their own folder, separate from recordings.
+    private func screenshotSaveURL() -> URL? {
+        ScreenshotSettings.load(from: .standard).uniqueSaveURL(date: Date())
     }
 
     /// Success feedback: the action's distinct sound + a brief status-glyph flash.

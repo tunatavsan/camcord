@@ -168,12 +168,32 @@ struct RecordingSettings: Codable, Equatable {
     }
 }
 
-/// Screenshot quality preference (separate from recording).
+/// Screenshot preferences (separate from recording): quality, and optionally saving a
+/// copy of every screenshot to a folder (distinct from where videos go).
 struct ScreenshotSettings: Codable, Equatable {
     var resolutionScale: ResolutionScale
+    /// When true, every screenshot is also written to `saveDirectory` (in addition to
+    /// the clipboard).
+    var saveToDisk: Bool
+    /// Custom screenshot folder; nil = `~/Pictures/camcord`.
+    var saveDirectoryPath: String?
 
-    init(resolutionScale: ResolutionScale = .native) {
+    init(
+        resolutionScale: ResolutionScale = .native,
+        saveToDisk: Bool = false,
+        saveDirectoryPath: String? = nil
+    ) {
         self.resolutionScale = resolutionScale
+        self.saveToDisk = saveToDisk
+        self.saveDirectoryPath = saveDirectoryPath
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = ScreenshotSettings()
+        resolutionScale = try c.decodeIfPresent(ResolutionScale.self, forKey: .resolutionScale) ?? d.resolutionScale
+        saveToDisk = try c.decodeIfPresent(Bool.self, forKey: .saveToDisk) ?? d.saveToDisk
+        saveDirectoryPath = try c.decodeIfPresent(String.self, forKey: .saveDirectoryPath)
     }
 
     static let defaultsKey = "screenshotSettings"
@@ -191,5 +211,44 @@ struct ScreenshotSettings: Codable, Equatable {
     func save(to defaults: UserDefaults) {
         guard let data = try? JSONEncoder().encode(self) else { return }
         defaults.set(data, forKey: Self.defaultsKey)
+    }
+
+    // MARK: - Save location & naming (default ~/Pictures/camcord)
+
+    static func defaultDirectoryPath() -> String {
+        let pictures = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask)[0]
+        return pictures.appendingPathComponent("camcord", isDirectory: true).path
+    }
+
+    /// The chosen screenshot folder (created on first use), or nil if it can't be made.
+    func saveDirectory() -> URL? {
+        let path = (saveDirectoryPath?.isEmpty == false) ? saveDirectoryPath! : Self.defaultDirectoryPath()
+        let dir = URL(fileURLWithPath: path, isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir
+        } catch {
+            return nil
+        }
+    }
+
+    /// A guaranteed-fresh `.png` URL in the save folder, or nil when saving is off /
+    /// the folder can't be created.
+    func uniqueSaveURL(date: Date, fileManager: FileManager = .default) -> URL? {
+        guard saveToDisk, let dir = saveDirectory() else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        let stem = "camcord \(formatter.string(from: date))"
+        var candidate = dir.appendingPathComponent("\(stem).png")
+        var counter = 2
+        while fileManager.fileExists(atPath: candidate.path), counter < 100 {
+            candidate = dir.appendingPathComponent("\(stem) (\(counter)).png")
+            counter += 1
+        }
+        if fileManager.fileExists(atPath: candidate.path) {
+            candidate = dir.appendingPathComponent("\(stem) \(UUID().uuidString.prefix(8)).png")
+        }
+        return candidate
     }
 }

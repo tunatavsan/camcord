@@ -48,6 +48,7 @@ struct CapturePanelView: View {
     @State private var recordSystemAudio = true
     @State private var recordMicrophone = true
     @State private var soundEnabled = true
+    @State private var saveScreenshots = false
     @State private var isMicrophoneDenied = false
     @State private var lastRecordingURL: URL?
 
@@ -205,6 +206,14 @@ struct CapturePanelView: View {
             ToggleChip(onSymbol: "bell.fill", offSymbol: "bell.slash.fill", help: "Geri bildirim sesleri", isOn: $soundEnabled) {
                 FeedbackSound.setEnabled(soundEnabled)
             }
+            ToggleChip(
+                onSymbol: "square.and.arrow.down.fill", offSymbol: "square.and.arrow.down",
+                help: "Ekran görüntülerini diske de kaydet", isOn: $saveScreenshots
+            ) {
+                var s = ScreenshotSettings.load(from: .standard)
+                s.saveToDisk = saveScreenshots
+                s.save(to: .standard)
+            }
 
             Spacer()
 
@@ -224,6 +233,7 @@ struct CapturePanelView: View {
         recordSystemAudio = settings.systemAudio
         recordMicrophone = settings.microphone
         soundEnabled = FeedbackSound.isEnabled()
+        saveScreenshots = ScreenshotSettings.load(from: .standard).saveToDisk
         let micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
         isMicrophoneDenied = micStatus == .denied || micStatus == .restricted
         // Offer "reveal last recording" whenever the recording folder has one — the
