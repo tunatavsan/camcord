@@ -68,33 +68,43 @@ struct HoldGestureDetectorTests {
     @Test("a plain hold (no preceding tap) is a screenshot")
     func plainHoldIsScreenshot() {
         var d = HoldGestureDetector()
-        #expect(d.modeForPress(at: 0.0) == .screenshot)
+        #expect(d.modeForPress(button: 4, at: 0.0) == .screenshot)
     }
 
     @Test("tap (no-drag release) then hold within the window is OCR text")
     func tapThenHoldIsText() {
         var d = HoldGestureDetector()
         // First press: screenshot mode, but it turns out to be a tap (no drag).
-        #expect(d.modeForPress(at: 0.0) == .screenshot)
-        d.registerRelease(dragged: false, at: 0.1)
+        #expect(d.modeForPress(button: 4, at: 0.0) == .screenshot)
+        d.registerRelease(button: 4, dragged: false, at: 0.1)
         // Second press within the window → OCR.
-        #expect(d.modeForPress(at: 0.3) == .text)
+        #expect(d.modeForPress(button: 4, at: 0.3) == .text)
     }
 
     @Test("a tap followed by a hold AFTER the window is a plain screenshot again")
     func tapThenLateHoldIsScreenshot() {
         var d = HoldGestureDetector()
-        _ = d.modeForPress(at: 0.0)
-        d.registerRelease(dragged: false, at: 0.1)
+        _ = d.modeForPress(button: 4, at: 0.0)
+        d.registerRelease(button: 4, dragged: false, at: 0.1)
         // Past the 0.4s window from release → the tap no longer carries over.
-        #expect(d.modeForPress(at: 0.6) == .screenshot)
+        #expect(d.modeForPress(button: 4, at: 0.6) == .screenshot)
     }
 
     @Test("a completed hold (drag) does not arm the next press for OCR")
     func draggedReleaseDoesNotArm() {
         var d = HoldGestureDetector()
-        _ = d.modeForPress(at: 0.0)
-        d.registerRelease(dragged: true, at: 0.5)
-        #expect(d.modeForPress(at: 0.6) == .screenshot)
+        _ = d.modeForPress(button: 4, at: 0.0)
+        d.registerRelease(button: 4, dragged: true, at: 0.5)
+        #expect(d.modeForPress(button: 4, at: 0.6) == .screenshot)
+    }
+
+    @Test("a tap on one button never arms OCR for a different button's hold")
+    func tapDoesNotArmOtherButton() {
+        var d = HoldGestureDetector()
+        // Tap button 4...
+        _ = d.modeForPress(button: 4, at: 0.0)
+        d.registerRelease(button: 4, dragged: false, at: 0.1)
+        // ...then hold button 5 within the window → still a screenshot, not OCR.
+        #expect(d.modeForPress(button: 5, at: 0.3) == .screenshot)
     }
 }

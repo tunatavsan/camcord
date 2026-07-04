@@ -101,7 +101,13 @@ struct RecordingSettings: Codable, Equatable {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        let stem = filenamePrefix.isEmpty ? "camcord" : filenamePrefix
+        // The prefix is user-entered — strip path separators / control chars so it can
+        // never break out of the output directory or produce an invalid path.
+        let cleaned = filenamePrefix
+            .components(separatedBy: CharacterSet(charactersIn: "/\\:").union(.controlCharacters))
+            .joined()
+            .trimmingCharacters(in: .whitespaces)
+        let stem = cleaned.isEmpty ? "camcord" : cleaned
         return "\(stem) \(formatter.string(from: date)).mov"
     }
 

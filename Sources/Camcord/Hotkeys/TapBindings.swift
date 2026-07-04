@@ -79,22 +79,34 @@ struct HoldGestureDetector {
     /// Max gap from a tap's release to the next press for it to count as tap-then-hold.
     static let tapWindow: TimeInterval = 0.4
 
+    private var lastTapButton: Int64?
     private var lastTapReleaseTime: TimeInterval?
 
-    /// Call on button DOWN; returns the mode for the hold that may follow.
-    mutating func modeForPress(at time: TimeInterval) -> HoldCaptureMode {
-        if let last = lastTapReleaseTime, time - last <= Self.tapWindow {
-            lastTapReleaseTime = nil  // consumed by this press
-            return .text
+    /// Call on button DOWN; returns the mode for the hold that may follow. The tap and
+    /// the hold must be the SAME button — a tap on one bound button never arms OCR for
+    /// a different button's next hold.
+    mutating func modeForPress(button: Int64, at time: TimeInterval) -> HoldCaptureMode {
+        let mode: HoldCaptureMode
+        if lastTapButton == button, let last = lastTapReleaseTime, time - last <= Self.tapWindow {
+            mode = .text
+        } else {
+            mode = .screenshot
         }
-        lastTapReleaseTime = nil  // a stale tap outside the window never carries over
-        return .screenshot
+        lastTapButton = nil  // consumed / a stale tap never carries over
+        lastTapReleaseTime = nil
+        return mode
     }
 
     /// Call on button UP. `dragged` = whether the press produced a drag. A no-drag
-    /// release is a tap and arms the OCR window for the next press.
-    mutating func registerRelease(dragged: Bool, at time: TimeInterval) {
-        lastTapReleaseTime = dragged ? nil : time
+    /// release is a tap and arms the OCR window for that button's next press.
+    mutating func registerRelease(button: Int64, dragged: Bool, at time: TimeInterval) {
+        if dragged {
+            lastTapButton = nil
+            lastTapReleaseTime = nil
+        } else {
+            lastTapButton = button
+            lastTapReleaseTime = time
+        }
     }
 }
 

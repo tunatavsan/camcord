@@ -9,7 +9,7 @@ import SwiftUI
 /// One instance is owned by `AppDelegate`; `show()` lazily creates the window and
 /// rebuilds its SwiftUI content each time so state is never stale.
 @MainActor
-final class SettingsWindowController {
+final class SettingsWindowController: NSObject, NSWindowDelegate {
     private let eventTapEngine: EventTapEngine
     private let defaultsSuite: UserDefaults
     private var window: NSWindow?
@@ -17,6 +17,7 @@ final class SettingsWindowController {
     init(eventTapEngine: EventTapEngine, defaultsSuite: UserDefaults = .standard) {
         self.eventTapEngine = eventTapEngine
         self.defaultsSuite = defaultsSuite
+        super.init()
     }
 
     func show() {
@@ -39,10 +40,18 @@ final class SettingsWindowController {
         window.title = "Camcord Ayarları"
         window.titlebarAppearsTransparent = false
         window.isReleasedWhenClosed = false
+        window.delegate = self
         window.setContentSize(NSSize(width: 740, height: 560))
         window.minSize = NSSize(width: 680, height: 480)
         window.center()
         return window
+    }
+
+    /// The window isn't released on close (reused on next show), so its hosted SwiftUI
+    /// tree would otherwise stay alive and keep its `.task` permission-poll loops
+    /// spinning forever. Tearing the content view down cancels them; `show()` rebuilds it.
+    func windowWillClose(_ notification: Notification) {
+        window?.contentView = nil
     }
 }
 
@@ -305,8 +314,13 @@ struct RecordingSettingsView: View {
     }
 
     private func loadRecents() async {
-        let dir = URL(fileURLWithPath: outputPath, isDirectory: true)
-        recents = await RecordingItem.recent(in: dir, limit: 6)
+        let path = outputPath
+        let dir = URL(fileURLWithPath: path, isDirectory: true)
+        let loaded = await RecordingItem.recent(in: dir, limit: 6)
+        // The folder may have changed (or the view gone) while thumbnails generated —
+        // don't let a stale directory's results clobber the current one.
+        guard !Task.isCancelled, path == outputPath else { return }
+        recents = loaded
     }
 }
 

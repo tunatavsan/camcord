@@ -40,23 +40,27 @@ final class RecordingEngine: NSObject {
     func start(target: Target, settings: RecordingSettings, outputURL: URL) async throws {
         guard stream == nil else { throw RecordingError.alreadyRecording }
 
-        let initialCodec = settings.codec
-        do {
-            try await attemptStart(target: target, settings: settings, outputURL: outputURL, codec: initialCodec)
-        } catch {
-            guard let fallback = initialCodec.fallback else { throw error }
-            logger.error("\(String(describing: initialCodec), privacy: .public) start failed, retrying with fallback: \(String(describing: error), privacy: .public)")
-            try? FileManager.default.removeItem(at: outputURL)
+        // Walk the whole fallback chain (ProRes → HEVC → H.264) so a failure shared by
+        // the higher-quality codecs still degrades all the way to the most compatible
+        // one before giving up, instead of stopping after a single hop.
+        var codec: VideoCodecChoice? = settings.codec
+        var lastError: Error?
+        while let current = codec {
             do {
-                try await attemptStart(target: target, settings: settings, outputURL: outputURL, codec: fallback)
+                try await attemptStart(target: target, settings: settings, outputURL: outputURL, codec: current)
+                return
             } catch {
-                // The fallback attempt can fail AFTER its StreamWriter already
-                // created the on-disk container (e.g. addStreamOutput throws) --
-                // same junk-cleanup rule as the primary attempt.
+                lastError = error
+                // Every attempt may leave a partial on-disk container (StreamWriter
+                // creates it before addStreamOutput can throw) — clean it before retry.
                 try? FileManager.default.removeItem(at: outputURL)
-                throw error
+                if let next = current.fallback {
+                    logger.error("\(String(describing: current), privacy: .public) start failed, retrying with \(String(describing: next), privacy: .public): \(String(describing: error), privacy: .public)")
+                }
+                codec = current.fallback
             }
         }
+        throw lastError ?? RecordingError.writerFailed(nil)
     }
 
     private func attemptStart(target: Target, settings: RecordingSettings, outputURL: URL, codec: VideoCodecChoice) async throws {
@@ -76,10 +80,11 @@ final class RecordingEngine: NSObject {
         configuration.channelCount = 2
         if settings.microphone {
             configuration.captureMicrophone = true
-            // The chosen input, or the system default when none is set / it's gone.
-            let deviceID = settings.microphoneDeviceID
+            // The chosen input if it's still attached, otherwise the system default —
+            // a persisted device ID for an unplugged mic must not be passed through.
+            let chosen = settings.microphoneDeviceID.flatMap { AVCaptureDevice(uniqueID: $0) }
+            configuration.microphoneCaptureDeviceID = chosen?.uniqueID
                 ?? AVCaptureDevice.default(for: .audio)?.uniqueID
-            configuration.microphoneCaptureDeviceID = deviceID
         }
 
         let writer = try StreamWriter(

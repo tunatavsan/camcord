@@ -96,11 +96,14 @@ final class CaptureCoordinator {
     /// updates/finish from swallowed drag/up events; the overlay's onEnd fires
     /// exactly once on every exit path, which is where the exclusive-capture lock is
     /// released. `mode` decides screenshot vs OCR (the tap-then-hold variant).
-    func beginHoldRegionSelection(atCGPoint cgPoint: CGPoint, mode: HoldCaptureMode) {
-        guard beginExclusiveCapture() else { return }
+    /// Returns whether the session actually started, so the caller only tracks/swallows
+    /// the hold when it did.
+    @discardableResult
+    func beginHoldRegionSelection(atCGPoint cgPoint: CGPoint, mode: HoldCaptureMode) -> Bool {
+        guard beginExclusiveCapture() else { return false }
         guard preflightScreenCapture("holdRegionCapture") else {
             endExclusiveCapture()
-            return
+            return false
         }
         overlay.beginHoldSelection(atCGPoint: cgPoint) { [weak self] result in
             guard let self else { return }
@@ -120,6 +123,7 @@ final class CaptureCoordinator {
                 self.endExclusiveCapture()
             }
         }
+        return true
     }
 
     func updateHoldRegionSelection(toCGPoint cgPoint: CGPoint) {

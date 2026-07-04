@@ -9,6 +9,10 @@ final class PanelController: NSObject, NSPopoverDelegate {
     private let popover = NSPopover()
     private let model: RecordingStateModel
     private var lastCloseAt: ContinuousClock.Instant?
+    /// True while an EXPLICIT close() (e.g. a capture action closing the panel) is in
+    /// flight, so its close doesn't arm the transient-auto-close reopen guard and
+    /// swallow a legitimate status-button click that follows.
+    private var isExplicitClose = false
 
     init(model: RecordingStateModel, actions: PanelActions) {
         self.model = model
@@ -44,6 +48,9 @@ final class PanelController: NSObject, NSPopoverDelegate {
     }
 
     func close() {
+        // Reset happens in popoverDidClose (fires after the close animation), so the
+        // flag still holds when that late callback would otherwise stamp the guard.
+        isExplicitClose = true
         popover.performClose(nil)
     }
 
@@ -51,14 +58,21 @@ final class PanelController: NSObject, NSPopoverDelegate {
     /// the close animation completes, which can be later than the same click's
     /// mouse-UP — by then `toggle()` would have read a stale timestamp and reopened
     /// the popover it just dismissed. `popoverWillClose` arms the guard immediately.
+    /// Only a transient auto-close (outside click) arms it — an explicit close() from
+    /// our own actions should not swallow the user's next status-button click.
     nonisolated func popoverWillClose(_ notification: Notification) {
         MainActor.assumeIsolated {
+            guard !isExplicitClose else { return }
             lastCloseAt = ContinuousClock.now
         }
     }
 
     nonisolated func popoverDidClose(_ notification: Notification) {
         MainActor.assumeIsolated {
+            if isExplicitClose {
+                isExplicitClose = false
+                return
+            }
             lastCloseAt = ContinuousClock.now
         }
     }

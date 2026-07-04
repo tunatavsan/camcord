@@ -92,7 +92,11 @@ private final class FeedbackPlayer: @unchecked Sendable {
         if let id = ids[name] { return id }
         let url = URL(fileURLWithPath: "/System/Library/Sounds/\(name).aiff") as CFURL
         var id: SystemSoundID = 0
-        guard AudioServicesCreateSystemSoundID(url, &id) == noErr else { return 0 }
+        // Cache the result either way (0 on failure) so a missing sound file can't turn
+        // into a permanent per-call retry on the hot path (e.g. the event-tap thread).
+        if AudioServicesCreateSystemSoundID(url, &id) != noErr {
+            id = 0
+        }
         ids[name] = id
         return id
     }

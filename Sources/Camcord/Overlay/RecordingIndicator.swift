@@ -43,6 +43,9 @@ final class RecordingIndicator {
 
         // Position immediately, then follow the window as it moves/resizes.
         updateFrame()
+        // updateFrame() calls hide() if the window is already gone on this first check,
+        // which nils out `self.panel` — don't resurrect the just-torn-down panel.
+        guard self.panel === panel else { return }
         panel.orderFrontRegardless()
 
         let timer = Timer(timeInterval: 1.0 / 15.0, repeats: true) { [weak self] _ in

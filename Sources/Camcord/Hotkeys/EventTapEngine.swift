@@ -167,6 +167,10 @@ final class EventTapEngine {
     }
 
     @objc private func handleWorkspaceReactivation() {
+        // mach_absolute_time pauses during sleep, so any gesture timing captured before
+        // sleep is meaningless after wake — start the detectors fresh.
+        doubleTapDetector = DoubleTapDetector()
+        holdGestureDetector = HoldGestureDetector()
         recreateTap()
     }
 
@@ -256,7 +260,7 @@ final class EventTapEngine {
         // An active hold session ends on ITS button's release, wherever it lands.
         if type == .otherMouseUp, activeHoldButton == button {
             activeHoldButton = nil
-            holdGestureDetector.registerRelease(dragged: activeHoldDragged, at: nowTimestamp())
+            holdGestureDetector.registerRelease(button: button, dragged: activeHoldDragged, at: nowTimestamp())
             // finish shoots when a drag happened, cancels a no-drag tap.
             coordinator.finishHoldRegionSelection(atCGPoint: location)
             return true
@@ -266,12 +270,15 @@ final class EventTapEngine {
             switch action {
             case .holdCaptureRegion:
                 guard activeHoldButton == nil else { return true }
-                activeHoldButton = button
-                activeHoldDragged = false
-                // The mode is decided at press: a recent tap on this button means the
+                // The mode is decided at press: a recent tap on THIS button means the
                 // OCR variant (tap-then-hold), otherwise a plain screenshot hold.
-                let mode = holdGestureDetector.modeForPress(at: nowTimestamp())
-                coordinator.beginHoldRegionSelection(atCGPoint: location, mode: mode)
+                let mode = holdGestureDetector.modeForPress(button: button, at: nowTimestamp())
+                // Only track the hold if the session actually started (screen-recording
+                // permission present, no other capture in flight).
+                if coordinator.beginHoldRegionSelection(atCGPoint: location, mode: mode) {
+                    activeHoldButton = button
+                    activeHoldDragged = false
+                }
             case .paste:
                 performPaste()
             case .captureRegion, .toggleRecording:

@@ -247,6 +247,10 @@ final class RecordingController {
             await stopTask.value
             return
         }
+        // The session may have already concluded (e.g. handleUnexpectedStop fired
+        // between the caller's check and here) — don't re-run engine.stop() on a dead
+        // engine and report a false failure.
+        guard uiState != .idle else { return }
 
         stopElapsedTimer()
         segmentStart = nil
