@@ -251,8 +251,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
     }
 
-    /// Renders the recording state on the status item: red record glyph + elapsed
-    /// time while recording, pause glyph while paused, plain camera when idle.
+    /// Renders the recording state on the status item: a vivid, glowing red glyph +
+    /// elapsed time while recording (orange while paused), plain camera when idle.
+    /// The elapsed text is drawn as an attributed string in the state color so it is
+    /// clearly legible on the menu bar instead of the default (near-invisible) label.
     func setRecordingUI(_ state: RecordingController.UIState, elapsed: String?) {
         guard let button = statusItem.button else { return }
         switch state {
@@ -261,25 +263,39 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             image?.isTemplate = true
             button.image = image
             button.contentTintColor = nil
-            button.title = ""
+            button.attributedTitle = NSAttributedString(string: "")
         case .recording:
             let image = NSImage(systemSymbolName: "record.circle.fill", accessibilityDescription: "Recording")
             image?.isTemplate = true
             button.image = image
             button.contentTintColor = .systemRed
             button.imagePosition = .imageLeading
-            button.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-            button.title = " \(elapsed ?? "")"
+            button.attributedTitle = Self.glowingElapsed(elapsed ?? "", color: .systemRed)
         case .paused:
             let image = NSImage(systemSymbolName: "pause.circle.fill", accessibilityDescription: "Recording paused")
             image?.isTemplate = true
             button.image = image
             button.contentTintColor = .systemOrange
             button.imagePosition = .imageLeading
-            button.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-            button.title = " \(elapsed ?? "")"
+            button.attributedTitle = Self.glowingElapsed(elapsed ?? "", color: .systemOrange)
         }
         refreshRecordingItems()
+    }
+
+    /// Elapsed time as a colored, softly glowing monospaced string for the menu bar.
+    private static func glowingElapsed(_ text: String, color: NSColor) -> NSAttributedString {
+        let glow = NSShadow()
+        glow.shadowColor = color.withAlphaComponent(0.65)
+        glow.shadowBlurRadius = 3
+        glow.shadowOffset = .zero
+        return NSAttributedString(
+            string: " \(text)",
+            attributes: [
+                .foregroundColor: color,
+                .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .semibold),
+                .shadow: glow,
+            ]
+        )
     }
 
     private func refreshRecordingItems() {
