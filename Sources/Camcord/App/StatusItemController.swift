@@ -265,37 +265,61 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             button.contentTintColor = nil
             button.attributedTitle = NSAttributedString(string: "")
         case .recording:
-            let image = NSImage(systemSymbolName: "record.circle.fill", accessibilityDescription: "Recording")
-            image?.isTemplate = true
-            button.image = image
-            button.contentTintColor = .systemRed
-            button.imagePosition = .imageLeading
-            button.attributedTitle = Self.glowingElapsed(elapsed ?? "", color: .systemRed)
+            button.attributedTitle = NSAttributedString(string: "")
+            button.contentTintColor = nil
+            button.imagePosition = .imageOnly
+            button.image = Self.indicatorImage(elapsed: elapsed ?? "", color: .systemRed, paused: false)
         case .paused:
-            let image = NSImage(systemSymbolName: "pause.circle.fill", accessibilityDescription: "Recording paused")
-            image?.isTemplate = true
-            button.image = image
-            button.contentTintColor = .systemOrange
-            button.imagePosition = .imageLeading
-            button.attributedTitle = Self.glowingElapsed(elapsed ?? "", color: .systemOrange)
+            button.attributedTitle = NSAttributedString(string: "")
+            button.contentTintColor = nil
+            button.imagePosition = .imageOnly
+            button.image = Self.indicatorImage(elapsed: elapsed ?? "", color: .systemOrange, paused: true)
         }
         refreshRecordingItems()
     }
 
-    /// Elapsed time as a colored, softly glowing monospaced string for the menu bar.
-    private static func glowingElapsed(_ text: String, color: NSColor) -> NSAttributedString {
+    /// The recording indicator (dot + elapsed) rendered as a NON-template image in
+    /// exact colors. The menu bar's vibrancy mutes template tints / attributed-title
+    /// colors toward the bar color (why a plain red title read as near-black); a
+    /// non-template image is drawn as-is, so a vivid glowing red survives.
+    private static func indicatorImage(elapsed: String, color: NSColor, paused: Bool) -> NSImage {
         let glow = NSShadow()
-        glow.shadowColor = color.withAlphaComponent(0.65)
-        glow.shadowBlurRadius = 3
+        glow.shadowColor = color.withAlphaComponent(0.85)
+        glow.shadowBlurRadius = 3.5
         glow.shadowOffset = .zero
-        return NSAttributedString(
-            string: " \(text)",
-            attributes: [
-                .foregroundColor: color,
-                .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .semibold),
-                .shadow: glow,
-            ]
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
+        let text = NSAttributedString(
+            string: elapsed,
+            attributes: [.foregroundColor: color, .font: font, .shadow: glow]
         )
+        let textSize = text.size()
+        let dot: CGFloat = 7
+        let gap: CGFloat = 5
+        let pad: CGFloat = 5  // room for the glow bleed
+        let height = max(textSize.height, dot) + pad * 2
+        let width = pad + dot + gap + ceil(textSize.width) + pad
+
+        let image = NSImage(size: NSSize(width: width, height: height))
+        image.lockFocus()
+        NSGraphicsContext.saveGraphicsState()
+        glow.set()
+        color.setFill()
+        let dotRect = NSRect(x: pad, y: (height - dot) / 2, width: dot, height: dot)
+        if paused {
+            // Two bars for the pause glyph.
+            let barW: CGFloat = 2, barGap: CGFloat = 2
+            let barsH = dot
+            let y = (height - barsH) / 2
+            NSBezierPath(rect: NSRect(x: pad, y: y, width: barW, height: barsH)).fill()
+            NSBezierPath(rect: NSRect(x: pad + barW + barGap, y: y, width: barW, height: barsH)).fill()
+        } else {
+            NSBezierPath(ovalIn: dotRect).fill()
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        text.draw(at: NSPoint(x: pad + dot + gap, y: (height - textSize.height) / 2))
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
     }
 
     private func refreshRecordingItems() {

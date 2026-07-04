@@ -50,6 +50,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             statusItemController?.setRecordingUI(state, elapsed: elapsed)
             recordingStateModel?.state = state
             recordingStateModel?.elapsed = elapsed
+            // A new/live recording clears any lingering "done" card.
+            if state != .idle {
+                recordingStateModel?.finishedURL = nil
+                recordingStateModel?.isFinishing = false
+            }
+        }
+        recordingController.onFinishing = { [weak recordingStateModel] finishing in
+            recordingStateModel?.isFinishing = finishing
+        }
+        recordingController.onRecordingFinished = { [weak recordingStateModel] url in
+            recordingStateModel?.isFinishing = false
+            recordingStateModel?.finishedURL = url
         }
 
         // Every failure beep gets a visual companion on the status glyph.
@@ -114,6 +126,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         actions.pauseResume = { [weak recordingController] in
             recordingController?.pauseResume()
+        }
+        actions.revealRecording = { [weak self] url in
+            self?.panelController?.close()
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
+        actions.openRecording = { [weak self] url in
+            self?.panelController?.close()
+            NSWorkspace.shared.open(url)
         }
         actions.openSettings = { [weak self] in
             self?.panelController?.close()

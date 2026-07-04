@@ -26,6 +26,11 @@ final class RecordingController {
     /// coordinator's) — pairs every failure beep with a visual cue.
     var onFailure: (() -> Void)?
 
+    /// True from Stop pressed until the file is finalized (panel shows "finishing").
+    var onFinishing: ((Bool) -> Void)?
+    /// Fired with the finished recording's URL (drives the panel's "done" card).
+    var onRecordingFinished: ((URL) -> Void)?
+
     private(set) var uiState: UIState = .idle
 
     /// Guards the selection/starting window so a second hotkey press can't start a
@@ -247,6 +252,9 @@ final class RecordingController {
         segmentStart = nil
         uiState = .idle
         indicator.hide()
+        // Show "finishing" immediately so the panel never flashes the capture grid
+        // between Stop and the file being ready.
+        onFinishing?(true)
         pushUI()
 
         // The finalize runs inside a tracked task so `isFinalizing` stays true (and
@@ -257,8 +265,10 @@ final class RecordingController {
                 let url = try await engine.stop()
                 copyFileURLToClipboard(url)
                 FeedbackSound.recordStop.play()
+                onRecordingFinished?(url)
                 logger.notice("Recording finished: \(url.lastPathComponent, privacy: .public)")
             } catch {
+                onFinishing?(false)
                 fail("Recording stop/finalize failed: \(error)")
             }
         }
@@ -278,7 +288,10 @@ final class RecordingController {
             // The engine salvaged the partial file -- hand it to the user the same
             // way a normal stop would instead of leaving it silently on disk.
             copyFileURLToClipboard(salvagedURL)
+            onRecordingFinished?(salvagedURL)
             logger.notice("Salvaged partial recording: \(salvagedURL.lastPathComponent, privacy: .public)")
+        } else {
+            onFinishing?(false)
         }
         fail("Recording stopped unexpectedly: \(error)")
     }

@@ -9,6 +9,10 @@ import SwiftUI
 final class RecordingStateModel: ObservableObject {
     @Published var state: RecordingController.UIState = .idle
     @Published var elapsed: String?
+    /// True from the moment Stop is pressed until the file is finalized on disk.
+    @Published var isFinishing = false
+    /// The just-finished recording, shown as a "done" card until dismissed / reopened.
+    @Published var finishedURL: URL?
     /// Bumped by PanelController on every show. The popover's hosting controller is
     /// retained across shows, so `@State` persists and `onAppear` fires only once —
     /// this token re-reads persisted toggles per open.
@@ -27,6 +31,8 @@ struct PanelActions {
     var toggleRecording: () -> Void = {}
     var recordFullScreen: () -> Void = {}
     var pauseResume: () -> Void = {}
+    var revealRecording: (URL) -> Void = { _ in }
+    var openRecording: (URL) -> Void = { _ in }
     var openSettings: () -> Void = {}
 }
 
@@ -48,6 +54,35 @@ struct CapturePanelView: View {
     static let panelSpring: Animation = .spring(response: 0.34, dampingFraction: 0.86)
 
     var body: some View {
+        ZStack {
+            if let url = model.finishedURL {
+                FinishedCard(
+                    url: url,
+                    reveal: { actions.revealRecording(url) },
+                    open: { actions.openRecording(url) },
+                    dismiss: { model.finishedURL = nil }
+                )
+                .transition(.opacity)
+            } else if model.isFinishing {
+                FinishingCard()
+                    .transition(.opacity)
+            } else {
+                mainContent
+                    .transition(.opacity)
+            }
+        }
+        .frame(width: 268)
+        .animation(reduceMotion ? nil : Self.panelSpring, value: model.finishedURL)
+        .animation(reduceMotion ? nil : Self.panelSpring, value: model.isFinishing)
+        .onAppear(perform: reloadPersistedState)
+        .onChange(of: model.panelOpenToken) { _, _ in
+            // A fresh open always returns to the capture grid.
+            model.finishedURL = nil
+            reloadPersistedState()
+        }
+    }
+
+    private var mainContent: some View {
         VStack(spacing: 10) {
             captureGrid
 
@@ -60,9 +95,6 @@ struct CapturePanelView: View {
             footer
         }
         .padding(12)
-        .frame(width: 268)
-        .onAppear(perform: reloadPersistedState)
-        .onChange(of: model.panelOpenToken) { _, _ in reloadPersistedState() }
     }
 
     // MARK: - Capture grid
@@ -185,6 +217,121 @@ struct CapturePanelView: View {
         settings.systemAudio = recordSystemAudio
         settings.microphone = recordMicrophone
         settings.save(to: .standard)
+    }
+}
+
+// MARK: - Recording finished / finishing
+
+/// The "recording is being finalized" state — shown for the brief window between
+/// pressing Stop and the moov atom being written, so the panel never flashes back to
+/// the capture grid first.
+private struct FinishingCard: View {
+    var body: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .controlSize(.small)
+            Text("Kaydediliyor…")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 30)
+        .padding(.horizontal, 12)
+    }
+}
+
+/// The "recording done" card: an animated check, the file name, and actions to open
+/// the file / reveal it in Finder. Stays until dismissed or the panel is reopened —
+/// it deliberately does NOT snap back to the capture grid.
+private struct FinishedCard: View {
+    let url: URL
+    let reveal: () -> Void
+    let open: () -> Void
+    let dismiss: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var appeared = false
+
+    var body: some View {
+        VStack(spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(.green.opacity(0.14))
+                    .frame(width: 54, height: 54)
+                    .scaleEffect(appeared ? 1 : 0.5)
+                    .opacity(appeared ? 1 : 0)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundStyle(.green)
+                    .scaleEffect(appeared ? 1 : 0.2)
+                    .opacity(appeared ? 1 : 0)
+            }
+            .padding(.top, 4)
+
+            Text("Kayıt bitti")
+                .font(.system(size: 15, weight: .semibold))
+
+            Text(url.lastPathComponent)
+                .font(.system(size: 11))
+                .foregroundStyle(Color.primary.opacity(0.6))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.horizontal, 20)
+
+            HStack(spacing: 8) {
+                CardButton(title: "Finder'da Göster", symbol: "folder", action: reveal)
+                CardButton(title: "Aç", symbol: "play.fill", prominent: true, action: open)
+            }
+            .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 16)
+        .padding(.horizontal, 12)
+        .overlay(alignment: .topTrailing) {
+            HoverScaleButton(action: dismiss) { hovering in
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(hovering ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
+                    .frame(width: 22, height: 22)
+                    .background(Circle().fill(Color.primary.opacity(hovering ? 0.08 : 0)))
+            }
+            .padding(6)
+            .help("Kapat")
+        }
+        .onAppear {
+            if reduceMotion {
+                appeared = true
+            } else {
+                withAnimation(.spring(response: 0.5, dampingFraction: 0.58)) { appeared = true }
+            }
+        }
+    }
+}
+
+/// A pill button used in the finished card. `prominent` gives it a filled accent look.
+private struct CardButton: View {
+    let title: String
+    let symbol: String
+    var prominent: Bool = false
+    let action: () -> Void
+
+    var body: some View {
+        HoverScaleButton(action: action) { hovering in
+            HStack(spacing: 5) {
+                Image(systemName: symbol).font(.system(size: 10, weight: .semibold))
+                Text(title).font(.system(size: 11.5, weight: .medium))
+            }
+            .foregroundStyle(prominent ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+            .padding(.horizontal, 11)
+            .frame(height: 28)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(prominent
+                        ? AnyShapeStyle(Color.accentColor.opacity(hovering ? 0.95 : 0.85))
+                        : AnyShapeStyle(Color.primary.opacity(hovering ? 0.11 : 0.07)))
+            )
+        }
+        .help(title)
     }
 }
 
