@@ -385,6 +385,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         }()
 
         for (screen, view) in zip(NSScreen.screens, views) {
+            view.selectionIsText = activeIsRight
             guard globalSelection != nil || highlightedWindow != nil else {
                 view.selectionRect = nil
                 view.highlightRect = nil

@@ -42,6 +42,11 @@ final class SelectionView: NSView {
     var badge: (rect: CGRect, text: String)? {
         didSet { needsDisplay = true }
     }
+    /// The current drag is an OCR (right-button) selection — draw it distinctly (teal
+    /// outline + label) so it never looks like a plain screenshot selection.
+    var selectionIsText: Bool = false {
+        didSet { needsDisplay = true }
+    }
 
     override var isFlipped: Bool { false }
     override var acceptsFirstResponder: Bool { true }
@@ -87,8 +92,18 @@ final class SelectionView: NSView {
             animate(keyPath: "opacity", to: 1, duration: 0.16)
             highlightLayer.opacity = 1
         } else {
-            // Moving between windows: morph the rounded rect from where it is now.
-            animate(keyPath: "path", to: newPath, duration: Self.highlightDuration, from: highlightLayer.presentation()?.path)
+            // Moving between windows: springy morph of the rounded rect — a snappy,
+            // slightly bouncy settle rather than a flat linear slide.
+            let spring = CASpringAnimation(keyPath: "path")
+            spring.fromValue = highlightLayer.presentation()?.path ?? highlightLayer.path
+            spring.toValue = newPath
+            spring.mass = 0.9
+            spring.stiffness = 220
+            spring.damping = 17
+            spring.initialVelocity = 6
+            spring.duration = spring.settlingDuration
+            spring.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            highlightLayer.add(spring, forKey: "path")
             highlightLayer.path = newPath
             if highlightLayer.opacity < 1 {
                 animate(keyPath: "opacity", to: 1, duration: 0.16)
@@ -132,12 +147,41 @@ final class SelectionView: NSView {
 
         if let selectionRect {
             selectionRect.fill(using: .clear)
-            drawDashedBorder(around: selectionRect)
+            if selectionIsText {
+                let border = NSBezierPath(roundedRect: selectionRect, xRadius: 3, yRadius: 3)
+                border.lineWidth = 2
+                NSColor.systemTeal.setStroke()
+                border.stroke()
+                drawModeLabel("Metin · OCR", near: selectionRect)
+            } else {
+                drawDashedBorder(around: selectionRect)
+            }
             if let badge {
                 drawBadge(badge.text, near: badge.rect)
             }
         }
         // The window-snap highlight is drawn by `highlightLayer` (animated), not here.
+    }
+
+    /// A small pill above the selection naming the OCR mode.
+    private func drawModeLabel(_ text: String, near rect: CGRect) {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
+            .foregroundColor: NSColor.white,
+        ]
+        let attributed = NSAttributedString(string: text, attributes: attributes)
+        let textSize = attributed.size()
+        let hp: CGFloat = 7, vp: CGFloat = 3
+        let size = CGSize(width: textSize.width + hp * 2, height: textSize.height + vp * 2)
+        var origin = CGPoint(x: rect.minX, y: rect.maxY + 6)
+        origin.x = max(bounds.minX, min(origin.x, bounds.maxX - size.width))
+        if origin.y + size.height > bounds.maxY {
+            origin.y = rect.maxY - size.height - 6
+        }
+        let labelRect = CGRect(origin: origin, size: size)
+        NSColor.systemTeal.setFill()
+        NSBezierPath(roundedRect: labelRect, xRadius: 5, yRadius: 5).fill()
+        attributed.draw(at: CGPoint(x: labelRect.minX + hp, y: labelRect.minY + vp))
     }
 
     private func drawDashedBorder(around rect: CGRect) {
