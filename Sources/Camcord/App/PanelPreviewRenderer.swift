@@ -9,17 +9,27 @@ enum PanelPreviewRenderer {
     static func renderAll(to directory: URL) {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        let states: [(name: String, state: RecordingController.UIState, elapsed: String?)] = [
-            ("panel-idle", .idle, nil),
-            ("panel-recording", .recording, "1:07"),
-            ("panel-paused", .paused, "1:07"),
+        enum Kind { case state(RecordingController.UIState, String?), finishing, finished }
+        let states: [(name: String, kind: Kind)] = [
+            ("panel-idle", .state(.idle, nil)),
+            ("panel-recording", .state(.recording, "1:07")),
+            ("panel-paused", .state(.paused, "1:07")),
+            ("panel-finishing", .finishing),
+            ("panel-finished", .finished),
         ]
 
         for scheme in ["dark", "light"] {
             for entry in states {
                 let model = RecordingStateModel()
-                model.state = entry.state
-                model.elapsed = entry.elapsed
+                switch entry.kind {
+                case .state(let s, let e):
+                    model.state = s
+                    model.elapsed = e
+                case .finishing:
+                    model.isFinishing = true
+                case .finished:
+                    model.finishedURL = URL(fileURLWithPath: "/Users/x/Movies/camcord/camcord 2026-07-04 at 21.15.30.mov")
+                }
                 // ImageRenderer can't render AppKit-backed views — simulate the
                 // popover backdrop with a flat color per scheme.
                 let backdrop = scheme == "dark"

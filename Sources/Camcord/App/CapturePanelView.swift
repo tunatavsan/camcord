@@ -53,6 +53,12 @@ struct CapturePanelView: View {
     /// One physical signature for every elastic transition in the panel.
     static let panelSpring: Animation = .spring(response: 0.34, dampingFraction: 0.86)
 
+    /// The panel is a FIXED size: a constant popover never resizes, so it never
+    /// slides out from under the status item when the state changes (idle grid →
+    /// finishing → done card). Content is laid out inside this frame.
+    static let panelWidth: CGFloat = 268
+    static let panelHeight: CGFloat = 178
+
     var body: some View {
         ZStack {
             if let url = model.finishedURL {
@@ -68,12 +74,16 @@ struct CapturePanelView: View {
                     .transition(.opacity)
             } else {
                 mainContent
+                    .frame(maxHeight: .infinity, alignment: .top)
                     .transition(.opacity)
             }
         }
-        .frame(width: 268)
-        .animation(reduceMotion ? nil : Self.panelSpring, value: model.finishedURL)
-        .animation(reduceMotion ? nil : Self.panelSpring, value: model.isFinishing)
+        .frame(width: Self.panelWidth, height: Self.panelHeight)
+        // A near-opaque backdrop so the panel reads as a solid control surface, not a
+        // see-through pane of glass over whatever is behind it.
+        .background(PanelBackdrop())
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.finishedURL)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.isFinishing)
         .onAppear(perform: reloadPersistedState)
         .onChange(of: model.panelOpenToken) { _, _ in
             // A fresh open always returns to the capture grid.
@@ -220,6 +230,14 @@ struct CapturePanelView: View {
     }
 }
 
+/// A near-solid, appearance-adaptive backdrop that sits over the popover's own
+/// translucent material so the panel reads as a solid surface rather than glass.
+private struct PanelBackdrop: View {
+    var body: some View {
+        Color(nsColor: .windowBackgroundColor)
+    }
+}
+
 // MARK: - Recording finished / finishing
 
 /// The "recording is being finalized" state — shown for the brief window between
@@ -253,23 +271,22 @@ private struct FinishedCard: View {
     @State private var appeared = false
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 8) {
             ZStack {
                 Circle()
                     .fill(.green.opacity(0.14))
-                    .frame(width: 54, height: 54)
+                    .frame(width: 46, height: 46)
                     .scaleEffect(appeared ? 1 : 0.5)
                     .opacity(appeared ? 1 : 0)
                 Image(systemName: "checkmark")
-                    .font(.system(size: 24, weight: .bold))
+                    .font(.system(size: 21, weight: .bold))
                     .foregroundStyle(.green)
                     .scaleEffect(appeared ? 1 : 0.2)
                     .opacity(appeared ? 1 : 0)
             }
-            .padding(.top, 4)
 
             Text("Kayıt bitti")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 14.5, weight: .semibold))
 
             Text(url.lastPathComponent)
                 .font(.system(size: 11))
@@ -282,10 +299,9 @@ private struct FinishedCard: View {
                 CardButton(title: "Finder'da Göster", symbol: "folder", action: reveal)
                 CardButton(title: "Aç", symbol: "play.fill", prominent: true, action: open)
             }
-            .padding(.top, 4)
+            .padding(.top, 2)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 16)
         .padding(.horizontal, 12)
         .overlay(alignment: .topTrailing) {
             HoverScaleButton(action: dismiss) { hovering in
