@@ -70,6 +70,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         coordinator.onFailure = flashFailure
         recordingController.onFailure = flashFailure
+        // ...and every successful capture gets a brief green confirmation flash.
+        coordinator.onSuccess = { [weak statusItemController] in
+            statusItemController?.flashSuccess()
+        }
 
         let panelActions = makePanelActions(coordinator: coordinator, recordingController: recordingController)
         let panelController = PanelController(model: recordingStateModel, actions: panelActions)

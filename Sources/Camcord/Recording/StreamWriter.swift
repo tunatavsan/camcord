@@ -38,6 +38,7 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     /// that to drive the HEVC -> H.264 fallback.
     init(
         outputURL: URL,
+        container: VideoContainer,
         codec: VideoCodecChoice,
         bitrateMbps: Int,
         pixelWidth: Int,
@@ -49,7 +50,7 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         self.outputURL = outputURL
         pauseClock = PauseClock(frameDuration: frameDuration)
 
-        writer = try AVAssetWriter(outputURL: outputURL, fileType: .mov)
+        writer = try AVAssetWriter(outputURL: outputURL, fileType: container.fileType)
 
         var videoSettings: [String: Any] = [
             AVVideoCodecKey: codec.avCodec,
@@ -340,6 +341,22 @@ enum VideoCodecChoice: String, Codable, CaseIterable {
         case .h264: nil
         }
     }
+}
+
+/// Output container. `.mp4` is the most broadly compatible for sharing/upload;
+/// `.mov` is Apple-native and required for ProRes.
+enum VideoContainer: String, Codable, CaseIterable {
+    case mov
+    case mp4
+
+    var fileType: AVFileType {
+        switch self {
+        case .mov: .mov
+        case .mp4: .mp4
+        }
+    }
+
+    var ext: String { rawValue }
 }
 
 enum RecordingError: Error {

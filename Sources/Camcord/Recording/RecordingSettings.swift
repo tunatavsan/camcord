@@ -19,11 +19,14 @@ struct RecordingSettings: Codable, Equatable {
 
     // Quality
     var codec: VideoCodecChoice
+    var container: VideoContainer
     /// Average video bitrate in Mbps for HEVC/H.264; 0 = let the encoder choose.
     /// Ignored for ProRes (quality-based).
     var bitrateMbps: Int
     var fps: Int
     var resolutionScale: ResolutionScale
+    /// Whether the pointer is drawn into the recording.
+    var showsCursor: Bool
 
     // Output
     /// Custom output folder; nil = `~/Movies/camcord`.
@@ -40,9 +43,11 @@ struct RecordingSettings: Codable, Equatable {
         microphone: Bool = true,
         microphoneDeviceID: String? = nil,
         codec: VideoCodecChoice = .hevc,
+        container: VideoContainer = .mov,
         bitrateMbps: Int = 0,
         fps: Int = 60,
         resolutionScale: ResolutionScale = .native,
+        showsCursor: Bool = true,
         outputDirectoryPath: String? = nil,
         filenamePrefix: String = "camcord",
         windowGlowEnabled: Bool = true
@@ -51,12 +56,19 @@ struct RecordingSettings: Codable, Equatable {
         self.microphone = microphone
         self.microphoneDeviceID = microphoneDeviceID
         self.codec = codec
+        self.container = container
         self.bitrateMbps = bitrateMbps
         self.fps = fps
         self.resolutionScale = resolutionScale
+        self.showsCursor = showsCursor
         self.outputDirectoryPath = outputDirectoryPath
         self.filenamePrefix = filenamePrefix
         self.windowGlowEnabled = windowGlowEnabled
+    }
+
+    /// ProRes only lives in a `.mov`; otherwise the chosen container.
+    var effectiveContainer: VideoContainer {
+        codec == .proRes422 ? .mov : container
     }
 
     // Backward-compatible decode: any field missing from older persisted JSON falls
@@ -68,9 +80,11 @@ struct RecordingSettings: Codable, Equatable {
         microphone = try c.decodeIfPresent(Bool.self, forKey: .microphone) ?? d.microphone
         microphoneDeviceID = try c.decodeIfPresent(String.self, forKey: .microphoneDeviceID)
         codec = try c.decodeIfPresent(VideoCodecChoice.self, forKey: .codec) ?? d.codec
+        container = try c.decodeIfPresent(VideoContainer.self, forKey: .container) ?? d.container
         bitrateMbps = try c.decodeIfPresent(Int.self, forKey: .bitrateMbps) ?? d.bitrateMbps
         fps = try c.decodeIfPresent(Int.self, forKey: .fps) ?? d.fps
         resolutionScale = try c.decodeIfPresent(ResolutionScale.self, forKey: .resolutionScale) ?? d.resolutionScale
+        showsCursor = try c.decodeIfPresent(Bool.self, forKey: .showsCursor) ?? d.showsCursor
         outputDirectoryPath = try c.decodeIfPresent(String.self, forKey: .outputDirectoryPath)
         filenamePrefix = try c.decodeIfPresent(String.self, forKey: .filenamePrefix) ?? d.filenamePrefix
         windowGlowEnabled = try c.decodeIfPresent(Bool.self, forKey: .windowGlowEnabled) ?? d.windowGlowEnabled
@@ -96,7 +110,7 @@ struct RecordingSettings: Codable, Equatable {
     // MARK: - Output location & naming
 
     /// `<prefix> 2026-07-03 at 21.15.30.mov` -- dots in the time part because colons
-    /// are path-hostile on macOS.
+    /// are path-hostile on macOS. Extension follows the effective container.
     func filename(date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
@@ -108,7 +122,7 @@ struct RecordingSettings: Codable, Equatable {
             .joined()
             .trimmingCharacters(in: .whitespaces)
         let stem = cleaned.isEmpty ? "camcord" : cleaned
-        return "\(stem) \(formatter.string(from: date)).mov"
+        return "\(stem) \(formatter.string(from: date)).\(effectiveContainer.ext)"
     }
 
     /// The user's chosen folder, or `~/Movies/camcord`, created on first use.
@@ -138,16 +152,17 @@ struct RecordingSettings: Codable, Equatable {
     func uniqueOutputURL(in directory: URL, date: Date, fileManager: FileManager = .default) -> URL {
         let base = filename(date: date)
         let stem = (base as NSString).deletingPathExtension
+        let ext = (base as NSString).pathExtension
         var candidate = directory.appendingPathComponent(base)
         var counter = 2
         while fileManager.fileExists(atPath: candidate.path), counter < 100 {
-            candidate = directory.appendingPathComponent("\(stem) (\(counter)).mov")
+            candidate = directory.appendingPathComponent("\(stem) (\(counter)).\(ext)")
             counter += 1
         }
         // Pathological bound (99 same-second collisions): never return a path that
         // still exists — fall back to a unique suffix.
         if fileManager.fileExists(atPath: candidate.path) {
-            candidate = directory.appendingPathComponent("\(stem) \(UUID().uuidString.prefix(8)).mov")
+            candidate = directory.appendingPathComponent("\(stem) \(UUID().uuidString.prefix(8)).\(ext)")
         }
         return candidate
     }

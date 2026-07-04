@@ -240,6 +240,20 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
     }
 
+    /// A brief green pulse on the status glyph confirming a capture landed — the visual
+    /// companion to the capture sound, for muted/noisy environments. Fired after the
+    /// capture already succeeded, so it costs nothing on the hot path.
+    func flashSuccess() {
+        guard let button = statusItem.button else { return }
+        failureFlashTask?.cancel()
+        button.contentTintColor = .systemGreen
+        failureFlashTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(220))
+            guard !Task.isCancelled else { return }
+            self?.restoreTintForCurrentState()
+        }
+    }
+
     private var failureFlashTask: Task<Void, Never>?
 
     private func restoreTintForCurrentState() {

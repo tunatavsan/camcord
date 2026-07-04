@@ -74,6 +74,7 @@ final class RecordingEngine: NSObject {
             resolutionScale: settings.resolutionScale
         )
 
+        configuration.showsCursor = settings.showsCursor
         configuration.capturesAudio = settings.systemAudio
         configuration.excludesCurrentProcessAudio = true
         configuration.sampleRate = 48_000
@@ -89,6 +90,7 @@ final class RecordingEngine: NSObject {
 
         let writer = try StreamWriter(
             outputURL: outputURL,
+            container: settings.effectiveContainer,
             codec: codec,
             bitrateMbps: settings.bitrateMbps,
             pixelWidth: pixelWidth,

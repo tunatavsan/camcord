@@ -229,10 +229,12 @@ final class RecordingController {
             uiState = .recording
             pushUI()
             FeedbackSound.recordStart.play()
-            // A subtle glow around a recorded window (never full-screen/region, and
-            // never captured — it is a separate window).
+            // A subtle static glow around a recorded window (never full-screen/region,
+            // and never captured — it is a separate window). Clicking it stops.
             if settings.windowGlowEnabled, case .window(let window) = target {
-                indicator.showWindow(window.windowID)
+                indicator.showWindow(window.windowID) { [weak self] in
+                    Task { await self?.toggleRecording() }
+                }
             }
         } catch {
             fail("Recording start failed: \(error)")

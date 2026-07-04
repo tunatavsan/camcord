@@ -17,6 +17,10 @@ final class CaptureCoordinator {
     /// so it costs nothing on the capture hot path.
     var onFailure: (() -> Void)?
 
+    /// Wired to the status item's success flash — a visual "it landed" to pair with
+    /// the capture sound.
+    var onSuccess: (() -> Void)?
+
     /// One capture flow at a time: the overlay's own isPresenting only covers the
     /// on-screen phase, not the post-hide delay + SCK call after it — a re-press in
     /// that window would open a NEW overlay whose chrome gets baked into the still-
@@ -203,7 +207,7 @@ final class CaptureCoordinator {
                 fail("captureFullScreen: clipboard write failed")
                 return
             }
-            FeedbackSound.fullScreenShot.play()
+            succeeded(.fullScreenShot)
         } catch {
             fail("captureFullScreen: capture failed: \(error)")
         }
@@ -218,7 +222,7 @@ final class CaptureCoordinator {
                 fail("Region capture: clipboard write failed")
                 return
             }
-            FeedbackSound.regionShot.play()
+            succeeded(.regionShot)
         } catch {
             fail("Region capture failed: \(error)")
         }
@@ -240,7 +244,7 @@ final class CaptureCoordinator {
                 fail("Window capture: clipboard write failed")
                 return
             }
-            FeedbackSound.windowShot.play()
+            succeeded(.windowShot)
         } catch {
             fail("Window capture failed: \(error)")
         }
@@ -261,7 +265,7 @@ final class CaptureCoordinator {
                 fail("Text capture: clipboard write failed")
                 return
             }
-            FeedbackSound.textOCR.play()
+            succeeded(.textOCR)
         } catch {
             fail("Text recognition failed: \(error)")
         }
@@ -283,6 +287,12 @@ final class CaptureCoordinator {
             return false
         }
         return true
+    }
+
+    /// Success feedback: the action's distinct sound + a brief status-glyph flash.
+    private func succeeded(_ sound: FeedbackSound) {
+        sound.play()
+        onSuccess?()
     }
 
     private func fail(_ message: String) {

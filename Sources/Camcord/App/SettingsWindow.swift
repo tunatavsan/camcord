@@ -222,6 +222,11 @@ struct RecordingSettingsView: View {
                     Text("H.264 (uyumlu)").tag(VideoCodecChoice.h264)
                     Text("ProRes 422 (en yüksek kalite, büyük)").tag(VideoCodecChoice.proRes422)
                 }
+                Picker("Kapsayıcı", selection: $settings.container) {
+                    Text("MOV").tag(VideoContainer.mov)
+                    Text("MP4 (en uyumlu)").tag(VideoContainer.mp4)
+                }
+                .disabled(settings.codec == .proRes422)
                 Picker("Bit hızı", selection: $settings.bitrateMbps) {
                     ForEach(Self.bitrateOptions, id: \.self) { mbps in
                         Text(mbps == 0 ? "Otomatik" : "\(mbps) Mbps").tag(mbps)
@@ -231,11 +236,13 @@ struct RecordingSettingsView: View {
                 Picker("Kare hızı", selection: $settings.fps) {
                     Text("30 fps").tag(30)
                     Text("60 fps").tag(60)
+                    Text("120 fps").tag(120)
                 }
                 Picker("Çözünürlük", selection: $settings.resolutionScale) {
                     Text("Retina (tam)").tag(ResolutionScale.native)
                     Text("Standart (1x)").tag(ResolutionScale.oneX)
                 }
+                Toggle("İmleci kaydet", isOn: $settings.showsCursor)
             }
 
             Section("Ses") {
