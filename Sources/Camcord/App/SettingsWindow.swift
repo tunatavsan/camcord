@@ -192,6 +192,7 @@ struct RecordingSettingsView: View {
 
     @State private var settings: RecordingSettings
     @State private var recents: [RecordingItem] = []
+    @State private var audioInputs: [AVCaptureDevice] = []
 
     private static let bitrateOptions = [0, 10, 20, 40, 80]
 
@@ -231,6 +232,14 @@ struct RecordingSettingsView: View {
             Section("Ses") {
                 Toggle("Sistem sesini kaydet", isOn: $settings.systemAudio)
                 Toggle("Mikrofonu kaydet", isOn: $settings.microphone)
+                if settings.microphone {
+                    Picker("Mikrofon", selection: $settings.microphoneDeviceID) {
+                        Text("Varsayılan giriş").tag(String?.none)
+                        ForEach(audioInputs, id: \.uniqueID) { device in
+                            Text(device.localizedName).tag(String?.some(device.uniqueID))
+                        }
+                    }
+                }
             }
 
             Section("Gösterge") {
@@ -274,6 +283,13 @@ struct RecordingSettingsView: View {
         .formStyle(.grouped)
         .onChange(of: settings) { _, newValue in newValue.save(to: defaultsSuite) }
         .task(id: settings.outputDirectoryPath) { await loadRecents() }
+        .onAppear {
+            audioInputs = AVCaptureDevice.DiscoverySession(
+                deviceTypes: [.microphone, .external],
+                mediaType: .audio,
+                position: .unspecified
+            ).devices
+        }
     }
 
     private func chooseFolder() {
@@ -372,15 +388,13 @@ struct RecordingItem: Identifiable {
     }
 
     private static func thumbnail(for url: URL) async -> NSImage? {
-        await Task.detached(priority: .utility) { () -> NSImage? in
-            let asset = AVURLAsset(url: url)
-            let generator = AVAssetImageGenerator(asset: asset)
-            generator.appliesPreferredTrackTransform = true
-            generator.maximumSize = CGSize(width: 160, height: 100)
-            let time = CMTime(seconds: 0.2, preferredTimescale: 600)
-            guard let cg = try? generator.copyCGImage(at: time, actualTime: nil) else { return nil }
-            return NSImage(cgImage: cg, size: .zero)
-        }.value
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 160, height: 100)
+        let time = CMTime(seconds: 0.2, preferredTimescale: 600)
+        guard let result = try? await generator.image(at: time) else { return nil }
+        return NSImage(cgImage: result.image, size: .zero)
     }
 }
 

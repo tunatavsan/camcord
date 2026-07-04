@@ -16,9 +16,13 @@ final class PanelController: NSObject, NSPopoverDelegate {
         popover.behavior = .transient
         popover.animates = true
         popover.delegate = self
-        popover.contentViewController = NSHostingController(
-            rootView: CapturePanelView(model: model, actions: actions)
-        )
+        let hosting = NSHostingController(rootView: CapturePanelView(model: model, actions: actions))
+        // Keep the controller's preferredContentSize synced to the SwiftUI content's
+        // ideal size. Without a definite size the popover lays out in two passes and
+        // anchors its beak against the wrong (pre-resize) frame — the panel then opens
+        // a whole content-height below the status item instead of right under it.
+        hosting.sizingOptions = [.preferredContentSize]
+        popover.contentViewController = hosting
     }
 
     var isShown: Bool { popover.isShown }

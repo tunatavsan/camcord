@@ -76,7 +76,10 @@ final class RecordingEngine: NSObject {
         configuration.channelCount = 2
         if settings.microphone {
             configuration.captureMicrophone = true
-            configuration.microphoneCaptureDeviceID = AVCaptureDevice.default(for: .audio)?.uniqueID
+            // The chosen input, or the system default when none is set / it's gone.
+            let deviceID = settings.microphoneDeviceID
+                ?? AVCaptureDevice.default(for: .audio)?.uniqueID
+            configuration.microphoneCaptureDeviceID = deviceID
         }
 
         let writer = try StreamWriter(

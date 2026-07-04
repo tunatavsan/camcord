@@ -14,6 +14,8 @@ enum ResolutionScale: String, Codable, CaseIterable {
 struct RecordingSettings: Codable, Equatable {
     var systemAudio: Bool
     var microphone: Bool
+    /// The AVCaptureDevice.uniqueID of the mic to record; nil = system default input.
+    var microphoneDeviceID: String?
 
     // Quality
     var codec: VideoCodecChoice
@@ -36,6 +38,7 @@ struct RecordingSettings: Codable, Equatable {
     init(
         systemAudio: Bool = true,
         microphone: Bool = true,
+        microphoneDeviceID: String? = nil,
         codec: VideoCodecChoice = .hevc,
         bitrateMbps: Int = 0,
         fps: Int = 60,
@@ -46,6 +49,7 @@ struct RecordingSettings: Codable, Equatable {
     ) {
         self.systemAudio = systemAudio
         self.microphone = microphone
+        self.microphoneDeviceID = microphoneDeviceID
         self.codec = codec
         self.bitrateMbps = bitrateMbps
         self.fps = fps
@@ -62,6 +66,7 @@ struct RecordingSettings: Codable, Equatable {
         let d = RecordingSettings()
         systemAudio = try c.decodeIfPresent(Bool.self, forKey: .systemAudio) ?? d.systemAudio
         microphone = try c.decodeIfPresent(Bool.self, forKey: .microphone) ?? d.microphone
+        microphoneDeviceID = try c.decodeIfPresent(String.self, forKey: .microphoneDeviceID)
         codec = try c.decodeIfPresent(VideoCodecChoice.self, forKey: .codec) ?? d.codec
         bitrateMbps = try c.decodeIfPresent(Int.self, forKey: .bitrateMbps) ?? d.bitrateMbps
         fps = try c.decodeIfPresent(Int.self, forKey: .fps) ?? d.fps
