@@ -13,6 +13,10 @@ final class PanelController: NSObject, NSPopoverDelegate {
     /// flight, so its close doesn't arm the transient-auto-close reopen guard and
     /// swallow a legitimate status-button click that follows.
     private var isExplicitClose = false
+    /// Global mouse-down monitor: `.transient` reliably closes on clicks INSIDE our
+    /// process, but for a menu-bar agent app a click on the desktop or another app is
+    /// not always caught — this closes the panel (animated) on any such outside click.
+    private var outsideClickMonitor: Any?
 
     init(model: RecordingStateModel, actions: PanelActions) {
         self.model = model
@@ -45,6 +49,13 @@ final class PanelController: NSObject, NSPopoverDelegate {
         }
         model.panelOpenToken &+= 1
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            // A click landed in another app / the desktop while the panel is open.
+            // Global monitors never see our own process's events, so this can't fire
+            // for a status-item click. Animated close (matches the system panels).
+            self?.popover.performClose(nil)
+        }
     }
 
     func close() {
@@ -52,6 +63,13 @@ final class PanelController: NSObject, NSPopoverDelegate {
         // flag still holds when that late callback would otherwise stamp the guard.
         isExplicitClose = true
         popover.performClose(nil)
+    }
+
+    private func removeOutsideClickMonitor() {
+        if let outsideClickMonitor {
+            NSEvent.removeMonitor(outsideClickMonitor)
+            self.outsideClickMonitor = nil
+        }
     }
 
     /// Stamped in BOTH close delegate callbacks: `popoverDidClose` only fires after
@@ -69,6 +87,7 @@ final class PanelController: NSObject, NSPopoverDelegate {
 
     nonisolated func popoverDidClose(_ notification: Notification) {
         MainActor.assumeIsolated {
+            removeOutsideClickMonitor()
             if isExplicitClose {
                 isExplicitClose = false
                 return

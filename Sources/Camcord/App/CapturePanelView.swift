@@ -17,6 +17,10 @@ final class RecordingStateModel: ObservableObject {
     /// retained across shows, so `@State` persists and `onAppear` fires only once —
     /// this token re-reads persisted toggles per open.
     @Published var panelOpenToken = 0
+
+    /// UserDefaults key for the last finished recording's path (survives launches), so
+    /// the panel can always offer "reveal the last recording in Finder".
+    static let lastRecordingPathKey = "lastRecordingPath"
 }
 
 /// The panel's actions, injected by AppDelegate. Each closure owns its own
@@ -49,6 +53,7 @@ struct CapturePanelView: View {
     @State private var recordMicrophone = true
     @State private var soundEnabled = true
     @State private var isMicrophoneDenied = false
+    @State private var lastRecordingURL: URL?
 
     /// One physical signature for every elastic transition in the panel.
     static let panelSpring: Animation = .spring(response: 0.34, dampingFraction: 0.86)
@@ -207,6 +212,11 @@ struct CapturePanelView: View {
 
             Spacer()
 
+            if let url = lastRecordingURL {
+                FooterIconButton(symbol: "film", help: "Son kaydı Finder'da göster") {
+                    actions.revealRecording(url)
+                }
+            }
             FooterIconButton(symbol: "gearshape.fill", help: "Ayarlar", action: actions.openSettings)
         }
     }
@@ -220,6 +230,13 @@ struct CapturePanelView: View {
         soundEnabled = FeedbackSound.isEnabled()
         let micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
         isMicrophoneDenied = micStatus == .denied || micStatus == .restricted
+        // Offer "reveal last recording" only when one exists on disk.
+        if let path = UserDefaults.standard.string(forKey: RecordingStateModel.lastRecordingPathKey),
+            FileManager.default.fileExists(atPath: path) {
+            lastRecordingURL = URL(fileURLWithPath: path)
+        } else {
+            lastRecordingURL = nil
+        }
     }
 
     private func saveRecordingSettings() {
