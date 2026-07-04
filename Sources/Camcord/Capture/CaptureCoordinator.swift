@@ -105,7 +105,11 @@ final class CaptureCoordinator {
 
     // MARK: - Scrolling capture (full scrollable area → one tall image)
 
+    private let scrollIndicator = CaptureAreaIndicator()
+
     /// Pick a scroll area (region or window), then scroll + stitch it into one tall PNG.
+    /// Runs as a cancellable task with a blue on-screen indicator whose Stop button (and
+    /// Esc / any real click) end it early and keep whatever was captured so far.
     func captureScrollingInteractive() async {
         guard beginExclusiveCapture() else { return }
         defer { endExclusiveCapture() }
@@ -122,20 +126,63 @@ final class CaptureCoordinator {
             fail("Scroll capture: empty selection")
             return
         }
-        do {
-            let image = try await ScrollingCaptureService.capture(region: region)
-            // The stitched image is taller than the viewport; derive its point size
-            // from the captured pixel scale so DPI-aware pastes stay correct.
-            let scale = region.width > 0 ? CGFloat(image.width) / region.width : 2
-            let pointSize = CGSize(width: region.width, height: CGFloat(image.height) / max(scale, 0.01))
-            guard await ClipboardWriter.copyPNG(image, pointSize: pointSize, saveTo: screenshotSaveURL()) else {
-                fail("Scroll capture: clipboard write failed")
-                return
-            }
-            succeeded(.fullScreenShot)
-        } catch {
-            fail("Scroll capture failed: \(error)")
+        guard let display = await displayForRegion(region) else {
+            fail("Scroll capture: no display for the selection")
+            return
         }
+
+        let captureTask = Task { () -> CGImage? in
+            try? await ScrollingCaptureService.capture(region: region, display: display)
+        }
+        // Blue indicator + Stop pill; a real click/Esc anywhere also cancels.
+        scrollIndicator.show(cgRect: region, color: .systemBlue, label: "Kaydırılıyor · Durdur") {
+            captureTask.cancel()
+        }
+        let monitors = installCancelMonitors { captureTask.cancel() }
+
+        let image = await captureTask.value
+        scrollIndicator.hide()
+        removeMonitors(monitors)
+
+        guard let image else {
+            fail("Scroll capture failed")
+            return
+        }
+        // The stitched image is taller than the viewport; derive its point size from the
+        // captured pixel scale so DPI-aware pastes stay correct.
+        let scale = region.width > 0 ? CGFloat(image.width) / region.width : 2
+        let pointSize = CGSize(width: region.width, height: CGFloat(image.height) / max(scale, 0.01))
+        guard await ClipboardWriter.copyPNG(image, pointSize: pointSize, saveTo: screenshotSaveURL()) else {
+            fail("Scroll capture: clipboard write failed")
+            return
+        }
+        succeeded(.fullScreenShot)
+    }
+
+    /// The SCDisplay whose frame contains the region's center.
+    private func displayForRegion(_ region: CGRect) async -> SCDisplay? {
+        let center = CGPoint(x: region.midX, y: region.midY)
+        guard let content = try? await cache.content() else { return nil }
+        return content.displays.first { $0.frame.contains(center) } ?? content.displays.first
+    }
+
+    /// Esc, or any real click while a scroll capture runs, cancels it (the user taking
+    /// control back). Returns the monitor tokens to remove when done.
+    private func installCancelMonitors(_ cancel: @escaping () -> Void) -> [Any] {
+        var tokens: [Any] = []
+        let keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown], handler: { event in
+            if event.keyCode == 53 { cancel() }  // Esc
+        })
+        if let keyMonitor { tokens.append(keyMonitor) }
+        let mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { _ in
+            cancel()
+        })
+        if let mouseMonitor { tokens.append(mouseMonitor) }
+        return tokens
+    }
+
+    private func removeMonitors(_ tokens: [Any]) {
+        for token in tokens { NSEvent.removeMonitor(token) }
     }
 
     // MARK: - Hold-to-capture region (side button held; release = shoot)

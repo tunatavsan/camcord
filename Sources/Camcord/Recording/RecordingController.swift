@@ -16,7 +16,7 @@ final class RecordingController {
 
     private let coordinator: CaptureCoordinator
     private let engine = RecordingEngine()
-    private let indicator = RecordingIndicator()
+    private let indicator = CaptureAreaIndicator()
     private let logger = Logger(subsystem: "dev.tavsan.camcord", category: "recording-controller")
 
     /// Wired by AppDelegate to the status item; pushed on every state/elapsed change.
@@ -232,7 +232,7 @@ final class RecordingController {
             // A subtle static glow around a recorded window (never full-screen/region,
             // and never captured — it is a separate window). Clicking it stops.
             if settings.windowGlowEnabled, case .window(let window) = target {
-                indicator.showWindow(window.windowID) { [weak self] in
+                indicator.showWindow(window.windowID, color: .systemRed, label: nil) { [weak self] in
                     Task { await self?.toggleRecording() }
                 }
             }
