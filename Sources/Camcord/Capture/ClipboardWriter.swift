@@ -11,11 +11,6 @@ import os
 enum ClipboardWriter {
     private static let logger = Logger(subsystem: "dev.tavsan.camcord", category: "clipboard")
 
-    /// The last successfully copied capture's PNG bytes (density already embedded).
-    /// Backs "re-copy last capture" — the safety net for a clipboard-only workflow
-    /// where an absent-minded Cmd-C would otherwise lose the shot with no undo.
-    private static var lastPNG: Data?
-
     /// Encodes `image` as PNG and copies it to `pasteboard` (defaults to the general
     /// pasteboard; tests pass a named pasteboard so they never touch the real clipboard).
     /// Uses `NSBitmapImageRep` -> `.png` representation, not `writeObjects`/TIFF (slower encode path).
@@ -30,17 +25,6 @@ enum ClipboardWriter {
             logger.error("Failed to encode captured image as PNG")
             return false
         }
-        let wrote = write(png: png, to: pasteboard)
-        if wrote {
-            lastPNG = png
-        }
-        return wrote
-    }
-
-    /// Re-writes the last capture's exact pixels to the pasteboard (no re-shoot).
-    /// Returns false when nothing has been captured yet this run.
-    static func recopyLastCapture(to pasteboard: NSPasteboard = .general) -> Bool {
-        guard let png = lastPNG else { return false }
         return write(png: png, to: pasteboard)
     }
 

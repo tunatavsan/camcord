@@ -14,6 +14,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var recordingStateModel: RecordingStateModel?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Warm the feedback-sound cache so the first cue has zero setup latency.
+        FeedbackSound.preloadAll()
+
         let coordinator = CaptureCoordinator()
         captureCoordinator = coordinator
 
@@ -56,13 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         coordinator.onFailure = flashFailure
         recordingController.onFailure = flashFailure
 
-        var panelActions = makePanelActions(coordinator: coordinator, recordingController: recordingController)
-        panelActions.applyTapBindings = { [weak eventTapEngine] bindings in
-            eventTapEngine?.apply(bindings)
-        }
-        panelActions.activateApp = {
-            NSApp.activate(ignoringOtherApps: true)
-        }
+        let panelActions = makePanelActions(coordinator: coordinator, recordingController: recordingController)
         let panelController = PanelController(model: recordingStateModel, actions: panelActions)
         self.panelController = panelController
 
@@ -99,8 +96,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         actions.captureScreen = {
             afterClosingPanel { await coordinator.captureFullScreen() }
         }
-        actions.repeatLast = {
-            afterClosingPanel { await coordinator.captureLastRegion() }
+        actions.captureText = {
+            afterClosingPanel { await coordinator.captureTextRegionInteractive() }
         }
         actions.toggleRecording = { [weak recordingController] in
             let isIdle = recordingController?.uiState == .idle
@@ -111,6 +108,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Stopping is instant; keep the panel up so the row morphs back.
                 Task { await recordingController?.toggleRecording() }
             }
+        }
+        actions.recordFullScreen = { [weak recordingController] in
+            afterClosingPanel { await recordingController?.recordFullScreen() }
         }
         actions.pauseResume = { [weak recordingController] in
             recordingController?.pauseResume()

@@ -21,8 +21,6 @@ final class RecordingEngine: NSObject {
     }
 
     private let logger = Logger(subsystem: "dev.tavsan.camcord", category: "recording-engine")
-    private static let framesPerSecond: CMTimeScale = 60
-    private static let frameDuration = CMTime(value: 1, timescale: framesPerSecond)
 
     private let sampleQueue = DispatchQueue(label: "dev.tavsan.camcord.recording.samples")
 
@@ -42,7 +40,7 @@ final class RecordingEngine: NSObject {
     func start(target: Target, settings: RecordingSettings, outputURL: URL) async throws {
         guard stream == nil else { throw RecordingError.alreadyRecording }
 
-        let initialCodec = VideoCodecChoice.hevc
+        let initialCodec = settings.codec
         do {
             try await attemptStart(target: target, settings: settings, outputURL: outputURL, codec: initialCodec)
         } catch {
@@ -62,7 +60,15 @@ final class RecordingEngine: NSObject {
     }
 
     private func attemptStart(target: Target, settings: RecordingSettings, outputURL: URL, codec: VideoCodecChoice) async throws {
-        let (filter, configuration, pixelWidth, pixelHeight) = makeFilterAndConfiguration(target: target, codec: codec)
+        // 30 or 60 fps (clamped to a sane range); the video clock's timescale.
+        let fps = CMTimeScale(max(1, min(120, settings.fps)))
+        let frameDuration = CMTime(value: 1, timescale: fps)
+        let (filter, configuration, pixelWidth, pixelHeight) = makeFilterAndConfiguration(
+            target: target,
+            codec: codec,
+            frameDuration: frameDuration,
+            resolutionScale: settings.resolutionScale
+        )
 
         configuration.capturesAudio = settings.systemAudio
         configuration.excludesCurrentProcessAudio = true
@@ -76,9 +82,10 @@ final class RecordingEngine: NSObject {
         let writer = try StreamWriter(
             outputURL: outputURL,
             codec: codec,
+            bitrateMbps: settings.bitrateMbps,
             pixelWidth: pixelWidth,
             pixelHeight: pixelHeight,
-            frameDuration: Self.frameDuration,
+            frameDuration: frameDuration,
             includeSystemAudio: settings.systemAudio,
             includeMicrophone: settings.microphone
         )
@@ -124,15 +131,19 @@ final class RecordingEngine: NSObject {
 
     private func makeFilterAndConfiguration(
         target: Target,
-        codec: VideoCodecChoice
+        codec: VideoCodecChoice,
+        frameDuration: CMTime,
+        resolutionScale: ResolutionScale
     ) -> (SCContentFilter, SCStreamConfiguration, Int, Int) {
         let configuration = SCStreamConfiguration()
-        configuration.minimumFrameInterval = Self.frameDuration
+        configuration.minimumFrameInterval = frameDuration
         configuration.queueDepth = 6
         configuration.showsCursor = true
         configuration.pixelFormat = codec.pixelFormat
         configuration.colorSpaceName = codec.colorSpaceName
 
+        // For .oneX, the output is sized to logical points (SCK downscales from the
+        // native source); for .native it is full Retina pixels.
         let filter: SCContentFilter
         let pixelWidth: Int
         let pixelHeight: Int
@@ -141,19 +152,26 @@ final class RecordingEngine: NSObject {
         case .region(let clamp, let display):
             filter = SCContentFilter(display: display, excludingWindows: [])
             configuration.sourceRect = clamp.sourceRect
-            pixelWidth = clamp.pixelWidth
-            pixelHeight = clamp.pixelHeight
+            switch resolutionScale {
+            case .native:
+                pixelWidth = clamp.pixelWidth
+                pixelHeight = clamp.pixelHeight
+            case .oneX:
+                pixelWidth = RegionClamp.evenFloor(clamp.clampedRegion.width)
+                pixelHeight = RegionClamp.evenFloor(clamp.clampedRegion.height)
+            }
 
         case .window(let window):
             filter = SCContentFilter(desktopIndependentWindow: window)
-            let scale = CGFloat(filter.pointPixelScale)
+            let scale = resolutionScale == .native ? CGFloat(filter.pointPixelScale) : 1
             pixelWidth = RegionClamp.evenFloor(filter.contentRect.width * scale)
             pixelHeight = RegionClamp.evenFloor(filter.contentRect.height * scale)
 
         case .display(let display, let scale):
             filter = SCContentFilter(display: display, excludingWindows: [])
-            pixelWidth = RegionClamp.evenFloor(CGFloat(display.width) * scale)
-            pixelHeight = RegionClamp.evenFloor(CGFloat(display.height) * scale)
+            let effectiveScale = resolutionScale == .native ? scale : 1
+            pixelWidth = RegionClamp.evenFloor(CGFloat(display.width) * effectiveScale)
+            pixelHeight = RegionClamp.evenFloor(CGFloat(display.height) * effectiveScale)
         }
 
         configuration.width = pixelWidth

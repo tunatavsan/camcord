@@ -1,19 +1,34 @@
 import Foundation
 
-/// v1 surface for what a Tier-2 (mouse button / double-tap) binding can trigger.
+/// What a Tier-2 (mouse button / double-tap) binding can trigger.
 enum TapAction: String, Codable, CaseIterable {
     case captureRegion
     /// Mouse buttons only: hold the button, drag out the region while holding,
     /// release to shoot — one continuous gesture instead of press-then-click-drag.
-    /// (Meaningless for the double-tap gesture, which has no held phase.)
+    /// A tap-then-hold variant of the same button OCRs the region instead (see
+    /// `HoldGestureDetector`). Meaningless for the double-tap gesture (no held phase).
     case holdCaptureRegion
+    /// Paste the clipboard into the focused app (synthesized Cmd+V) — the wheel/
+    /// middle button so an image or text lands without reaching for Cmd+V.
+    case paste
     case toggleRecording
 }
 
-/// User-configurable Tier-2 bindings: mouse side buttons and the double-tap Right ⌘
-/// gesture. Persisted as JSON in `UserDefaults` (an injectable suite, so tests never
-/// touch the user's real defaults) under `TapBindings.defaultsKey`.
+/// Whether a hold-to-capture gesture shoots a screenshot or OCRs the region. Shared
+/// between the gesture detector and the capture coordinator.
+enum HoldCaptureMode: Equatable {
+    case screenshot
+    case text
+}
+
+/// User-configurable Tier-2 bindings: mouse buttons (wheel + two side buttons) and the
+/// double-tap Right ⌘ gesture. Persisted as JSON in `UserDefaults` (an injectable suite,
+/// so tests never touch the user's real defaults) under `TapBindings.defaultsKey`.
+///
+/// Naming: UI "button N" maps to CGEvent button (N-1) — UI 3 = wheel (CG 2), UI 4 =
+/// CG 3, UI 5 = CG 4.
 struct TapBindings: Codable, Equatable {
+    var mouseButton3: TapAction?
     var mouseButton4: TapAction?
     var mouseButton5: TapAction?
     var doubleTapRightCommand: TapAction?
@@ -21,17 +36,19 @@ struct TapBindings: Codable, Equatable {
     static let defaultsKey = "tapBindings"
 
     init(
+        mouseButton3: TapAction? = .paste,
         mouseButton4: TapAction? = .captureRegion,
         mouseButton5: TapAction? = .holdCaptureRegion,
         doubleTapRightCommand: TapAction? = nil
     ) {
+        self.mouseButton3 = mouseButton3
         self.mouseButton4 = mouseButton4
         self.mouseButton5 = mouseButton5
         self.doubleTapRightCommand = doubleTapRightCommand
     }
 
     var anyEnabled: Bool {
-        mouseButton4 != nil || mouseButton5 != nil || doubleTapRightCommand != nil
+        mouseButton3 != nil || mouseButton4 != nil || mouseButton5 != nil || doubleTapRightCommand != nil
     }
 
     /// Returns the persisted bindings, or the defaults if the key is absent or
@@ -49,6 +66,35 @@ struct TapBindings: Codable, Equatable {
     func save(to defaults: UserDefaults) {
         guard let data = try? JSONEncoder().encode(self) else { return }
         defaults.set(data, forKey: Self.defaultsKey)
+    }
+}
+
+/// Pure state machine that disambiguates a hold-to-capture button's two gestures:
+///   • press + hold + drag → SCREENSHOT the region
+///   • tap (quick press/release, no drag) then press + hold + drag → OCR the region
+/// The mode is decided at press time (was there a recent tap?); the caller reports on
+/// release whether a drag actually happened so a plain tap arms the next press for OCR.
+/// No clock calls — timestamps are supplied, so it's fully unit-testable.
+struct HoldGestureDetector {
+    /// Max gap from a tap's release to the next press for it to count as tap-then-hold.
+    static let tapWindow: TimeInterval = 0.4
+
+    private var lastTapReleaseTime: TimeInterval?
+
+    /// Call on button DOWN; returns the mode for the hold that may follow.
+    mutating func modeForPress(at time: TimeInterval) -> HoldCaptureMode {
+        if let last = lastTapReleaseTime, time - last <= Self.tapWindow {
+            lastTapReleaseTime = nil  // consumed by this press
+            return .text
+        }
+        lastTapReleaseTime = nil  // a stale tap outside the window never carries over
+        return .screenshot
+    }
+
+    /// Call on button UP. `dragged` = whether the press produced a drag. A no-drag
+    /// release is a tap and arms the OCR window for the next press.
+    mutating func registerRelease(dragged: Bool, at time: TimeInterval) {
+        lastTapReleaseTime = dragged ? nil : time
     }
 }
 

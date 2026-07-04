@@ -83,30 +83,4 @@ struct ClipboardWriterTests {
         #expect(rep.pixelsHigh == 8)
         #expect(rep.size == CGSize(width: 4, height: 4))
     }
-
-    @Test("recopyLastCapture re-writes the previous capture's exact PNG bytes")
-    @MainActor
-    func recopyRestoresLastCapture() async throws {
-        let pasteboard = NSPasteboard(name: NSPasteboard.Name("dev.tavsan.camcord.tests.recopy"))
-        guard let image = makeTestImage(width: 4, height: 4) else {
-            Issue.record("Failed to synthesize a test CGImage")
-            return
-        }
-
-        let copied = await ClipboardWriter.copyPNG(image, to: pasteboard)
-        #expect(copied)
-        guard let original = pasteboard.data(forType: .png) else {
-            Issue.record("Pasteboard has no PNG data after copyPNG")
-            return
-        }
-
-        // Something else takes over the pasteboard...
-        pasteboard.clearContents()
-        pasteboard.setString("clobbered", forType: .string)
-        #expect(pasteboard.data(forType: .png) == nil)
-
-        // ...and re-copy restores the identical bytes.
-        #expect(ClipboardWriter.recopyLastCapture(to: pasteboard))
-        #expect(pasteboard.data(forType: .png) == original)
-    }
 }

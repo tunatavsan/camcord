@@ -1,10 +1,9 @@
 import AVFoundation
 import AppKit
-import KeyboardShortcuts
 import SwiftUI
 
 /// Shared recording state for SwiftUI surfaces (the panel). Pushed by
-/// `RecordingController.onUIChange` via AppDelegate — single source of truth,
+/// `RecordingController.onUIChange` via AppDelegate — single source of truth, the
 /// same feed that drives the status-item glyph.
 @MainActor
 final class RecordingStateModel: ObservableObject {
@@ -12,7 +11,7 @@ final class RecordingStateModel: ObservableObject {
     @Published var elapsed: String?
     /// Bumped by PanelController on every show. The popover's hosting controller is
     /// retained across shows, so `@State` persists and `onAppear` fires only once —
-    /// this token is what resets the page and reloads persisted toggles per open.
+    /// this token re-reads persisted toggles per open.
     @Published var panelOpenToken = 0
 }
 
@@ -23,109 +22,32 @@ struct PanelActions {
     var captureRegion: () -> Void = {}
     var captureWindow: () -> Void = {}
     var captureScreen: () -> Void = {}
-    var repeatLast: () -> Void = {}
+    var captureText: () -> Void = {}
+    /// Start an interactive recording when idle; stop it otherwise.
     var toggleRecording: () -> Void = {}
+    var recordFullScreen: () -> Void = {}
     var pauseResume: () -> Void = {}
-    var applyTapBindings: (TapBindings) -> Void = { _ in }
-    /// Shortcut recorders need the app active to receive keystrokes; called when
-    /// the shortcuts page opens.
-    var activateApp: () -> Void = {}
     var openSettings: () -> Void = {}
 }
 
-enum PanelPage {
-    case main
-    case shortcuts
-}
-
-/// True inside the headless preview harness (`--render-panel`): AppKit-backed
-/// controls (KeyboardShortcuts.Recorder, menu Pickers) can't be rendered by
-/// ImageRenderer, so rows substitute static stand-ins with the same geometry.
-private struct PanelPreviewModeKey: EnvironmentKey {
-    static let defaultValue = false
-}
-
-extension EnvironmentValues {
-    var isPanelPreview: Bool {
-        get { self[PanelPreviewModeKey.self] }
-        set { self[PanelPreviewModeKey.self] = newValue }
-    }
-}
-
-/// The menu-bar panel, 264pt wide, two pages with a horizontal slide between them.
-///
-/// Main page — a quiet control surface with one bold element: the record row, which
-/// morphs from a single idle line into a live session bar (pulsing dot, monospaced
-/// elapsed, pause/stop) while recording. Shortcuts page — inline recorders for the
-/// daily-use keyboard shortcuts plus the mouse/gesture bindings (the full list,
-/// including the rarer ones, lives in Settings).
+/// The menu-bar panel: one quiet page, 268pt wide. A capture grid (region / window /
+/// full-screen / text), a recording row that morphs into a live session bar, and a
+/// footer of quick toggles plus the gear that opens the full Settings window.
+/// Everything heavier (shortcuts, mouse bindings, quality) lives in Settings.
 struct CapturePanelView: View {
     @ObservedObject var model: RecordingStateModel
     let actions: PanelActions
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var page: PanelPage
     @State private var recordSystemAudio = true
     @State private var recordMicrophone = true
-    @State private var captureSound = true
+    @State private var soundEnabled = true
     @State private var isMicrophoneDenied = false
-    @State private var tapBindings = TapBindings()
 
     /// One physical signature for every elastic transition in the panel.
     static let panelSpring: Animation = .spring(response: 0.34, dampingFraction: 0.86)
 
-    /// Explicit page heights so the popover's resize is animated BY SwiftUI (the
-    /// hosting controller's preferred size then moves through the same spring as the
-    /// page slide) instead of NSPopover snapping to the new size on its own clock.
-    /// Derived from the fixed row/spacing constants below — update together.
-    private static let mainPageHeight: CGFloat = 175
-    private static let shortcutsPageHeight: CGFloat = 437
-
-    init(model: RecordingStateModel, actions: PanelActions, initialPage: PanelPage = .main) {
-        self.model = model
-        self.actions = actions
-        _page = State(initialValue: initialPage)
-    }
-
     var body: some View {
-        ZStack(alignment: .top) {
-            if page == .main {
-                mainPage
-                    .transition(pageTransition(edge: .leading))
-            } else {
-                shortcutsPage
-                    .transition(pageTransition(edge: .trailing))
-            }
-        }
-        .frame(width: 264)
-        .frame(height: page == .main ? Self.mainPageHeight : Self.shortcutsPageHeight, alignment: .top)
-        .animation(reduceMotion ? nil : Self.panelSpring, value: page)
-        .onAppear(perform: reloadPersistedState)
-        .onChange(of: model.panelOpenToken) { _, _ in
-            // Fresh open: back to the main page, re-read persisted toggles (they may
-            // have changed via the Settings window while the panel was closed).
-            page = .main
-            reloadPersistedState()
-        }
-        .onChange(of: page) { _, newPage in
-            if newPage == .shortcuts {
-                actions.activateApp()
-            }
-        }
-    }
-
-    private func pageTransition(edge: Edge) -> AnyTransition {
-        reduceMotion
-            ? .opacity
-            : .asymmetric(
-                insertion: .move(edge: edge).combined(with: .opacity),
-                removal: .move(edge: edge).combined(with: .opacity)
-            )
-    }
-
-    // MARK: - Main page
-
-    private var mainPage: some View {
         VStack(spacing: 10) {
             captureGrid
 
@@ -138,62 +60,47 @@ struct CapturePanelView: View {
             footer
         }
         .padding(12)
+        .frame(width: 268)
+        .onAppear(perform: reloadPersistedState)
+        .onChange(of: model.panelOpenToken) { _, _ in reloadPersistedState() }
     }
 
-    /// Live labels: the hardcoded defaults would go stale the moment the user
-    /// rebinds a shortcut on the Kısayollar page or in Settings. The body re-renders
-    /// on every panel open (panelOpenToken), so these always read current.
-    private func shortcutHint(for name: KeyboardShortcuts.Name) -> String {
-        guard let shortcut = KeyboardShortcuts.getShortcut(for: name) else { return "—" }
-        return "\(shortcut)"
-    }
+    // MARK: - Capture grid
 
     private var captureGrid: some View {
         HStack(spacing: 6) {
-            CaptureTile(
-                symbol: "rectangle.dashed", title: "Bölge",
-                shortcut: shortcutHint(for: .captureRegion), action: actions.captureRegion
-            )
-            CaptureTile(
-                symbol: "macwindow", title: "Pencere",
-                shortcut: shortcutHint(for: .captureActiveWindow), action: actions.captureWindow
-            )
-            CaptureTile(
-                symbol: "display", title: "Ekran",
-                shortcut: shortcutHint(for: .captureFullScreen), action: actions.captureScreen
-            )
-            CaptureTile(
-                symbol: "arrow.counterclockwise", title: "Son bölge",
-                shortcut: shortcutHint(for: .repeatLastRegion), action: actions.repeatLast
-            )
+            CaptureTile(symbol: "rectangle.dashed", title: "Bölge", action: actions.captureRegion)
+            CaptureTile(symbol: "macwindow", title: "Pencere", action: actions.captureWindow)
+            CaptureTile(symbol: "display", title: "Ekran", action: actions.captureScreen)
+            CaptureTile(symbol: "text.viewfinder", title: "Metin", action: actions.captureText)
         }
     }
+
+    // MARK: - Recording row
 
     @ViewBuilder
     private var recordRow: some View {
         switch model.state {
         case .idle:
-            HoverScaleButton(action: actions.toggleRecording) { hovering in
-                HStack(spacing: 9) {
-                    ZStack {
-                        Circle()
-                            .fill(.red.opacity(hovering ? 0.22 : 0))
-                            .frame(width: 18, height: 18)
-                        Circle()
-                            .fill(.red)
-                            .frame(width: 8, height: 8)
+            HStack(spacing: 6) {
+                HoverScaleButton(action: actions.toggleRecording) { hovering in
+                    HStack(spacing: 9) {
+                        ZStack {
+                            Circle().fill(.red.opacity(hovering ? 0.22 : 0)).frame(width: 18, height: 18)
+                            Circle().fill(.red).frame(width: 8, height: 8)
+                        }
+                        Text("Kayıt başlat")
+                            .font(.system(size: 13, weight: .medium))
+                        Spacer()
                     }
-                    Text("Kayıt başlat")
-                        .font(.system(size: 13, weight: .medium))
-                    Spacer()
-                    KeyCap(shortcutHint(for: .toggleRecording))
+                    .padding(.horizontal, 11)
+                    .frame(height: 40)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color.primary.opacity(hovering ? 0.07 : 0.045))
+                    )
                 }
-                .padding(.horizontal, 11)
-                .frame(height: 40)
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(Color.primary.opacity(hovering ? 0.07 : 0.045))
-                )
+                RecordTargetButton(symbol: "display", help: "Tüm ekranı kaydet", action: actions.recordFullScreen)
             }
 
         case .recording, .paused:
@@ -203,8 +110,6 @@ struct CapturePanelView: View {
                     .font(.system(size: 14, weight: .semibold))
                     .monospacedDigit()
                     .contentTransition(.numericText())
-                    // numericText only animates inside a transaction; elapsed is
-                    // assigned plainly every second, so drive it explicitly.
                     .animation(reduceMotion ? nil : .default, value: model.elapsed)
                 if model.state == .paused {
                     Text("duraklatıldı")
@@ -214,23 +119,14 @@ struct CapturePanelView: View {
                 Spacer()
                 RoundIconButton(
                     symbol: model.state == .paused ? "play.fill" : "pause.fill",
-                    help: model.state == .paused
-                        ? "Sürdür (\(shortcutHint(for: .pauseRecording)))"
-                        : "Duraklat (\(shortcutHint(for: .pauseRecording)))",
+                    help: model.state == .paused ? "Sürdür" : "Duraklat",
                     action: actions.pauseResume
                 )
-                RoundIconButton(
-                    symbol: "stop.fill", tint: .red,
-                    help: "Kaydı bitir (\(shortcutHint(for: .toggleRecording)))",
-                    action: actions.toggleRecording
-                )
+                RoundIconButton(symbol: "stop.fill", tint: .red, help: "Kaydı bitir", action: actions.toggleRecording)
             }
             .padding(.horizontal, 11)
             .frame(height: 40)
             .background(
-                // Three-color state language: red = live, orange = paused, neutral =
-                // idle. The paused container follows the dot to orange instead of
-                // staying a dimmed red alert.
                 RoundedRectangle(cornerRadius: 10)
                     .fill((model.state == .paused ? Color.orange : .red).opacity(model.state == .paused ? 0.07 : 0.11))
                     .overlay(
@@ -244,6 +140,8 @@ struct CapturePanelView: View {
             )
         }
     }
+
+    // MARK: - Footer
 
     private var footer: some View {
         HStack(spacing: 5) {
@@ -261,54 +159,14 @@ struct CapturePanelView: View {
             ) {
                 saveRecordingSettings()
             }
-            ToggleChip(onSymbol: "bell.fill", offSymbol: "bell.slash.fill", help: "Çekim sesi çal", isOn: $captureSound) {
-                CaptureFeedback.setEnabled(captureSound)
+            ToggleChip(onSymbol: "bell.fill", offSymbol: "bell.slash.fill", help: "Geri bildirim sesleri", isOn: $soundEnabled) {
+                FeedbackSound.setEnabled(soundEnabled)
             }
 
             Spacer()
 
-            FooterTextButton(title: "Kısayollar", trailingSymbol: "chevron.right") {
-                page = .shortcuts
-            }
             FooterIconButton(symbol: "gearshape.fill", help: "Ayarlar", action: actions.openSettings)
         }
-    }
-
-    // MARK: - Shortcuts page
-
-    private var shortcutsPage: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ZStack {
-                Text("Kısayollar")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                HStack {
-                    FooterTextButton(title: "Geri", leadingSymbol: "chevron.left") {
-                        page = .main
-                    }
-                    Spacer()
-                }
-            }
-            .padding(.bottom, 2)
-
-            ShortcutRow(title: "Bölge çek", name: .captureRegion)
-            ShortcutRow(title: "Aktif pencere", name: .captureActiveWindow)
-            ShortcutRow(title: "Tüm ekran", name: .captureFullScreen)
-            ShortcutRow(title: "Son bölgeyi tekrarla", name: .repeatLastRegion)
-            ShortcutRow(title: "Metni çek (OCR)", name: .captureTextRegion)
-            ShortcutRow(title: "Renk seç", name: .sampleColor)
-            ShortcutRow(title: "Kayıt başlat/durdur", name: .toggleRecording)
-            ShortcutRow(title: "Kayıt duraklat", name: .pauseRecording)
-
-            PanelDivider()
-                .padding(.vertical, 2)
-
-            BindingRow(title: "Fare düğmesi 4", selection: $tapBindings.mouseButton4, includeHold: true, onChange: saveTapBindings)
-            BindingRow(title: "Fare düğmesi 5", selection: $tapBindings.mouseButton5, includeHold: true, onChange: saveTapBindings)
-            BindingRow(title: "Çift dokunuş Sağ ⌘", selection: $tapBindings.doubleTapRightCommand, includeHold: false, onChange: saveTapBindings)
-        }
-        .padding(12)
     }
 
     // MARK: - Persistence
@@ -317,19 +175,16 @@ struct CapturePanelView: View {
         let settings = RecordingSettings.load(from: .standard)
         recordSystemAudio = settings.systemAudio
         recordMicrophone = settings.microphone
-        captureSound = CaptureFeedback.isEnabled()
-        tapBindings = TapBindings.load(from: .standard)
+        soundEnabled = FeedbackSound.isEnabled()
         let micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
         isMicrophoneDenied = micStatus == .denied || micStatus == .restricted
     }
 
     private func saveRecordingSettings() {
-        RecordingSettings(systemAudio: recordSystemAudio, microphone: recordMicrophone).save(to: .standard)
-    }
-
-    private func saveTapBindings() {
-        tapBindings.save(to: .standard)
-        actions.applyTapBindings(tapBindings)
+        var settings = RecordingSettings.load(from: .standard)
+        settings.systemAudio = recordSystemAudio
+        settings.microphone = recordMicrophone
+        settings.save(to: .standard)
     }
 }
 
@@ -340,7 +195,6 @@ struct CapturePanelView: View {
 private struct CaptureTile: View {
     let symbol: String
     let title: String
-    let shortcut: String
     let action: () -> Void
 
     var body: some View {
@@ -359,32 +213,11 @@ private struct CaptureTile: View {
             .frame(maxWidth: .infinity)
             .frame(height: 52)
             .background(
-                // Hover delta matched to the panel's other controls (Δ~0.065) — the
-                // most-hovered tiles shouldn't give the weakest feedback.
                 RoundedRectangle(cornerRadius: 10)
                     .fill(Color.primary.opacity(hovering ? 0.11 : 0.045))
             )
         }
-        .help("\(title) (\(shortcut))")
-    }
-}
-
-/// Keyboard-shortcut chip, e.g. ⌘⇧9.
-private struct KeyCap: View {
-    let text: String
-
-    init(_ text: String) { self.text = text }
-
-    var body: some View {
-        Text(text)
-            .font(.system(size: 10.5, weight: .medium, design: .rounded))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2.5)
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(Color.primary.opacity(0.06))
-            )
+        .help(title)
     }
 }
 
@@ -421,8 +254,6 @@ private struct RoundIconButton: View {
                 .foregroundStyle(tint.map(AnyShapeStyle.init) ?? AnyShapeStyle(.primary))
                 .frame(width: 26, height: 26)
                 .background(
-                    // A tinted action (the destructive stop) gets a matching tinted
-                    // container so it reads at a glance, not just by glyph color.
                     Circle()
                         .fill((tint ?? Color.primary).opacity(
                             tint == nil ? (hovering ? 0.13 : 0.07) : (hovering ? 0.16 : 0.09)
@@ -433,8 +264,29 @@ private struct RoundIconButton: View {
     }
 }
 
-/// Footer toggle: filled symbol when on, slashed + faint when off. `warning` tints
-/// the symbol orange (e.g. mic wanted but the OS permission is denied).
+/// Secondary recording target next to the primary "Kayıt başlat" (e.g. full screen).
+private struct RecordTargetButton: View {
+    let symbol: String
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        HoverScaleButton(action: action) { hovering in
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(hovering ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                .frame(width: 40, height: 40)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(Color.primary.opacity(hovering ? 0.07 : 0.045))
+                )
+        }
+        .help(help)
+    }
+}
+
+/// Footer toggle: filled symbol when on, slashed + faint when off. `warning` tints the
+/// symbol orange (e.g. mic wanted but the OS permission is denied).
 private struct ToggleChip: View {
     let onSymbol: String
     let offSymbol: String
@@ -457,8 +309,6 @@ private struct ToggleChip: View {
                 )
                 .frame(width: 26, height: 24)
                 .background(
-                    // Hover must register in BOTH states — the defaults are all-on,
-                    // so an ON-only fill would make these read as inert.
                     RoundedRectangle(cornerRadius: 7)
                         .fill(Color.primary.opacity(isOn ? (hovering ? 0.12 : 0.08) : (hovering ? 0.05 : 0)))
                 )
@@ -488,109 +338,6 @@ private struct FooterIconButton: View {
     }
 }
 
-private struct FooterTextButton: View {
-    var title: String
-    var leadingSymbol: String? = nil
-    var trailingSymbol: String? = nil
-    let action: () -> Void
-
-    var body: some View {
-        HoverScaleButton(action: action) { hovering in
-            HStack(spacing: 3) {
-                if let leadingSymbol {
-                    Image(systemName: leadingSymbol)
-                        .font(.system(size: 8, weight: .semibold))
-                }
-                Text(title)
-                    .font(.system(size: 11, weight: .medium))
-                if let trailingSymbol {
-                    Image(systemName: trailingSymbol)
-                        .font(.system(size: 8, weight: .semibold))
-                }
-            }
-            .foregroundStyle(hovering ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-            .padding(.horizontal, 7)
-            .frame(height: 24)
-            .background(
-                RoundedRectangle(cornerRadius: 7)
-                    .fill(Color.primary.opacity(hovering ? 0.07 : 0))
-            )
-        }
-    }
-}
-
-/// One shortcut-editing row: label left, live recorder right.
-private struct ShortcutRow: View {
-    let title: String
-    let name: KeyboardShortcuts.Name
-    @Environment(\.isPanelPreview) private var isPanelPreview
-
-    @MainActor private var currentShortcutLabel: String {
-        guard let shortcut = KeyboardShortcuts.getShortcut(for: name) else { return "kaydet" }
-        return "\(shortcut)"
-    }
-
-    var body: some View {
-        HStack {
-            Text(title)
-                .font(.system(size: 12))
-            Spacer()
-            if isPanelPreview {
-                KeyCap(currentShortcutLabel)
-            } else {
-                KeyboardShortcuts.Recorder(for: name)
-                    .controlSize(.small)
-            }
-        }
-        .frame(height: 26)
-    }
-}
-
-/// One tap-binding row: label left, compact menu picker right. `includeHold` adds the
-/// hold-to-capture option (mouse buttons only — the double-tap gesture has no held phase).
-private struct BindingRow: View {
-    let title: String
-    @Binding var selection: TapAction?
-    var includeHold: Bool = false
-    let onChange: () -> Void
-    @Environment(\.isPanelPreview) private var isPanelPreview
-
-    private var selectionLabel: String {
-        switch selection {
-        case .none: "Kapalı"
-        case .captureRegion: "Bölge çek"
-        case .holdCaptureRegion: "Basılı tut"
-        case .toggleRecording: "Kayıt"
-        }
-    }
-
-    var body: some View {
-        HStack {
-            Text(title)
-                .font(.system(size: 12))
-            Spacer()
-            if isPanelPreview {
-                KeyCap(selectionLabel)
-            } else {
-                Picker("", selection: $selection) {
-                    Text("Kapalı").tag(TapAction?.none)
-                    Text("Bölge çek").tag(TapAction?.some(.captureRegion))
-                    if includeHold {
-                        Text("Basılı tut → bölge").tag(TapAction?.some(.holdCaptureRegion))
-                    }
-                    Text("Kayıt").tag(TapAction?.some(.toggleRecording))
-                }
-                .pickerStyle(.menu)
-                .controlSize(.small)
-                .labelsHidden()
-                .frame(width: 130)
-                .onChange(of: selection) { _, _ in onChange() }
-            }
-        }
-        .frame(height: 26)
-    }
-}
-
 private struct PanelDivider: View {
     var body: some View {
         Rectangle()
@@ -599,8 +346,8 @@ private struct PanelDivider: View {
     }
 }
 
-/// Shared hover + press treatment: content closure receives the hover flag; the
-/// button applies a gentle press scale. One motion language for every control.
+/// Shared hover + press treatment: content closure receives the hover flag; the button
+/// applies a gentle press scale. One motion language for every control.
 private struct HoverScaleButton<Content: View>: View {
     let action: () -> Void
     @ViewBuilder let content: (Bool) -> Content
@@ -635,4 +382,3 @@ private struct PressScaleStyle: ButtonStyle {
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
-

@@ -39,6 +39,7 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     init(
         outputURL: URL,
         codec: VideoCodecChoice,
+        bitrateMbps: Int,
         pixelWidth: Int,
         pixelHeight: Int,
         frameDuration: CMTime,
@@ -58,7 +59,7 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         // Capture-side colorSpaceName and these encode-side properties MUST stay
         // matched (VideoCodecChoice owns both) or colors wash out (TN QA1839 / -12917).
         videoSettings[AVVideoColorPropertiesKey] = codec.colorProperties
-        if let compressionProperties = codec.compressionProperties {
+        if let compressionProperties = codec.compressionProperties(bitrateMbps: bitrateMbps) {
             videoSettings[AVVideoCompressionPropertiesKey] = compressionProperties
         }
         videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
@@ -265,34 +266,41 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
 /// Owns BOTH sides of the color contract: the capture-side pixel format/color space
 /// on `SCStreamConfiguration` and the encode-side codec/color properties on the
 /// writer input. Keeping them in one type is what guarantees they stay matched.
-enum VideoCodecChoice {
+///
+/// Also the user-facing codec choice (persisted in `RecordingSettings`): HEVC (default,
+/// small + high quality), H.264 (compatible), ProRes 422 (near-lossless, large — the
+/// "use the whole machine" option; hardware-encoded on Apple Silicon).
+enum VideoCodecChoice: String, Codable, CaseIterable {
     case hevc
     case h264
+    case proRes422
 
     var avCodec: AVVideoCodecType {
         switch self {
         case .hevc: .hevc
         case .h264: .h264
+        case .proRes422: .proRes422
         }
     }
 
+    /// ProRes and HEVC both capture 10-bit P3; H.264 stays 8-bit sRGB.
     var pixelFormat: OSType {
         switch self {
-        case .hevc: kCVPixelFormatType_ARGB2101010LEPacked
+        case .hevc, .proRes422: kCVPixelFormatType_ARGB2101010LEPacked
         case .h264: kCVPixelFormatType_32BGRA
         }
     }
 
     var colorSpaceName: CFString {
         switch self {
-        case .hevc: CGColorSpace.displayP3
+        case .hevc, .proRes422: CGColorSpace.displayP3
         case .h264: CGColorSpace.sRGB
         }
     }
 
     var colorProperties: [String: Any] {
         switch self {
-        case .hevc:
+        case .hevc, .proRes422:
             [
                 AVVideoColorPrimariesKey: AVVideoColorPrimaries_P3_D65,
                 AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
@@ -307,19 +315,27 @@ enum VideoCodecChoice {
         }
     }
 
-    /// The HEVC path captures 10-bit (`ARGB2101010LEPacked`); without an explicit
-    /// Main10 profile the encoder may default to 8-bit Main and silently truncate.
-    var compressionProperties: [String: Any]? {
+    /// Compression properties for this codec at the given bitrate (Mbps; 0 = auto).
+    /// ProRes is quality-based and ignores bitrate.
+    func compressionProperties(bitrateMbps: Int) -> [String: Any]? {
+        var props: [String: Any] = [:]
         switch self {
         case .hevc:
-            [AVVideoProfileLevelKey: kVTProfileLevel_HEVC_Main10_AutoLevel as String]
-        case .h264:
-            nil
+            // The HEVC path captures 10-bit; without an explicit Main10 profile the
+            // encoder may default to 8-bit Main and silently truncate.
+            props[AVVideoProfileLevelKey] = kVTProfileLevel_HEVC_Main10_AutoLevel as String
+        case .h264, .proRes422:
+            break
         }
+        if bitrateMbps > 0, self != .proRes422 {
+            props[AVVideoAverageBitRateKey] = bitrateMbps * 1_000_000
+        }
+        return props.isEmpty ? nil : props
     }
 
     var fallback: VideoCodecChoice? {
         switch self {
+        case .proRes422: .hevc
         case .hevc: .h264
         case .h264: nil
         }

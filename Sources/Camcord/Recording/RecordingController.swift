@@ -16,6 +16,7 @@ final class RecordingController {
 
     private let coordinator: CaptureCoordinator
     private let engine = RecordingEngine()
+    private let indicator = RecordingIndicator()
     private let logger = Logger(subsystem: "dev.tavsan.camcord", category: "recording-controller")
 
     /// Wired by AppDelegate to the status item; pushed on every state/elapsed change.
@@ -129,7 +130,7 @@ final class RecordingController {
         lastPauseToggle = now
         switch uiState {
         case .idle:
-            NSSound.beep()
+            FeedbackSound.error.play()
         case .recording:
             engine.pause()
             accumulatedElapsed += segmentStart.map { Date().timeIntervalSince($0) } ?? 0
@@ -137,12 +138,14 @@ final class RecordingController {
             stopElapsedTimer()
             uiState = .paused
             pushUI()
+            FeedbackSound.recordPause.play()
         case .paused:
             engine.resume()
             segmentStart = Date()
             startElapsedTimer()
             uiState = .recording
             pushUI()
+            FeedbackSound.recordResume.play()
         }
     }
 
@@ -211,8 +214,8 @@ final class RecordingController {
         }
 
         do {
-            let directory = try RecordingSettings.outputDirectory()
-            let url = RecordingSettings.uniqueOutputURL(in: directory, date: Date())
+            let directory = try settings.outputDirectory()
+            let url = settings.uniqueOutputURL(in: directory, date: Date())
             try await engine.start(target: target, settings: settings, outputURL: url)
 
             accumulatedElapsed = 0
@@ -220,6 +223,12 @@ final class RecordingController {
             startElapsedTimer()
             uiState = .recording
             pushUI()
+            FeedbackSound.recordStart.play()
+            // A subtle glow around a recorded window (never full-screen/region, and
+            // never captured — it is a separate window).
+            if settings.windowGlowEnabled, case .window(let window) = target {
+                indicator.showWindow(window.windowID)
+            }
         } catch {
             fail("Recording start failed: \(error)")
         }
@@ -237,6 +246,7 @@ final class RecordingController {
         stopElapsedTimer()
         segmentStart = nil
         uiState = .idle
+        indicator.hide()
         pushUI()
 
         // The finalize runs inside a tracked task so `isFinalizing` stays true (and
@@ -246,7 +256,7 @@ final class RecordingController {
             do {
                 let url = try await engine.stop()
                 copyFileURLToClipboard(url)
-                CaptureFeedback.playRecordingStopSound()
+                FeedbackSound.recordStop.play()
                 logger.notice("Recording finished: \(url.lastPathComponent, privacy: .public)")
             } catch {
                 fail("Recording stop/finalize failed: \(error)")
@@ -262,6 +272,7 @@ final class RecordingController {
         segmentStart = nil
         accumulatedElapsed = 0
         uiState = .idle
+        indicator.hide()
         pushUI()
         if let salvagedURL {
             // The engine salvaged the partial file -- hand it to the user the same
@@ -332,7 +343,7 @@ final class RecordingController {
 
     private func fail(_ message: String) {
         logger.error("\(message, privacy: .public)")
-        NSSound.beep()
+        FeedbackSound.error.play()
         onFailure?()
         PermissionRecovery.noteCaptureFailure()
     }

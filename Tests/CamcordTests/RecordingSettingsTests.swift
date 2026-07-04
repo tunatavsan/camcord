@@ -54,7 +54,7 @@ struct RecordingSettingsTests {
         expectedFormatter.calendar = calendar
         let expected = "camcord \(expectedFormatter.string(from: date)).mov"
 
-        #expect(RecordingSettings.filename(date: date) == expected)
+        #expect(defaultSettings.filename(date: date) == expected)
     }
 
     // MARK: - uniqueOutputURL (collision avoidance is safety-critical: downstream
@@ -67,6 +67,9 @@ struct RecordingSettingsTests {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
+
+    /// Default settings — the naming helpers are instance methods (prefix + folder).
+    private let defaultSettings = RecordingSettings()
 
     private var fixedDate: Date {
         var components = DateComponents()
@@ -84,8 +87,8 @@ struct RecordingSettingsTests {
         let directory = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let url = RecordingSettings.uniqueOutputURL(in: directory, date: fixedDate)
-        #expect(url.lastPathComponent == RecordingSettings.filename(date: fixedDate))
+        let url = defaultSettings.uniqueOutputURL(in: directory, date: fixedDate)
+        #expect(url.lastPathComponent == defaultSettings.filename(date: fixedDate))
         #expect(!FileManager.default.fileExists(atPath: url.path))
     }
 
@@ -94,15 +97,15 @@ struct RecordingSettingsTests {
         let directory = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let base = RecordingSettings.filename(date: fixedDate)
+        let base = defaultSettings.filename(date: fixedDate)
         let stem = (base as NSString).deletingPathExtension
         FileManager.default.createFile(atPath: directory.appendingPathComponent(base).path, contents: Data())
 
-        let second = RecordingSettings.uniqueOutputURL(in: directory, date: fixedDate)
+        let second = defaultSettings.uniqueOutputURL(in: directory, date: fixedDate)
         #expect(second.lastPathComponent == "\(stem) (2).mov")
 
         FileManager.default.createFile(atPath: second.path, contents: Data())
-        let third = RecordingSettings.uniqueOutputURL(in: directory, date: fixedDate)
+        let third = defaultSettings.uniqueOutputURL(in: directory, date: fixedDate)
         #expect(third.lastPathComponent == "\(stem) (3).mov")
     }
 
@@ -112,7 +115,7 @@ struct RecordingSettingsTests {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         // Exhaust the whole counter range: base + (2)...(99).
-        let base = RecordingSettings.filename(date: fixedDate)
+        let base = defaultSettings.filename(date: fixedDate)
         let stem = (base as NSString).deletingPathExtension
         FileManager.default.createFile(atPath: directory.appendingPathComponent(base).path, contents: Data())
         for counter in 2..<100 {
@@ -122,7 +125,7 @@ struct RecordingSettingsTests {
             )
         }
 
-        let url = RecordingSettings.uniqueOutputURL(in: directory, date: fixedDate)
+        let url = defaultSettings.uniqueOutputURL(in: directory, date: fixedDate)
         #expect(!FileManager.default.fileExists(atPath: url.path))
         #expect(url.pathExtension == "mov")
     }

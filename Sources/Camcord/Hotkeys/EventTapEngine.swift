@@ -43,6 +43,7 @@ final class EventTapEngine {
 
     private var bindings = TapBindings()
     private var doubleTapDetector = DoubleTapDetector()
+    private var holdGestureDetector = HoldGestureDetector()
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -71,6 +72,7 @@ final class EventTapEngine {
             return
         }
         doubleTapDetector = DoubleTapDetector()
+        holdGestureDetector = HoldGestureDetector()
         recreateTap()
     }
 
@@ -86,13 +88,15 @@ final class EventTapEngine {
         }
 
         var mask: CGEventMask = 0
-        if bindings.mouseButton4 != nil || bindings.mouseButton5 != nil {
+        if bindings.mouseButton3 != nil || bindings.mouseButton4 != nil || bindings.mouseButton5 != nil {
+            // The wheel (CG button 2) and the two side buttons (CG 3/4) all arrive as
+            // otherMouseDown/Up, distinguished by their button number.
             mask |= 1 << CGEventType.otherMouseDown.rawValue
             mask |= 1 << CGEventType.otherMouseUp.rawValue
         }
-        if bindings.mouseButton4 == .holdCaptureRegion || bindings.mouseButton5 == .holdCaptureRegion {
-            // Hold-to-capture drags the selection with the side button held; the
-            // moves arrive as otherMouseDragged (never mouseMoved) during the hold.
+        if [bindings.mouseButton3, bindings.mouseButton4, bindings.mouseButton5].contains(.holdCaptureRegion) {
+            // Hold-to-capture drags the selection with the button held; the moves
+            // arrive as otherMouseDragged (never mouseMoved) during the hold.
             mask |= 1 << CGEventType.otherMouseDragged.rawValue
         }
         if bindings.doubleTapRightCommand != nil {
@@ -241,15 +245,19 @@ final class EventTapEngine {
         }
     }
 
-    // MARK: - Mouse side buttons (fact 5)
+    // MARK: - Mouse buttons (wheel + two side buttons)
 
-    /// The side button currently driving a hold-to-capture session, if any.
+    /// The button currently driving a hold-to-capture session, if any, and whether it
+    /// has produced a drag yet (a no-drag release is a tap → arms the next hold for OCR).
     private var activeHoldButton: Int64?
+    private var activeHoldDragged = false
 
     private func handleMouseButton(type: CGEventType, button: Int64, location: CGPoint) -> Bool {
         // An active hold session ends on ITS button's release, wherever it lands.
         if type == .otherMouseUp, activeHoldButton == button {
             activeHoldButton = nil
+            holdGestureDetector.registerRelease(dragged: activeHoldDragged, at: nowTimestamp())
+            // finish shoots when a drag happened, cancels a no-drag tap.
             coordinator.finishHoldRegionSelection(atCGPoint: location)
             return true
         }
@@ -259,8 +267,14 @@ final class EventTapEngine {
             case .holdCaptureRegion:
                 guard activeHoldButton == nil else { return true }
                 activeHoldButton = button
-                coordinator.beginHoldRegionSelection(atCGPoint: location)
-            default:
+                activeHoldDragged = false
+                // The mode is decided at press: a recent tap on this button means the
+                // OCR variant (tap-then-hold), otherwise a plain screenshot hold.
+                let mode = holdGestureDetector.modeForPress(at: nowTimestamp())
+                coordinator.beginHoldRegionSelection(atCGPoint: location, mode: mode)
+            case .paste:
+                performPaste()
+            case .captureRegion, .toggleRecording:
                 perform(action)
             }
         }
@@ -273,17 +287,45 @@ final class EventTapEngine {
         // button number on a drag event isn't reliable across all mice, and while a
         // hold is active the drag IS the hold's drag. No active hold -> pass through.
         guard activeHoldButton != nil else { return false }
+        activeHoldDragged = true
         coordinator.updateHoldRegionSelection(toCGPoint: location)
         // The matching down was swallowed; a drag without its down would only
         // confuse the app underneath.
         return true
     }
 
+    /// UI "button N" → CGEvent button (N-1): wheel = CG 2 (UI 3), side buttons = CG 3/4.
     private func tapAction(forMouseButton button: Int64) -> TapAction? {
         switch button {
+        case 2: return bindings.mouseButton3
         case 3: return bindings.mouseButton4
         case 4: return bindings.mouseButton5
         default: return nil
+        }
+    }
+
+    /// A monotonic seconds timestamp for the gesture detectors (same clock domain as
+    /// the CGEvent timestamps used elsewhere).
+    private func nowTimestamp() -> TimeInterval {
+        MachTime.seconds(fromTicks: mach_absolute_time())
+    }
+
+    /// Synthesizes Cmd+V into the focused app so the clipboard (image or text) pastes
+    /// without reaching for the keyboard. Posted on the next tick so it never re-enters
+    /// this tap callback.
+    private func performPaste() {
+        FeedbackSound.paste.play()
+        DispatchQueue.main.async {
+            let source = CGEventSource(stateID: .combinedSessionState)
+            let vKey: CGKeyCode = 9  // kVK_ANSI_V
+            guard
+                let down = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: true),
+                let up = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: false)
+            else { return }
+            down.flags = .maskCommand
+            up.flags = .maskCommand
+            down.post(tap: .cghidEventTap)
+            up.post(tap: .cghidEventTap)
         }
     }
 
@@ -317,9 +359,11 @@ final class EventTapEngine {
             Task { await coordinator.captureRegionInteractive() }
         case .holdCaptureRegion:
             // Hold is driven inline from the button-down/drag/up events; if it ever
-            // reaches here (e.g. mis-assigned to the double-tap gesture, which has no
+            // reaches here (e.g. assigned to the double-tap gesture, which has no
             // held phase) fall back to the plain interactive region flow.
             Task { await coordinator.captureRegionInteractive() }
+        case .paste:
+            performPaste()
         case .toggleRecording:
             Task { await recordingController.toggleRecording() }
         }

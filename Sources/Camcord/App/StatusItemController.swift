@@ -16,10 +16,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let captureRegionItem = NSMenuItem(title: "Bölgeyi Çek", action: nil, keyEquivalent: "")
     private let captureActiveWindowItem = NSMenuItem(title: "Aktif Pencereyi Çek", action: nil, keyEquivalent: "")
     private let captureFullScreenItem = NSMenuItem(title: "Tüm Ekranı Çek", action: nil, keyEquivalent: "")
-    private let repeatLastRegionItem = NSMenuItem(title: "Son Bölgeyi Tekrarla", action: nil, keyEquivalent: "")
     private let captureTextItem = NSMenuItem(title: "Metni Çek (OCR)", action: nil, keyEquivalent: "")
-    private let sampleColorItem = NSMenuItem(title: "Renk Seç", action: nil, keyEquivalent: "")
-    private let recopyLastItem = NSMenuItem(title: "Son Çekimi Yeniden Kopyala", action: nil, keyEquivalent: "")
     private let recordToggleItem = NSMenuItem(title: "Kayda Başla…", action: nil, keyEquivalent: "")
     private let recordFullScreenItem = NSMenuItem(title: "Tüm Ekranı Kaydet", action: nil, keyEquivalent: "")
     private let pauseResumeItem = NSMenuItem(title: "Kaydı Duraklat", action: nil, keyEquivalent: "")
@@ -86,36 +83,21 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         captureFullScreenItem.setShortcut(for: .captureFullScreen)
         menu.addItem(captureFullScreenItem)
 
-        repeatLastRegionItem.target = self
-        repeatLastRegionItem.action = #selector(repeatLastRegion)
-        repeatLastRegionItem.setShortcut(for: .repeatLastRegion)
-        menu.addItem(repeatLastRegionItem)
-
         captureTextItem.target = self
         captureTextItem.action = #selector(captureTextRegion)
         captureTextItem.setShortcut(for: .captureTextRegion)
         menu.addItem(captureTextItem)
 
-        sampleColorItem.target = self
-        sampleColorItem.action = #selector(sampleColor)
-        sampleColorItem.setShortcut(for: .sampleColor)
-        menu.addItem(sampleColorItem)
-
-        recopyLastItem.target = self
-        recopyLastItem.action = #selector(recopyLastCapture)
-        recopyLastItem.setShortcut(for: .recopyLastCapture)
-        menu.addItem(recopyLastItem)
-
         menu.addItem(.separator())
 
+        // Recording is started from the panel/menu only (no keyboard default); the
+        // owner can bind pause/resume from Settings.
         recordToggleItem.target = self
         recordToggleItem.action = #selector(toggleRecording)
-        recordToggleItem.setShortcut(for: .toggleRecording)
         menu.addItem(recordToggleItem)
 
         recordFullScreenItem.target = self
         recordFullScreenItem.action = #selector(recordFullScreen)
-        recordFullScreenItem.setShortcut(for: .recordFullScreen)
         menu.addItem(recordFullScreenItem)
 
         pauseResumeItem.target = self
@@ -366,28 +348,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
     }
 
-    @objc private func repeatLastRegion() {
-        Task {
-            await coordinator.captureLastRegion()
-        }
-    }
-
     @objc private func captureTextRegion() {
         Task {
             // Opens the selection overlay — same menu-close wait as captureRegion.
             try? await Task.sleep(for: .milliseconds(200))
             await coordinator.captureTextRegionInteractive()
         }
-    }
-
-    @objc private func sampleColor() {
-        Task {
-            await coordinator.sampleColorToClipboard()
-        }
-    }
-
-    @objc private func recopyLastCapture() {
-        coordinator.recopyLastCapture()
     }
 
     // MARK: - Actions

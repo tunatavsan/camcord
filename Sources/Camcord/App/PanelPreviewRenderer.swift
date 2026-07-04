@@ -9,11 +9,10 @@ enum PanelPreviewRenderer {
     static func renderAll(to directory: URL) {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        let states: [(name: String, state: RecordingController.UIState, elapsed: String?, page: PanelPage)] = [
-            ("panel-idle", .idle, nil, .main),
-            ("panel-recording", .recording, "1:07", .main),
-            ("panel-paused", .paused, "1:07", .main),
-            ("panel-shortcuts", .idle, nil, .shortcuts),
+        let states: [(name: String, state: RecordingController.UIState, elapsed: String?)] = [
+            ("panel-idle", .idle, nil),
+            ("panel-recording", .recording, "1:07"),
+            ("panel-paused", .paused, "1:07"),
         ]
 
         for scheme in ["dark", "light"] {
@@ -21,15 +20,13 @@ enum PanelPreviewRenderer {
                 let model = RecordingStateModel()
                 model.state = entry.state
                 model.elapsed = entry.elapsed
-                // ImageRenderer can't render AppKit-backed views (NSVisualEffectView,
-                // recorders) — simulate the popover backdrop with a flat color and
-                // let isPanelPreview swap AppKit controls for static stand-ins.
+                // ImageRenderer can't render AppKit-backed views — simulate the
+                // popover backdrop with a flat color per scheme.
                 let backdrop = scheme == "dark"
                     ? Color(red: 0.16, green: 0.16, blue: 0.17)
                     : Color(red: 0.94, green: 0.94, blue: 0.95)
-                let view = CapturePanelView(model: model, actions: PanelActions(), initialPage: entry.page)
+                let view = CapturePanelView(model: model, actions: PanelActions())
                     .background(backdrop)
-                    .environment(\.isPanelPreview, true)
                     .environment(\.colorScheme, scheme == "dark" ? .dark : .light)
 
                 let renderer = ImageRenderer(content: view)

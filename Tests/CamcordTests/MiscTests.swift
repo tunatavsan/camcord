@@ -18,20 +18,20 @@ struct FormatElapsedTests {
     }
 }
 
-@Suite("CaptureFeedback")
-struct CaptureFeedbackTests {
+@Suite("FeedbackSound")
+struct FeedbackSoundTests {
     private func makeTestDefaults() -> UserDefaults {
-        UserDefaults(suiteName: "dev.tavsan.camcord.tests.capturefeedback.\(UUID().uuidString)")!
+        UserDefaults(suiteName: "dev.tavsan.camcord.tests.feedbacksound.\(UUID().uuidString)")!
     }
 
     @Test("defaults to enabled when the key is absent; explicit false persists")
     func defaultOnExplicitOff() {
         let defaults = makeTestDefaults()
-        #expect(CaptureFeedback.isEnabled(in: defaults) == true)
-        CaptureFeedback.setEnabled(false, in: defaults)
-        #expect(CaptureFeedback.isEnabled(in: defaults) == false)
-        CaptureFeedback.setEnabled(true, in: defaults)
-        #expect(CaptureFeedback.isEnabled(in: defaults) == true)
+        #expect(FeedbackSound.isEnabled(in: defaults) == true)
+        FeedbackSound.setEnabled(false, in: defaults)
+        #expect(FeedbackSound.isEnabled(in: defaults) == false)
+        FeedbackSound.setEnabled(true, in: defaults)
+        #expect(FeedbackSound.isEnabled(in: defaults) == true)
     }
 }
 

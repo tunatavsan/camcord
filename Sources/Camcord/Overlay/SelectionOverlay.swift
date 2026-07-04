@@ -73,6 +73,12 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     /// Starts a hold-to-capture session anchored at the button-down location.
     /// `onEnd` fires exactly once, on whichever exit path ends the session (release,
     /// Esc, display change, zero screens).
+    ///
+    /// The dim/selection panels are NOT shown yet — they appear only once the drag
+    /// crosses the movement threshold. So a plain tap (down + quick release, no drag)
+    /// shows nothing at all, which is exactly what the tap-then-hold OCR gesture needs
+    /// on its first tap, and the plain hold's overlay appears the instant you start
+    /// dragging (no down-time latency).
     func beginHoldSelection(atCGPoint cgPoint: CGPoint, onEnd: @escaping (SelectionResult?) -> Void) {
         guard !isPresenting else {
             onEnd(nil)
@@ -80,10 +86,6 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         }
         isPresenting = true
         holdEndHandler = onEnd
-        // No window-snap in hold mode: it is region-only, and the seeded highlight
-        // would just flicker under the anchor before the drag passes the threshold.
-        presentPanels(seedWindowSnap: false)
-        guard isPresenting else { return }  // zero-screens path already ended the session
         let point = cgToAppKitPoint(cgPoint)
         dragAnchor = point
         dragCurrent = point
@@ -98,6 +100,12 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
             let movement = hypot(point.x - anchor.x, point.y - anchor.y)
             guard movement >= Self.clickMovementThreshold else { return }
             isDragging = true
+            // First real drag: bring the panels up now (no window-snap in hold mode —
+            // it is region-only).
+            if panels.isEmpty {
+                presentPanels(seedWindowSnap: false)
+                guard isPresenting else { return }  // zero-screens path ended the session
+            }
         }
         updateRendering()
     }
