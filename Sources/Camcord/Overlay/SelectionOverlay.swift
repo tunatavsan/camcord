@@ -219,7 +219,14 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         if seedWindowSnap {
             snapGeneration &+= 1
             let generation = snapGeneration
-            Task { await updateWindowSnap(at: mouseLocation, generation: generation) }
+            Task {
+                // Prime the cache first so the very first highlight uses windows for
+                // the CURRENT space and z-order — native full-screen enters a new
+                // Space, so the last-known snapshot can momentarily lack the front
+                // window and the snap would fall through to a window behind it.
+                _ = try? await shareableContentCache.content()
+                await updateWindowSnap(at: mouseLocation, generation: generation)
+            }
         }
     }
 
