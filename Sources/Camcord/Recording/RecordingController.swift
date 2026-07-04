@@ -36,6 +36,10 @@ final class RecordingController {
     /// Guards the selection/starting window so a second hotkey press can't start a
     /// parallel flow (the overlay's own isPresenting guard covers the overlay part).
     private var isStarting = false
+    /// True ONLY while `engine.start()` is bringing the stream/writer up — the narrow
+    /// window where quitting would strand a half-open writer. (Distinct from `isStarting`,
+    /// which also spans the selection overlay, where nothing is open yet.)
+    private var isEngineStarting = false
 
     private var accumulatedElapsed: TimeInterval = 0
     private var segmentStart: Date?
@@ -51,6 +55,10 @@ final class RecordingController {
 
     /// True while a stopped recording is still finalizing its file on disk.
     var isFinalizing: Bool { stopTask != nil }
+
+    /// Anything in flight that app termination must not kill mid-way: an interactive
+    /// start (stream/writer coming up), a live session, or a finalize still writing.
+    var isBusy: Bool { isStarting || uiState != .idle || isFinalizing }
 
     /// Mirrors `lastPauseToggle`: with the status menu open, the menu key-equivalent
     /// AND the buffered Carbon hotkey can both deliver one ⌘⇧9 press, which would
@@ -113,6 +121,20 @@ final class RecordingController {
     /// pop the selection overlay while the app is trying to quit. If a stop is
     /// already finalizing, it waits for that instead of tearing down twice.
     func stopForTermination() async {
+        if let stopTask {
+            await stopTask.value
+            return
+        }
+        // A stream may be mid-`engine.start()` — killing the process now would leave a
+        // half-open, moov-less file. Wait out the ENGINE-start window (up to ~10s; the
+        // 20s AppDelegate failsafe backstops a truly wedged start) then stop whatever it
+        // became. We deliberately do NOT wait on the plain selection-overlay phase — no
+        // stream exists there, so quitting during it is safe and shouldn't be delayed.
+        var spins = 0
+        while isEngineStarting, spins < 400 {
+            try? await Task.sleep(for: .milliseconds(25))
+            spins += 1
+        }
         if let stopTask {
             await stopTask.value
             return
@@ -221,6 +243,8 @@ final class RecordingController {
         do {
             let directory = try settings.outputDirectory()
             let url = settings.uniqueOutputURL(in: directory, date: Date())
+            isEngineStarting = true
+            defer { isEngineStarting = false }
             try await engine.start(target: target, settings: settings, outputURL: url)
 
             accumulatedElapsed = 0
@@ -273,6 +297,11 @@ final class RecordingController {
                 FeedbackSound.recordStop.play()
                 onRecordingFinished?(url)
                 logger.notice("Recording finished: \(url.lastPathComponent, privacy: .public)")
+            } catch RecordingError.notRecording {
+                // The engine was already torn down by an unexpected-stop / writer-runtime-
+                // failure path, which owns the single failure report (onUnexpectedStop).
+                // Don't double-report — just clear the "finishing" state.
+                onFinishing?(false)
             } catch {
                 onFinishing?(false)
                 fail("Recording stop/finalize failed: \(error)")

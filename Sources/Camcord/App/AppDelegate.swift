@@ -59,9 +59,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recordingController.onFinishing = { [weak recordingStateModel] finishing in
             recordingStateModel?.isFinishing = finishing
         }
-        recordingController.onRecordingFinished = { [weak recordingStateModel] url in
-            recordingStateModel?.isFinishing = false
-            recordingStateModel?.finishedURL = url
+        recordingController.onRecordingFinished = { [weak self] url in
+            self?.recordingStateModel?.isFinishing = false
+            self?.recordingStateModel?.finishedURL = url
+            // Surface the "done" card even when the recording was stopped via a keyboard/
+            // mouse shortcut (panel closed) — pop the panel open (without the grid-reset)
+            // so the reveal/open actions are right there.
+            if let button = self?.statusItemController?.anchorButton {
+                self?.panelController?.present(relativeTo: button)
+            }
         }
 
         // Every failure beep gets a visual companion on the status glyph.
@@ -135,6 +141,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.panelController?.close()
             NSWorkspace.shared.activateFileViewerSelecting([url])
         }
+        actions.revealScreenshot = { [weak self] url in
+            self?.panelController?.close()
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
         actions.openRecording = { [weak self] url in
             self?.panelController?.close()
             NSWorkspace.shared.open(url)
@@ -172,11 +182,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if isTerminating {
             return .terminateLater
         }
-        // `.idle` alone is not "nothing in flight": stop() flips it immediately for
-        // UI feedback while the finalize is still writing the file (isFinalizing).
-        guard let recordingController,
-            recordingController.uiState != .idle || recordingController.isFinalizing
-        else {
+        // `.idle` alone is not "nothing in flight": a recording may be mid-start
+        // (isStarting) or its file still finalizing after stop (isFinalizing) — `isBusy`
+        // covers all three so quitting never kills a half-open or half-written file.
+        guard let recordingController, recordingController.isBusy else {
             return .terminateNow
         }
         isTerminating = true

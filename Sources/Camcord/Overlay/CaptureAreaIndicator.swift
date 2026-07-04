@@ -40,6 +40,10 @@ final class CaptureAreaIndicator {
         panel.level = .screenSaver
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
         panel.isReleasedWhenClosed = false
+        // A purely decorative frame (no pill, no action) must let every click AND scroll
+        // pass through to the window underneath — e.g. during a manual scrolling capture,
+        // the user scrolls the target through this border.
+        panel.ignoresMouseEvents = (label == nil && onStop == nil)
 
         let view = AreaBorderView(frame: CGRect(origin: .zero, size: panelFrame.size))
         view.targetRect = targetInView

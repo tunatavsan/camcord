@@ -8,6 +8,38 @@ enum ResolutionScale: String, Codable, CaseIterable {
     case oneX
 }
 
+/// A one-tap quality preset spanning "smallest efficient file" to "production master".
+/// Every profile except `.custom` fully determines the codec + bitrate; `.custom` hands
+/// control to the user's manual codec / bitrate / container fields.
+enum RecordingProfile: String, Codable, CaseIterable {
+    case efficient      // small, storage/share-friendly
+    case balanced       // the default: efficient AND high quality
+    case highQuality    // upload/YouTube-grade
+    case maximum        // highest-bitrate delivery
+    case proRes         // near-lossless editing master
+    case custom         // user-defined
+
+    /// The codec this profile records with (nil = use the user's custom codec).
+    var codec: VideoCodecChoice? {
+        switch self {
+        case .efficient, .balanced, .highQuality, .maximum: .hevc
+        case .proRes: .proResHQ
+        case .custom: nil
+        }
+    }
+
+    /// Target average bitrate in Mbps (0 = quality-based / not applicable).
+    var bitrateMbps: Int {
+        switch self {
+        case .efficient: 8
+        case .balanced: 20
+        case .highQuality: 45
+        case .maximum: 90
+        case .proRes, .custom: 0
+        }
+    }
+}
+
 /// User-configurable recording options plus the file-naming/output-location helpers.
 /// Persisted as JSON in `UserDefaults` (injectable suite for tests). New fields decode
 /// with defaults so settings saved by an older version keep working.
@@ -18,10 +50,13 @@ struct RecordingSettings: Codable, Equatable {
     var microphoneDeviceID: String?
 
     // Quality
+    /// The active quality preset. Non-`.custom` profiles override `codec`/`bitrateMbps`.
+    var profile: RecordingProfile
+    /// Custom codec — used only when `profile == .custom`.
     var codec: VideoCodecChoice
     var container: VideoContainer
-    /// Average video bitrate in Mbps for HEVC/H.264; 0 = let the encoder choose.
-    /// Ignored for ProRes (quality-based).
+    /// Custom average video bitrate in Mbps (used only when `profile == .custom`); 0 =
+    /// let the encoder choose. Ignored for ProRes (quality-based).
     var bitrateMbps: Int
     var fps: Int
     var resolutionScale: ResolutionScale
@@ -42,9 +77,10 @@ struct RecordingSettings: Codable, Equatable {
         systemAudio: Bool = true,
         microphone: Bool = true,
         microphoneDeviceID: String? = nil,
+        profile: RecordingProfile = .balanced,
         codec: VideoCodecChoice = .hevc,
-        container: VideoContainer = .mov,
-        bitrateMbps: Int = 0,
+        container: VideoContainer = .mp4,
+        bitrateMbps: Int = 20,
         fps: Int = 60,
         resolutionScale: ResolutionScale = .native,
         showsCursor: Bool = true,
@@ -55,6 +91,7 @@ struct RecordingSettings: Codable, Equatable {
         self.systemAudio = systemAudio
         self.microphone = microphone
         self.microphoneDeviceID = microphoneDeviceID
+        self.profile = profile
         self.codec = codec
         self.container = container
         self.bitrateMbps = bitrateMbps
@@ -66,9 +103,15 @@ struct RecordingSettings: Codable, Equatable {
         self.windowGlowEnabled = windowGlowEnabled
     }
 
+    /// The codec actually used: the profile's codec, or the custom one.
+    var resolvedCodec: VideoCodecChoice { profile.codec ?? codec }
+
+    /// The bitrate actually used (Mbps; 0 = auto / quality-based).
+    var resolvedBitrateMbps: Int { profile == .custom ? bitrateMbps : profile.bitrateMbps }
+
     /// ProRes only lives in a `.mov`; otherwise the chosen container.
     var effectiveContainer: VideoContainer {
-        codec == .proRes422 ? .mov : container
+        resolvedCodec.isProRes ? .mov : container
     }
 
     // Backward-compatible decode: any field missing from older persisted JSON falls
@@ -79,6 +122,12 @@ struct RecordingSettings: Codable, Equatable {
         systemAudio = try c.decodeIfPresent(Bool.self, forKey: .systemAudio) ?? d.systemAudio
         microphone = try c.decodeIfPresent(Bool.self, forKey: .microphone) ?? d.microphone
         microphoneDeviceID = try c.decodeIfPresent(String.self, forKey: .microphoneDeviceID)
+        // A blob predating the profile system has `codec`/`bitrateMbps` but no `profile`.
+        // Default those to `.custom` (not `.balanced`) so the user's explicitly-chosen
+        // codec/bitrate keep being honored instead of being silently overridden.
+        let legacyQualityKeys = c.contains(.codec) || c.contains(.bitrateMbps)
+        profile = try c.decodeIfPresent(RecordingProfile.self, forKey: .profile)
+            ?? (legacyQualityKeys ? .custom : d.profile)
         codec = try c.decodeIfPresent(VideoCodecChoice.self, forKey: .codec) ?? d.codec
         container = try c.decodeIfPresent(VideoContainer.self, forKey: .container) ?? d.container
         bitrateMbps = try c.decodeIfPresent(Int.self, forKey: .bitrateMbps) ?? d.bitrateMbps
@@ -88,6 +137,28 @@ struct RecordingSettings: Codable, Equatable {
         outputDirectoryPath = try c.decodeIfPresent(String.self, forKey: .outputDirectoryPath)
         filenamePrefix = try c.decodeIfPresent(String.self, forKey: .filenamePrefix) ?? d.filenamePrefix
         windowGlowEnabled = try c.decodeIfPresent(Bool.self, forKey: .windowGlowEnabled) ?? d.windowGlowEnabled
+    }
+
+    /// Applies onto `base` only the fields where `self` differs from `old` — so a whole-
+    /// struct write from one editing surface (the Settings window) can't clobber fields
+    /// another surface (the menu-bar panel) changed meanwhile. `base` is the freshly
+    /// persisted value; `old` is this editor's previous snapshot.
+    func merging(from old: RecordingSettings, into base: RecordingSettings) -> RecordingSettings {
+        var r = base
+        if systemAudio != old.systemAudio { r.systemAudio = systemAudio }
+        if microphone != old.microphone { r.microphone = microphone }
+        if microphoneDeviceID != old.microphoneDeviceID { r.microphoneDeviceID = microphoneDeviceID }
+        if profile != old.profile { r.profile = profile }
+        if codec != old.codec { r.codec = codec }
+        if container != old.container { r.container = container }
+        if bitrateMbps != old.bitrateMbps { r.bitrateMbps = bitrateMbps }
+        if fps != old.fps { r.fps = fps }
+        if resolutionScale != old.resolutionScale { r.resolutionScale = resolutionScale }
+        if showsCursor != old.showsCursor { r.showsCursor = showsCursor }
+        if outputDirectoryPath != old.outputDirectoryPath { r.outputDirectoryPath = outputDirectoryPath }
+        if filenamePrefix != old.filenamePrefix { r.filenamePrefix = filenamePrefix }
+        if windowGlowEnabled != old.windowGlowEnabled { r.windowGlowEnabled = windowGlowEnabled }
+        return r
     }
 
     static let defaultsKey = "recordingSettings"
@@ -194,6 +265,16 @@ struct ScreenshotSettings: Codable, Equatable {
         resolutionScale = try c.decodeIfPresent(ResolutionScale.self, forKey: .resolutionScale) ?? d.resolutionScale
         saveToDisk = try c.decodeIfPresent(Bool.self, forKey: .saveToDisk) ?? d.saveToDisk
         saveDirectoryPath = try c.decodeIfPresent(String.self, forKey: .saveDirectoryPath)
+    }
+
+    /// See `RecordingSettings.merging(from:into:)` — preserves fields another surface
+    /// changed while this editor held a stale cached copy.
+    func merging(from old: ScreenshotSettings, into base: ScreenshotSettings) -> ScreenshotSettings {
+        var r = base
+        if resolutionScale != old.resolutionScale { r.resolutionScale = resolutionScale }
+        if saveToDisk != old.saveToDisk { r.saveToDisk = saveToDisk }
+        if saveDirectoryPath != old.saveDirectoryPath { r.saveDirectoryPath = saveDirectoryPath }
+        return r
     }
 
     static let defaultsKey = "screenshotSettings"

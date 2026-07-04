@@ -47,9 +47,25 @@ final class PanelController: NSObject, NSPopoverDelegate {
         if let lastCloseAt, ContinuousClock.now - lastCloseAt < .milliseconds(300) {
             return
         }
-        model.panelOpenToken &+= 1
+        show(relativeTo: button, bumpToken: true)
+    }
+
+    /// Programmatically opens the panel (e.g. to surface the "recording finished" card
+    /// when the recording was stopped via a shortcut with the panel closed). Deliberately
+    /// does NOT bump `panelOpenToken`, so the fresh-open grid-reset (which clears
+    /// `finishedURL`) doesn't wipe the very card we're opening to show.
+    func present(relativeTo button: NSStatusBarButton) {
+        guard !popover.isShown else { return }
+        show(relativeTo: button, bumpToken: false)
+    }
+
+    private func show(relativeTo button: NSStatusBarButton, bumpToken: Bool) {
+        if bumpToken { model.panelOpenToken &+= 1 }
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
 
+        // A rapid open → close → reopen can reach here before the previous close's
+        // popoverDidClose has removed its monitor; drop any stale one first so it can't leak.
+        removeOutsideClickMonitor()
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             // A click landed in another app / the desktop while the panel is open.
             // Global monitors never see our own process's events, so this can't fire

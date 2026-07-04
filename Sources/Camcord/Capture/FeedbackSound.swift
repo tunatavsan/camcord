@@ -1,14 +1,16 @@
-import AudioToolbox
+import AVFoundation
 import Foundation
 
 /// Distinct, instant, non-blocking audio feedback — one recognizable sound per action.
 ///
-/// Uses AudioServices (fire-and-forget, plays on a system thread) rather than
-/// `NSSound`: `NSSound(named:)` hands back a SHARED cached instance whose `play()`
-/// is a no-op while that instance is still playing, so two captures within a sound's
-/// duration silently dropped the second cue. `AudioServicesPlaySystemSound` has no
-/// such state — every call plays, even overlapping, which is exactly what a
-/// rapid-fire screenshot workflow needs.
+/// Plays IN-PROCESS via `AVAudioPlayer` (a fresh instance per cue). Two reasons:
+///  • Rapid-fire safe — unlike `NSSound(named:)`, which hands back a SHARED instance
+///    whose `play()` is a no-op while it's still sounding (so a second capture within a
+///    cue's duration silently dropped), each cue here is its own player and always sounds.
+///  • Recording-clean — because the audio originates from THIS process, a recording's
+///    `SCStreamConfiguration.excludesCurrentProcessAudio` filters it out, so the beeps
+///    the user hears never bleed into the captured video. (System-sound APIs play from a
+///    system process and would leak into the recording.)
 enum FeedbackSound {
     case regionShot
     case windowShot
@@ -53,10 +55,10 @@ enum FeedbackSound {
     /// Plays the cue immediately (no-op when feedback is disabled). Non-blocking.
     func play(in defaults: UserDefaults = .standard) {
         guard Self.isEnabled(in: defaults) else { return }
-        FeedbackPlayer.shared.play(self)
+        FeedbackPlayer.shared.play(systemSoundName)
     }
 
-    /// Warm the SystemSoundID cache at launch so the first cue has zero setup latency.
+    /// Warm the sound-data cache at launch so the first cue has zero disk latency.
     static func preloadAll() {
         for sound in [
             regionShot, windowShot, fullScreenShot, textOCR,
@@ -67,37 +69,62 @@ enum FeedbackSound {
     }
 }
 
-/// Preloads and caches `SystemSoundID`s. AudioServices IDs are process-global integer
-/// handles that are safe to play from any thread; the only shared mutable state is the
-/// name→id cache, guarded by a lock.
-private final class FeedbackPlayer: @unchecked Sendable {
+/// Caches decoded sound data and plays each cue on a fresh `AVAudioPlayer`, retained
+/// until playback finishes. All playback is marshalled to the main run loop so the
+/// player's completion delegate fires (and the instance is released) reliably, no matter
+/// which thread — event tap, capture task, main — triggered the cue.
+private final class FeedbackPlayer: NSObject, AVAudioPlayerDelegate, @unchecked Sendable {
     static let shared = FeedbackPlayer()
 
     private let lock = NSLock()
-    private var ids: [String: SystemSoundID] = [:]
+    private var data: [String: Data] = [:]
+    /// Players are held here for the lifetime of their playback so ARC doesn't reclaim
+    /// them mid-sound; the completion delegate removes them.
+    private var active: Set<AVAudioPlayer> = []
 
-    func play(_ sound: FeedbackSound) {
-        let id = soundID(for: sound.systemSoundName)
-        guard id != 0 else { return }
-        AudioServicesPlaySystemSound(id)
+    func play(_ name: String) {
+        guard let payload = soundData(for: name) else { return }
+        DispatchQueue.main.async { [self] in
+            guard let player = try? AVAudioPlayer(data: payload) else { return }
+            player.delegate = self
+            lock.lock()
+            active.insert(player)
+            lock.unlock()
+            player.prepareToPlay()
+            // If playback can't even start, the finish delegate never fires — release the
+            // retained player now so it can't linger in `active`.
+            if !player.play() {
+                lock.lock()
+                active.remove(player)
+                lock.unlock()
+            }
+        }
     }
 
     func warm(_ name: String) {
-        _ = soundID(for: name)
+        _ = soundData(for: name)
     }
 
-    private func soundID(for name: String) -> SystemSoundID {
+    private func soundData(for name: String) -> Data? {
         lock.lock()
         defer { lock.unlock() }
-        if let id = ids[name] { return id }
-        let url = URL(fileURLWithPath: "/System/Library/Sounds/\(name).aiff") as CFURL
-        var id: SystemSoundID = 0
-        // Cache the result either way (0 on failure) so a missing sound file can't turn
-        // into a permanent per-call retry on the hot path (e.g. the event-tap thread).
-        if AudioServicesCreateSystemSoundID(url, &id) != noErr {
-            id = 0
-        }
-        ids[name] = id
-        return id
+        if let cached = data[name] { return cached }
+        let url = URL(fileURLWithPath: "/System/Library/Sounds/\(name).aiff")
+        // Cache the miss as empty too so a missing file can't retry on every call.
+        let loaded = (try? Data(contentsOf: url)) ?? Data()
+        data[name] = loaded
+        return loaded.isEmpty ? nil : loaded
+    }
+
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        lock.lock()
+        active.remove(player)
+        lock.unlock()
+    }
+
+    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        lock.lock()
+        active.remove(player)
+        lock.unlock()
     }
 }

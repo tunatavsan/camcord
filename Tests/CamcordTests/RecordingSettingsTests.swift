@@ -52,9 +52,62 @@ struct RecordingSettingsTests {
         expectedFormatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
         expectedFormatter.locale = Locale(identifier: "en_US_POSIX")
         expectedFormatter.calendar = calendar
-        let expected = "camcord \(expectedFormatter.string(from: date)).mov"
+        let expected = "camcord \(expectedFormatter.string(from: date)).\(defaultSettings.effectiveContainer.ext)"
 
         #expect(defaultSettings.filename(date: date) == expected)
+    }
+
+    // MARK: - Quality profiles
+
+    @Test("a non-custom profile determines the codec + bitrate; ProRes forces a .mov container")
+    func profileResolvesCodecAndContainer() {
+        var s = RecordingSettings(profile: .balanced, codec: .h264, container: .mp4, bitrateMbps: 5)
+        // Balanced overrides the stale custom codec/bitrate with its own.
+        #expect(s.resolvedCodec == .hevc)
+        #expect(s.resolvedBitrateMbps == 20)
+        #expect(s.effectiveContainer == .mp4)   // HEVC honours the chosen container
+
+        s.profile = .highQuality
+        #expect(s.resolvedBitrateMbps == 45)
+
+        s.profile = .proRes
+        #expect(s.resolvedCodec == .proResHQ)
+        #expect(s.effectiveContainer == .mov)    // ProRes is always .mov, container ignored
+        #expect(s.resolvedBitrateMbps == 0)      // quality-based
+    }
+
+    @Test("the custom profile uses the user's own codec and bitrate")
+    func customProfileUsesManualFields() {
+        let s = RecordingSettings(profile: .custom, codec: .proRes4444, container: .mp4, bitrateMbps: 120)
+        #expect(s.resolvedCodec == .proRes4444)
+        #expect(s.resolvedBitrateMbps == 120)
+        #expect(s.effectiveContainer == .mov)    // ProRes 4444 still forces .mov
+    }
+
+    @Test("a pre-profile-system blob (codec/bitrate, no profile key) decodes as .custom, preserving them")
+    func legacyBlobPreservesCodecAndBitrate() throws {
+        // Exactly what an older version persisted: codec/bitrateMbps present, no `profile`.
+        let json = Data("""
+        {"systemAudio":true,"microphone":true,"codec":"h264","container":"mov",\
+        "bitrateMbps":10,"fps":30,"resolutionScale":"native","showsCursor":true,\
+        "filenamePrefix":"camcord","windowGlowEnabled":true}
+        """.utf8)
+        let decoded = try JSONDecoder().decode(RecordingSettings.self, from: json)
+        #expect(decoded.profile == .custom)          // NOT silently promoted to .balanced
+        #expect(decoded.resolvedCodec == .h264)      // the user's choice is honored
+        #expect(decoded.resolvedBitrateMbps == 10)
+    }
+
+    @Test("merging preserves a field another surface changed while this editor was stale")
+    func mergePreservesConcurrentEdit() {
+        let old = RecordingSettings(systemAudio: true, fps: 60)     // editor's snapshot
+        var edited = old
+        edited.fps = 30                                            // this editor changed fps
+        var persisted = old
+        persisted.systemAudio = false                              // the panel changed audio meanwhile
+        let result = edited.merging(from: old, into: persisted)
+        #expect(result.fps == 30)             // this editor's change is applied
+        #expect(result.systemAudio == false)  // the other surface's change is NOT clobbered
     }
 
     // MARK: - uniqueOutputURL (collision avoidance is safety-critical: downstream
@@ -70,6 +123,9 @@ struct RecordingSettingsTests {
 
     /// Default settings — the naming helpers are instance methods (prefix + folder).
     private let defaultSettings = RecordingSettings()
+
+    /// The extension the default settings produce (tracks the default container).
+    private var ext: String { defaultSettings.effectiveContainer.ext }
 
     private var fixedDate: Date {
         var components = DateComponents()
@@ -102,11 +158,11 @@ struct RecordingSettingsTests {
         FileManager.default.createFile(atPath: directory.appendingPathComponent(base).path, contents: Data())
 
         let second = defaultSettings.uniqueOutputURL(in: directory, date: fixedDate)
-        #expect(second.lastPathComponent == "\(stem) (2).mov")
+        #expect(second.lastPathComponent == "\(stem) (2).\(ext)")
 
         FileManager.default.createFile(atPath: second.path, contents: Data())
         let third = defaultSettings.uniqueOutputURL(in: directory, date: fixedDate)
-        #expect(third.lastPathComponent == "\(stem) (3).mov")
+        #expect(third.lastPathComponent == "\(stem) (3).\(ext)")
     }
 
     @Test("the returned URL never points at an existing file, even past the counter bound")
@@ -120,13 +176,13 @@ struct RecordingSettingsTests {
         FileManager.default.createFile(atPath: directory.appendingPathComponent(base).path, contents: Data())
         for counter in 2..<100 {
             FileManager.default.createFile(
-                atPath: directory.appendingPathComponent("\(stem) (\(counter)).mov").path,
+                atPath: directory.appendingPathComponent("\(stem) (\(counter)).\(ext)").path,
                 contents: Data()
             )
         }
 
         let url = defaultSettings.uniqueOutputURL(in: directory, date: fixedDate)
         #expect(!FileManager.default.fileExists(atPath: url.path))
-        #expect(url.pathExtension == "mov")
+        #expect(url.pathExtension == ext)
     }
 }

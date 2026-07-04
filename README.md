@@ -4,7 +4,7 @@ Kişisel kullanım için ultra-hafif, native macOS ekran görüntüsü + ekran k
 Menü çubuğunda yaşar, login'de açılır, her şey kısayolla — sürtünmesiz.
 
 - **Screenshot → sadece pano.** Bölge / pencere / tam ekran; PNG anında panoya düşer, dosya birikintisi yok.
-- **Kayıt → `~/Movies/camcord/`.** Sistem sesi + mikrofon ayrı track'ler (HEVC `.mov`, H.264 fallback); bitince dosya URL'i panoya kopyalanır (Cmd+V ile Finder/Slack'e dosya olarak yapışır). Soft-pause/resume destekli.
+- **Kayıt → `~/Movies/camcord/`.** Kalite profilleri (En Optimize → En Kaliteli) veya Özel: H.264 / HEVC 10-bit / ProRes (Proxy…4444), ayarlanabilir bitrate, kapsayıcı (varsayılan `.mp4`, ProRes → `.mov`), 24–120 fps. Sistem sesi + mikrofon ayrı track'ler; bitince dosya URL'i panoya kopyalanır (Cmd+V ile Finder/Slack'e dosya olarak yapışır). Soft-pause/resume destekli.
 - **Gelişmiş kısayollar.** Klavye (Carbon, izin gerektirmez) + fare yan tuşları / çift-tap Sağ ⌘ (CGEventTap, Accessibility izni ister).
 
 ## Kurulum
@@ -19,17 +19,9 @@ Menü çubuğunda yaşar, login'de açılır, her şey kısayolla — sürtünme
 mikrofonlu ilk kayıtta **Mikrofon** izni, fare kısayolu açılırsa **Accessibility**
 izni istenir. İzinler sabit imza kimliği sayesinde rebuild'lerde bozulmaz.
 
-## Varsayılan kısayollar (Settings… ⌘, ile değiştirilebilir)
+## Kısayollar
 
-| Aksiyon | Kısayol |
-|---|---|
-| Bölge seç → pano | `⌘⇧2` ve fare yan tuşu (Button 4) |
-| Aktif pencere → pano | `⌘⇧1` |
-| Tüm ekran → pano | `⌘⇧6` |
-| Son bölgeyi tekrarla | `⌘⇧R` |
-| Kayıt başlat/durdur | `⌘⇧9` |
-| Kayıt duraklat/sürdür | `⌘⇧0` |
-| Çift-tap Sağ ⌘ → bölge | Settings'ten açılır |
+**Varsayılan hiçbir kısayol yoktur** — hepsini Settings'ten sen atarsın (klavye kısayolları + fare yan tuşları). Atanabilir aksiyonlar: bölge / aktif pencere / tüm ekran çek, metin (OCR), kaydır (scrolling capture), kayıt başlat-bitir, kayıt duraklat-sürdür. Fare yan tuşları ve orta tık (yapıştır) da Settings'ten bağlanır.
 
 Bölge seçiminde: sürükle = bölge, pencereye tek tık = o pencere, `Esc` = iptal.
 

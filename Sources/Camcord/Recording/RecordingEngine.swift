@@ -43,7 +43,7 @@ final class RecordingEngine: NSObject {
         // Walk the whole fallback chain (ProRes → HEVC → H.264) so a failure shared by
         // the higher-quality codecs still degrades all the way to the most compatible
         // one before giving up, instead of stopping after a single hop.
-        var codec: VideoCodecChoice? = settings.codec
+        var codec: VideoCodecChoice? = settings.resolvedCodec
         var lastError: Error?
         while let current = codec {
             do {
@@ -88,11 +88,23 @@ final class RecordingEngine: NSObject {
                 ?? AVCaptureDevice.default(for: .audio)?.uniqueID
         }
 
+        // A quality-based profile (ProRes) carries no bitrate; if it fell back to a
+        // bitrate-driven codec (HEVC/H.264), give that codec a real high-quality target
+        // instead of "automatic". A custom "auto" (0) stays auto — the user chose it.
+        let bitrate: Int
+        if settings.resolvedBitrateMbps > 0 {
+            bitrate = settings.resolvedBitrateMbps
+        } else if !codec.isProRes, settings.profile != .custom {
+            bitrate = RecordingProfile.maximum.bitrateMbps
+        } else {
+            bitrate = 0
+        }
+
         let writer = try StreamWriter(
             outputURL: outputURL,
             container: settings.effectiveContainer,
             codec: codec,
-            bitrateMbps: settings.bitrateMbps,
+            bitrateMbps: bitrate,
             pixelWidth: pixelWidth,
             pixelHeight: pixelHeight,
             frameDuration: frameDuration,

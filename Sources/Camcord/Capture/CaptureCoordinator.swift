@@ -26,6 +26,10 @@ final class CaptureCoordinator {
     /// that window would open a NEW overlay whose chrome gets baked into the still-
     /// pending shot. Also collapses double-clicks on the panel's tiles.
     private var isCapturing = false
+    /// Bumped on every successful clipboard-writing capture. A fire-and-forget OCR snapshots
+    /// it at launch and refuses to write if a newer capture has since claimed the clipboard,
+    /// so a slow recognition can't clobber the user's latest result.
+    private var clipboardEpoch = 0
 
     /// After hiding the overlay, wait ~2 display refresh cycles before capturing so
     /// the compositor has actually flushed the hide -- otherwise the screenshot
@@ -44,11 +48,16 @@ final class CaptureCoordinator {
     var contentCache: ShareableContentCache { cache }
 
     /// Presents the same selection overlay the screenshot flow uses and returns the
-    /// user's pick. The overlay tears its panels down before returning on every path.
+    /// user's pick, for RECORDING. The overlay tears its panels down before returning on
+    /// every path. Left button = region drag / window click; right button = the whole
+    /// screen under the pointer (one-gesture full-screen record).
     func selectCaptureTarget() async -> SelectionResult? {
-        // Recording always records the picked target — the screenshot/OCR mode is
-        // irrelevant here.
-        await overlay.selectRegion()?.0
+        // Hold the same exclusive lock every capture flow uses, so a screenshot hotkey
+        // (which may not touch the overlay at all — e.g. full-screen capture) can't fire
+        // while the recording target overlay is up and bake its chrome into the shot.
+        guard beginExclusiveCapture() else { return nil }
+        defer { endExclusiveCapture() }
+        return await overlay.selectRegion(rightClickWholeScreen: true)?.0
     }
 
     // MARK: - Region screenshot
@@ -97,19 +106,17 @@ final class CaptureCoordinator {
             case .window(let window):
                 image = try await ScreenshotService.captureWindow(window)
             }
-            await ocrToClipboard(image)
+            startOCR(on: image)   // fire-and-forget: lock releases on return, OCR runs in bg
         } catch {
             fail("Text capture failed: \(error)")
         }
     }
 
-    // MARK: - Scrolling capture (full scrollable area → one tall image)
+    // MARK: - Scrolling capture (manual scroll + live stitch → one tall image)
 
-    private let scrollIndicator = CaptureAreaIndicator()
-
-    /// Pick a scroll area (region or window), then scroll + stitch it into one tall PNG.
-    /// Runs as a cancellable task with a blue on-screen indicator whose Stop button (and
-    /// Esc / any real click) end it early and keep whatever was captured so far.
+    /// Pick a scroll area (region or window), then let the user scroll it while we stitch
+    /// each settled viewport into one tall PNG, shown growing live in a side HUD. Ends on
+    /// the HUD's Done (keep) or Esc / Cancel (discard, silently — not a failure).
     func captureScrollingInteractive() async {
         guard beginExclusiveCapture() else { return }
         defer { endExclusiveCapture() }
@@ -130,28 +137,23 @@ final class CaptureCoordinator {
             fail("Scroll capture: no display for the selection")
             return
         }
-
-        let captureTask = Task { () -> CGImage? in
-            try? await ScrollingCaptureService.capture(region: region, display: display)
-        }
-        // Blue indicator + Stop pill; a real click/Esc anywhere also cancels.
-        scrollIndicator.show(cgRect: region, color: .systemBlue, label: "Kaydırılıyor · Durdur") {
-            captureTask.cancel()
-        }
-        let monitors = installCancelMonitors { captureTask.cancel() }
-
-        let image = await captureTask.value
-        scrollIndicator.hide()
-        removeMonitors(monitors)
-
-        guard let image else {
-            fail("Scroll capture failed")
+        // Scroll capture uses SCContentFilter(display:)+sourceRect, which is bound to ONE
+        // display — clamp the selection to that display so a region spanning two screens
+        // can't produce an empty/garbage sourceRect (same single-display constraint
+        // ScreenshotService documents for region shots).
+        let clampedRegion = region.intersection(display.frame)
+        guard clampedRegion.width >= 1, clampedRegion.height >= 1 else {
+            fail("Scroll capture: selection is not on a single display")
             return
         }
+
+        let image = await ScrollingCaptureSession(region: clampedRegion, display: display).run()
+        guard let image else { return }  // cancelled by the user — no chirp
+
         // The stitched image is taller than the viewport; derive its point size from the
         // captured pixel scale so DPI-aware pastes stay correct.
-        let scale = region.width > 0 ? CGFloat(image.width) / region.width : 2
-        let pointSize = CGSize(width: region.width, height: CGFloat(image.height) / max(scale, 0.01))
+        let scale = clampedRegion.width > 0 ? CGFloat(image.width) / clampedRegion.width : 2
+        let pointSize = CGSize(width: clampedRegion.width, height: CGFloat(image.height) / max(scale, 0.01))
         guard await ClipboardWriter.copyPNG(image, pointSize: pointSize, saveTo: screenshotSaveURL()) else {
             fail("Scroll capture: clipboard write failed")
             return
@@ -164,25 +166,6 @@ final class CaptureCoordinator {
         let center = CGPoint(x: region.midX, y: region.midY)
         guard let content = try? await cache.content() else { return nil }
         return content.displays.first { $0.frame.contains(center) } ?? content.displays.first
-    }
-
-    /// Esc, or any real click while a scroll capture runs, cancels it (the user taking
-    /// control back). Returns the monitor tokens to remove when done.
-    private func installCancelMonitors(_ cancel: @escaping () -> Void) -> [Any] {
-        var tokens: [Any] = []
-        let keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown], handler: { event in
-            if event.keyCode == 53 { cancel() }  // Esc
-        })
-        if let keyMonitor { tokens.append(keyMonitor) }
-        let mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { _ in
-            cancel()
-        })
-        if let mouseMonitor { tokens.append(mouseMonitor) }
-        return tokens
-    }
-
-    private func removeMonitors(_ tokens: [Any]) {
-        for token in tokens { NSEvent.removeMonitor(token) }
     }
 
     // MARK: - Hold-to-capture region (side button held; release = shoot)
@@ -200,7 +183,7 @@ final class CaptureCoordinator {
             endExclusiveCapture()
             return false
         }
-        overlay.beginHoldSelection(atCGPoint: cgPoint) { [weak self] result in
+        let started = overlay.beginHoldSelection(atCGPoint: cgPoint, mode: mode) { [weak self] result in
             guard let self else { return }
             guard case .region(let cgRect) = result else {
                 endExclusiveCapture()
@@ -217,6 +200,12 @@ final class CaptureCoordinator {
                 }
                 self.endExclusiveCapture()
             }
+        }
+        // Overlay already up (a selection in flight): release the lock and tell the caller
+        // NOT to track this gesture, so the event tap doesn't swallow it for nothing.
+        guard started else {
+            endExclusiveCapture()
+            return false
         }
         return true
     }
@@ -322,7 +311,7 @@ final class CaptureCoordinator {
     private func performRegionText(_ cgRect: CGRect) async {
         do {
             let image = try await ScreenshotService.captureRegion(cgRect: cgRect)
-            await ocrToClipboard(image)
+            startOCR(on: image)   // fire-and-forget: lock releases now, OCR finishes in bg
         } catch {
             fail("Text capture failed: \(error)")
         }
@@ -344,30 +333,42 @@ final class CaptureCoordinator {
     private func performWindowText(_ window: SCWindow) async {
         do {
             let image = try await ScreenshotService.captureWindow(window)
-            await ocrToClipboard(image)
+            startOCR(on: image)   // fire-and-forget: lock releases now, OCR finishes in bg
         } catch {
             fail("Window text capture failed: \(error)")
         }
     }
 
-    /// Runs OCR on an already-captured image and writes the recognized text as a
-    /// clipboard string. Shared by the interactive OCR flow and the hold OCR gesture.
-    private func ocrToClipboard(_ image: CGImage) async {
-        do {
-            let text = try await TextRecognitionService.recognizeText(in: image)
-            guard !text.isEmpty else {
-                fail("Text capture: no readable text in the selection")
+    /// Reads an already-captured image as text (OCR) + any QR/barcodes and writes the
+    /// combined payload to the clipboard — FIRE-AND-FORGET, so a slow recognition never
+    /// holds the exclusive-capture lock (the caller releases it as soon as the image is
+    /// grabbed) and the app stays responsive to the next gesture. `read` runs the Vision
+    /// work off the main actor; only the fast clipboard write + feedback hop back to it.
+    /// Shared by the interactive OCR flow and the hold OCR gesture.
+    private func startOCR(on image: CGImage) {
+        let epoch = clipboardEpoch
+        Task { @MainActor in
+            let payload: String
+            do {
+                payload = try await TextRecognitionService.read(in: image).clipboardString
+            } catch {
+                fail("Text recognition failed: \(error)")
+                return
+            }
+            // A newer capture claimed the clipboard while we were recognizing — don't
+            // clobber the user's latest result with this now-stale OCR.
+            guard clipboardEpoch == epoch else { return }
+            guard !payload.isEmpty else {
+                fail("Text capture: no readable text or code in the selection")
                 return
             }
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
-            guard pasteboard.setString(text, forType: .string) else {
+            guard pasteboard.setString(payload, forType: .string) else {
                 fail("Text capture: clipboard write failed")
                 return
             }
             succeeded(.textOCR)
-        } catch {
-            fail("Text recognition failed: \(error)")
         }
     }
 
@@ -397,6 +398,7 @@ final class CaptureCoordinator {
 
     /// Success feedback: the action's distinct sound + a brief status-glyph flash.
     private func succeeded(_ sound: FeedbackSound) {
+        clipboardEpoch &+= 1   // this capture now owns the clipboard (see startOCR)
         sound.play()
         onSuccess?()
     }

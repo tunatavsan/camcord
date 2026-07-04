@@ -268,52 +268,62 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
 /// on `SCStreamConfiguration` and the encode-side codec/color properties on the
 /// writer input. Keeping them in one type is what guarantees they stay matched.
 ///
-/// Also the user-facing codec choice (persisted in `RecordingSettings`): HEVC (default,
-/// small + high quality), H.264 (compatible), ProRes 422 (near-lossless, large — the
-/// "use the whole machine" option; hardware-encoded on Apple Silicon).
+/// The user-facing codec lineup (persisted in `RecordingSettings`):
+///  • H.264 — 8-bit, maximum compatibility.
+///  • HEVC (H.265) — 10-bit P3, the efficient high-quality default.
+///  • ProRes 422 Proxy / LT / 422 / HQ and ProRes 4444 — near-lossless, quality-based,
+///    large; the "use the whole machine" production masters. Hardware-encoded on Apple
+///    Silicon. Higher tiers = higher data rate + quality.
 enum VideoCodecChoice: String, Codable, CaseIterable {
-    case hevc
     case h264
+    case hevc
+    case proResProxy
+    case proResLT
     case proRes422
+    case proResHQ
+    case proRes4444
 
     var avCodec: AVVideoCodecType {
         switch self {
-        case .hevc: .hevc
         case .h264: .h264
+        case .hevc: .hevc
+        case .proResProxy: .proRes422Proxy
+        case .proResLT: .proRes422LT
         case .proRes422: .proRes422
+        case .proResHQ: .proRes422HQ
+        case .proRes4444: .proRes4444
         }
     }
 
-    /// ProRes and HEVC both capture 10-bit P3; H.264 stays 8-bit sRGB.
-    var pixelFormat: OSType {
+    var isProRes: Bool {
         switch self {
-        case .hevc, .proRes422: kCVPixelFormatType_ARGB2101010LEPacked
-        case .h264: kCVPixelFormatType_32BGRA
+        case .h264, .hevc: false
+        default: true
         }
+    }
+
+    /// HEVC + ProRes capture 10-bit P3; H.264 stays 8-bit sRGB.
+    var pixelFormat: OSType {
+        self == .h264 ? kCVPixelFormatType_32BGRA : kCVPixelFormatType_ARGB2101010LEPacked
     }
 
     var colorSpaceName: CFString {
-        switch self {
-        case .hevc, .proRes422: CGColorSpace.displayP3
-        case .h264: CGColorSpace.sRGB
-        }
+        self == .h264 ? CGColorSpace.sRGB : CGColorSpace.displayP3
     }
 
     var colorProperties: [String: Any] {
-        switch self {
-        case .hevc, .proRes422:
-            [
-                AVVideoColorPrimariesKey: AVVideoColorPrimaries_P3_D65,
-                AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
-                AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
-            ]
-        case .h264:
-            [
+        if self == .h264 {
+            return [
                 AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
                 AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
                 AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
             ]
         }
+        return [
+            AVVideoColorPrimariesKey: AVVideoColorPrimaries_P3_D65,
+            AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+            AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
+        ]
     }
 
     /// Compression properties for this codec at the given bitrate (Mbps; 0 = auto).
@@ -325,18 +335,24 @@ enum VideoCodecChoice: String, Codable, CaseIterable {
             // The HEVC path captures 10-bit; without an explicit Main10 profile the
             // encoder may default to 8-bit Main and silently truncate.
             props[AVVideoProfileLevelKey] = kVTProfileLevel_HEVC_Main10_AutoLevel as String
-        case .h264, .proRes422:
-            break
+        case .h264:
+            // High profile: better compression efficiency than the default Main/Baseline.
+            props[AVVideoProfileLevelKey] = AVVideoProfileLevelH264HighAutoLevel
+        default:
+            break  // ProRes is quality-based
         }
-        if bitrateMbps > 0, self != .proRes422 {
+        if bitrateMbps > 0, !isProRes {
             props[AVVideoAverageBitRateKey] = bitrateMbps * 1_000_000
         }
         return props.isEmpty ? nil : props
     }
 
+    /// Degrade one tier on start failure: any ProRes → HEVC → H.264 → give up. (A
+    /// ProRes failure on Apple Silicon is systemic, so all tiers would fail alike —
+    /// jump straight to HEVC rather than walking every ProRes variant.)
     var fallback: VideoCodecChoice? {
         switch self {
-        case .proRes422: .hevc
+        case .proResProxy, .proResLT, .proRes422, .proResHQ, .proRes4444: .hevc
         case .hevc: .h264
         case .h264: nil
         }

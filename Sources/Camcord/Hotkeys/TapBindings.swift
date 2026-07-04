@@ -8,8 +8,15 @@ enum TapAction: String, Codable, CaseIterable {
     /// A tap-then-hold variant of the same button OCRs the region instead (see
     /// `HoldGestureDetector`). Meaningless for the double-tap gesture (no held phase).
     case holdCaptureRegion
-    /// Paste the clipboard into the focused app (synthesized Cmd+V) — the wheel/
-    /// middle button so an image or text lands without reaching for Cmd+V.
+    /// Mouse buttons only: a CAPTURE MODIFIER. Hold this button, then:
+    ///   • drag with the LEFT mouse button → region screenshot,
+    ///   • drag with the RIGHT mouse button → region OCR,
+    ///   • release without dragging (a plain tap) → open the region-select overlay.
+    /// While held it intercepts left/right mouse so those clicks drive capture, not the
+    /// app underneath. Meaningless for the double-tap gesture (no held phase).
+    case captureModifier
+    /// Paste the clipboard into the focused app (synthesized Cmd+V) — so an image or
+    /// text lands without reaching for Cmd+V.
     case paste
     case toggleRecording
 }
@@ -36,9 +43,9 @@ struct TapBindings: Codable, Equatable {
     static let defaultsKey = "tapBindings"
 
     init(
-        mouseButton3: TapAction? = .paste,
-        mouseButton4: TapAction? = .captureRegion,
-        mouseButton5: TapAction? = .holdCaptureRegion,
+        mouseButton3: TapAction? = nil,
+        mouseButton4: TapAction? = .paste,
+        mouseButton5: TapAction? = .captureModifier,
         doubleTapRightCommand: TapAction? = nil
     ) {
         self.mouseButton3 = mouseButton3
@@ -51,6 +58,13 @@ struct TapBindings: Codable, Equatable {
         mouseButton3 != nil || mouseButton4 != nil || mouseButton5 != nil || doubleTapRightCommand != nil
     }
 
+    /// The pre-modifier default set — migrated forward so a user who never customized
+    /// their mouse buttons picks up the new capture-modifier model automatically.
+    private static let legacyDefault = TapBindings(
+        mouseButton3: .paste, mouseButton4: .captureRegion,
+        mouseButton5: .holdCaptureRegion, doubleTapRightCommand: nil
+    )
+
     /// Returns the persisted bindings, or the defaults if the key is absent or
     /// undecodable.
     static func load(from defaults: UserDefaults) -> TapBindings {
@@ -60,7 +74,8 @@ struct TapBindings: Codable, Equatable {
         else {
             return TapBindings()
         }
-        return decoded
+        // Untouched old defaults → new defaults (the capture-modifier model).
+        return decoded == legacyDefault ? TapBindings() : decoded
     }
 
     func save(to defaults: UserDefaults) {

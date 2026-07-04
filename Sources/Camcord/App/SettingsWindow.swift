@@ -218,7 +218,9 @@ struct ScreenshotSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .onChange(of: settings) { _, newValue in newValue.save(to: defaultsSuite) }
+        .onChange(of: settings) { oldValue, newValue in
+            newValue.merging(from: oldValue, into: ScreenshotSettings.load(from: defaultsSuite)).save(to: defaultsSuite)
+        }
     }
 
     private func chooseFolder() {
@@ -243,8 +245,6 @@ struct RecordingSettingsView: View {
     @State private var recents: [RecordingItem] = []
     @State private var audioInputs: [AVCaptureDevice] = []
 
-    private static let bitrateOptions = [0, 10, 20, 40, 80]
-
     init(defaultsSuite: UserDefaults) {
         self.defaultsSuite = defaultsSuite
         _settings = State(initialValue: RecordingSettings.load(from: defaultsSuite))
@@ -254,26 +254,73 @@ struct RecordingSettingsView: View {
         settings.outputDirectoryPath ?? RecordingSettings.defaultDirectoryPath()
     }
 
+    /// Bridges the Int `bitrateMbps` to the Slider's Double value.
+    private var bitrateBinding: Binding<Double> {
+        Binding(
+            get: { Double(settings.bitrateMbps) },
+            set: { settings.bitrateMbps = Int($0.rounded()) }
+        )
+    }
+
+    private static func profileDescription(_ profile: RecordingProfile) -> String {
+        switch profile {
+        case .efficient: "HEVC · ~8 Mbps — küçük dosya, iyi kalite (arşiv/paylaşım)."
+        case .balanced: "HEVC 10-bit · ~20 Mbps — verimli ve yüksek kalite (varsayılan)."
+        case .highQuality: "HEVC 10-bit · ~45 Mbps — yükleme / YouTube kalitesi."
+        case .maximum: "HEVC 10-bit · ~90 Mbps — en yüksek bitrate teslim."
+        case .proRes: "ProRes 422 HQ · neredeyse kayıpsız — düzenleme master'ı (büyük)."
+        case .custom: ""
+        }
+    }
+
     var body: some View {
         Form {
             Section("Kalite") {
-                Picker("Codec", selection: $settings.codec) {
-                    Text("HEVC (küçük, yüksek kalite)").tag(VideoCodecChoice.hevc)
-                    Text("H.264 (uyumlu)").tag(VideoCodecChoice.h264)
-                    Text("ProRes 422 (en yüksek kalite, büyük)").tag(VideoCodecChoice.proRes422)
+                Picker("Profil", selection: $settings.profile) {
+                    Text("En Optimize · küçük").tag(RecordingProfile.efficient)
+                    Text("Dengeli").tag(RecordingProfile.balanced)
+                    Text("Yüksek Kalite").tag(RecordingProfile.highQuality)
+                    Text("En Kaliteli").tag(RecordingProfile.maximum)
+                    Text("ProRes · Master").tag(RecordingProfile.proRes)
+                    Text("Özel (gelişmiş)").tag(RecordingProfile.custom)
                 }
-                Picker("Kapsayıcı", selection: $settings.container) {
-                    Text("MOV").tag(VideoContainer.mov)
-                    Text("MP4 (en uyumlu)").tag(VideoContainer.mp4)
-                }
-                .disabled(settings.codec == .proRes422)
-                Picker("Bit hızı", selection: $settings.bitrateMbps) {
-                    ForEach(Self.bitrateOptions, id: \.self) { mbps in
-                        Text(mbps == 0 ? "Otomatik" : "\(mbps) Mbps").tag(mbps)
+
+                if settings.profile == .custom {
+                    Picker("Codec", selection: $settings.codec) {
+                        Text("H.264 · uyumlu (8-bit)").tag(VideoCodecChoice.h264)
+                        Text("HEVC · verimli (10-bit)").tag(VideoCodecChoice.hevc)
+                        Text("ProRes 422 Proxy").tag(VideoCodecChoice.proResProxy)
+                        Text("ProRes 422 LT").tag(VideoCodecChoice.proResLT)
+                        Text("ProRes 422").tag(VideoCodecChoice.proRes422)
+                        Text("ProRes 422 HQ").tag(VideoCodecChoice.proResHQ)
+                        Text("ProRes 4444 · maksimum").tag(VideoCodecChoice.proRes4444)
                     }
+                    if !settings.codec.isProRes {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("Bit hızı")
+                                Spacer()
+                                Text(settings.bitrateMbps == 0 ? "Otomatik" : "\(settings.bitrateMbps) Mbps")
+                                    .foregroundStyle(.secondary)
+                                    .monospacedDigit()
+                            }
+                            Slider(value: bitrateBinding, in: 0...200, step: 5)
+                        }
+                    }
+                } else {
+                    Text(Self.profileDescription(settings.profile))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
-                .disabled(settings.codec == .proRes422)
+
+                Picker("Kapsayıcı", selection: $settings.container) {
+                    Text("MP4 · en uyumlu").tag(VideoContainer.mp4)
+                    Text("MOV · Apple").tag(VideoContainer.mov)
+                }
+                .disabled(settings.resolvedCodec.isProRes)
+
                 Picker("Kare hızı", selection: $settings.fps) {
+                    Text("24 fps · sinematik").tag(24)
                     Text("30 fps").tag(30)
                     Text("60 fps").tag(60)
                     Text("120 fps").tag(120)
@@ -337,7 +384,9 @@ struct RecordingSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .onChange(of: settings) { _, newValue in newValue.save(to: defaultsSuite) }
+        .onChange(of: settings) { oldValue, newValue in
+            newValue.merging(from: oldValue, into: RecordingSettings.load(from: defaultsSuite)).save(to: defaultsSuite)
+        }
         .task(id: settings.outputDirectoryPath) { await loadRecents() }
         .onAppear {
             audioInputs = AVCaptureDevice.DiscoverySession(
@@ -422,7 +471,10 @@ struct RecordingItem: Identifiable {
         return f.string(from: date)
     }
 
-    /// The newest `.mov` files in `dir`, with poster-frame thumbnails.
+    /// The newest recordings in `dir`, with poster-frame thumbnails. Matches every
+    /// container the app produces (mp4 default, mov for ProRes) — not just `.mov`.
+    static let videoExtensions: Set<String> = ["mp4", "mov", "m4v"]
+
     static func recent(in dir: URL, limit: Int) async -> [RecordingItem] {
         let fm = FileManager.default
         guard let urls = try? fm.contentsOfDirectory(
@@ -432,7 +484,7 @@ struct RecordingItem: Identifiable {
         ) else { return [] }
 
         let movies = urls
-            .filter { $0.pathExtension.lowercased() == "mov" }
+            .filter { videoExtensions.contains($0.pathExtension.lowercased()) }
             .map { url -> (URL, Date) in
                 let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
                 return (url, date)
@@ -490,7 +542,7 @@ struct InputSettingsView: View {
                 Picker("Çift dokunuş Sağ ⌘", selection: $bindings.doubleTapRightCommand) {
                     tapOptions(includeHold: false)
                 }
-                Text("\"Basılı tut → bölge\": tuşu basılı tutup sürükle, bırakınca çeker. Önce bir kez dokunup sonra basılı tutarsan aynı bölgeyi OCR ile metne çevirir.")
+                Text("\"Yakalama değiştirici\": tuşu basılı tut → SOL fareyle sürükle = screenshot, SAĞ fareyle sürükle = OCR; sadece dokun (sürüklemeden) = bölge seçim modu açılır.\n\"Basılı tut → bölge\": tuşu tutup sürükle, bırakınca çeker; önce bir kez dokunup sonra tutarsan OCR.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 if bindings.anyEnabled, !isAccessibilityTrusted {
@@ -506,6 +558,7 @@ struct InputSettingsView: View {
                 KeyboardShortcuts.Recorder("Aktif pencere çek", name: .captureActiveWindow)
                 KeyboardShortcuts.Recorder("Tüm ekranı çek", name: .captureFullScreen)
                 KeyboardShortcuts.Recorder("Metni çek (OCR)", name: .captureTextRegion)
+                KeyboardShortcuts.Recorder("Kayıt başlat / bitir", name: .toggleRecording)
                 KeyboardShortcuts.Recorder("Kaydı duraklat / sürdür", name: .pauseRecording)
             }
         }
@@ -533,6 +586,7 @@ struct InputSettingsView: View {
         Text("Kapalı").tag(TapAction?.none)
         Text("Bölge çek").tag(TapAction?.some(.captureRegion))
         if includeHold {
+            Text("Yakalama değiştirici (+sol/sağ)").tag(TapAction?.some(.captureModifier))
             Text("Basılı tut → bölge").tag(TapAction?.some(.holdCaptureRegion))
         }
         Text("Yapıştır").tag(TapAction?.some(.paste))

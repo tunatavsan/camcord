@@ -40,6 +40,12 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     private var isDragging = false
     /// The button that started the current interactive selection: right = OCR mode.
     private var activeIsRight = false
+    /// When set (recording target picking), the RIGHT button means "the whole screen
+    /// under the pointer" instead of an OCR region — a one-gesture full-screen record.
+    private var rightClickWholeScreen = false
+    /// True while a HOLD/chord session is in OCR (.text) mode, so the overlay shows the
+    /// teal "Metin · OCR" treatment even though no right button drove the selection.
+    private var holdIsText = false
     private var highlightedWindow: SCWindow?
     /// Session token for the async window-snap lookups: they hop through the cache
     /// actor, so one can resolve after teardown (or after a newer lookup) and would
@@ -63,9 +69,10 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     /// in-flight session -- it does not overwrite `continuation` or touch its panels.
     /// Returns the picked region/window plus the mode (left button = screenshot,
     /// right button = OCR text). Callers that always mean one mode ignore it.
-    func selectRegion() async -> (SelectionResult, HoldCaptureMode)? {
+    func selectRegion(rightClickWholeScreen: Bool = false) async -> (SelectionResult, HoldCaptureMode)? {
         guard !isPresenting else { return nil }
         isPresenting = true
+        self.rightClickWholeScreen = rightClickWholeScreen
         return await withCheckedContinuation { continuation in
             self.continuation = continuation
             presentPanels()
@@ -83,17 +90,21 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     /// shows nothing at all, which is exactly what the tap-then-hold OCR gesture needs
     /// on its first tap, and the plain hold's overlay appears the instant you start
     /// dragging (no down-time latency).
-    func beginHoldSelection(atCGPoint cgPoint: CGPoint, onEnd: @escaping (SelectionResult?) -> Void) {
-        guard !isPresenting else {
-            onEnd(nil)
-            return
-        }
+    /// Returns whether the session actually started (false = an overlay was already up,
+    /// so the caller must NOT track/swallow the gesture). On rejection `onEnd` is NOT
+    /// called — the caller owns its own cleanup.
+    @discardableResult
+    func beginHoldSelection(atCGPoint cgPoint: CGPoint, mode: HoldCaptureMode, onEnd: @escaping (SelectionResult?) -> Void) -> Bool {
+        guard !isPresenting else { return false }
         isPresenting = true
         holdEndHandler = onEnd
+        holdIsText = mode == .text
+        activeIsRight = false   // chord mode comes from `mode` alone, not a stale right-drag
         let point = cgToAppKitPoint(cgPoint)
         dragAnchor = point
         dragCurrent = point
         isDragging = false
+        return true
     }
 
     func updateHoldSelection(toCGPoint cgPoint: CGPoint) {
@@ -254,6 +265,9 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         dragCurrent = nil
         isDragging = false
         highlightedWindow = nil
+        rightClickWholeScreen = false
+        holdIsText = false
+        activeIsRight = false   // never let a prior right-drag leak into the next session's mode/visual
     }
 
     private func finish(_ result: SelectionResult?, mode: HoldCaptureMode = .screenshot) {
@@ -302,6 +316,18 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         dragAnchor = nil
         dragCurrent = nil
         isDragging = false
+
+        // Recording target: the right button records the WHOLE screen under the pointer,
+        // whether it was a click or a drag — a one-gesture full-screen record.
+        if rightClickWholeScreen, activeIsRight {
+            if let primaryHeight = NSScreen.screens.first?.frame.height,
+                let screen = NSScreen.screens.first(where: { $0.frame.contains(globalPoint) }) ?? NSScreen.main {
+                finish(.region(Geometry.appKitToCG(screen.frame, primaryScreenHeight: primaryHeight)))
+            } else {
+                finish(nil)
+            }
+            return
+        }
 
         guard wasDragging else {
             // Click-without-drag: over a highlighted window -> pick it; over empty space -> cancel.
@@ -358,6 +384,10 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         }
         guard generation == snapGeneration, isPresenting else { return }
         let cgPoint = appKitPointToCG(globalPoint, primaryScreenHeight: primaryHeight)
+        // Cursor still inside the currently-highlighted window? The z-order is static
+        // during selection, so skip the (system-wide) window-list query entirely —
+        // otherwise fast movement fires one CGWindowList enumeration per raw move event.
+        if let current = highlightedWindow, current.frame.contains(cgPoint) { return }
         let window = WindowSnapper.window(atCGPoint: cgPoint, content: content)
         if window?.windowID != highlightedWindow?.windowID {
             // Subtle level-change tick as the snap target switches (Finder-style).
@@ -385,7 +415,8 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         }()
 
         for (screen, view) in zip(NSScreen.screens, views) {
-            view.selectionIsText = activeIsRight
+            // OCR mode from either a right-button drag (activeIsRight) or a .text hold/chord.
+            view.selectionIsText = activeIsRight || holdIsText
             guard globalSelection != nil || highlightedWindow != nil else {
                 view.selectionRect = nil
                 view.highlightRect = nil

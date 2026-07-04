@@ -9,6 +9,14 @@ mkdir -p dist/Camcord.app/Contents/MacOS dist/Camcord.app/Contents/Resources
 cp .build/release/Camcord dist/Camcord.app/Contents/MacOS/Camcord
 cp Resources/Info.plist dist/Camcord.app/Contents/Info.plist
 cp Resources/AppIcon.icns dist/Camcord.app/Contents/Resources/AppIcon.icns
+
+# SPM resource bundles (e.g. KeyboardShortcuts' localized strings) are built next to
+# the executable, NOT into it. Bundle.module finds them in Contents/Resources — without
+# this copy the app hard-crashes (assertionFailure) the instant a view backed by those
+# resources appears (the shortcut recorders in Settings › Fare ve Kısayollar).
+for bundle in .build/release/*.bundle; do
+    [ -e "$bundle" ] && cp -R "$bundle" dist/Camcord.app/Contents/Resources/
+done
 printf 'APPL????' > dist/Camcord.app/Contents/PkgInfo
 
 IDENTITY="${CAMCORD_SIGN_IDENTITY:-Apple Development}"
