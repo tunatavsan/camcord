@@ -1,10 +1,9 @@
 import AppKit
 
 /// A floating preview of the screenshot that was just copied — a framed thumbnail with a
-/// soft shadow that slides in at the BOTTOM-LEFT of the active screen (macOS's own capture
-/// thumbnail lives bottom-right; this is the deliberate mirror). It replaces the small
-/// center HUD toast for screenshot captures: the preview itself is the "it landed on the
-/// clipboard" confirmation.
+/// soft shadow that slides in at the BOTTOM-RIGHT of the active screen (where macOS's own
+/// capture thumbnail lives). It replaces the small center HUD toast for screenshot
+/// captures: the preview itself is the "it landed on the clipboard" confirmation.
 ///
 /// Fully interactive (unlike the click-through toast): hover pauses the auto-dismiss and
 /// reveals a close button, clicking opens the shot for editing (Preview/Markup — the bridge
@@ -15,11 +14,11 @@ import AppKit
 final class ScreenshotPreviewCard {
     /// Transparent padding baked into the panel around the card so the drop shadow isn't
     /// clipped by the window bounds.
-    static let shadowInset: CGFloat = 26
-    /// Gap from the screen's visible corner (above the Dock, right of the screen edge).
+    static let shadowInset: CGFloat = 28
+    /// Gap from the screen's visible bottom-right corner (above the Dock, inside the edge).
     private static let screenMargin: CGFloat = 22
-    /// How far the card slides horizontally on enter/exit.
-    private static let slide: CGFloat = 46
+    /// How far the card slides horizontally on enter/exit (in from / out to the right edge).
+    private static let slide: CGFloat = 48
 
     private var panel: NSPanel?
     private var dismissTask: Task<Void, Never>?
@@ -43,12 +42,15 @@ final class ScreenshotPreviewCard {
             width: card.cardSize.width + Self.shadowInset * 2,
             height: card.cardSize.height + Self.shadowInset * 2
         )
+        // Bottom-right: the card's right edge sits `screenMargin` inside the visible right
+        // edge, its bottom edge `screenMargin` above the Dock. The panel carries a
+        // `shadowInset` transparent border, so back that out of the visible-corner target.
         let visible = screen.visibleFrame
         let finalOrigin = CGPoint(
-            x: visible.minX + Self.screenMargin - Self.shadowInset,
+            x: visible.maxX - Self.screenMargin - panelSize.width + Self.shadowInset,
             y: visible.minY + Self.screenMargin - Self.shadowInset
         )
-        let startOrigin = CGPoint(x: finalOrigin.x - Self.slide, y: finalOrigin.y)
+        let startOrigin = CGPoint(x: finalOrigin.x + Self.slide, y: finalOrigin.y)
 
         let panel = NSPanel(
             contentRect: CGRect(origin: startOrigin, size: panelSize),
@@ -109,7 +111,7 @@ final class ScreenshotPreviewCard {
         self.panel = nil
         dismissTask?.cancel()
         dismissTask = nil
-        let target = CGPoint(x: panel.frame.origin.x - Self.slide, y: panel.frame.origin.y)
+        let target = CGPoint(x: panel.frame.origin.x + Self.slide, y: panel.frame.origin.y)
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.2
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
@@ -148,10 +150,11 @@ private final class PreviewCardView: NSView {
         box.onOpened = { [weak self] in self?.onOpened?() }
         addSubview(box)
 
-        // The close button tucks into the card's top-left inner corner (the card is at the
-        // screen's bottom-LEFT, so its top-left is the corner facing open space).
+        // The close button sits just inside the card's top-left corner — away from the
+        // screen's right edge (the card is at the bottom-RIGHT) and clear of the check badge.
         let c: CGFloat = 22
-        closeButton.frame = CGRect(x: inset - c / 2, y: inset + cardSize.height - c / 2, width: c, height: c)
+        let corner: CGFloat = 6
+        closeButton.frame = CGRect(x: inset + corner, y: inset + cardSize.height - c - corner, width: c, height: c)
         closeButton.onClick = { [weak self] in self?.onClose?() }
         closeButton.alphaValue = 0
         addSubview(closeButton)
@@ -325,11 +328,11 @@ private final class CardBoxView: NSView, NSDraggingSource {
     /// Fits the shot into a tasteful thumbnail box, preserving aspect and never upscaling.
     /// Image dimensions are in pixels (Retina = 2×), so normal captures land near 1:1.
     private static func thumbnailSize(for image: CGImage) -> CGSize {
-        let maxW: CGFloat = 248, maxH: CGFloat = 184
+        let maxW: CGFloat = 320, maxH: CGFloat = 236
         let w = CGFloat(image.width), h = CGFloat(image.height)
         guard w > 0, h > 0 else { return CGSize(width: maxW, height: maxH) }
         let scale = min(maxW / w, maxH / h, 1)
-        return CGSize(width: max(48, (w * scale).rounded()), height: max(36, (h * scale).rounded()))
+        return CGSize(width: max(60, (w * scale).rounded()), height: max(44, (h * scale).rounded()))
     }
 }
 
