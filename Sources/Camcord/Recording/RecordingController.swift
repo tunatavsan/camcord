@@ -395,9 +395,10 @@ final class RecordingController {
             guard let self else { return }
             do {
                 let url = try await engine.stop()
-                copyFileURLToClipboard(url)
+                // Recordings are NOT copied to the clipboard (only screenshots are) — they're
+                // saved to disk and surfaced in the panel's "done" card.
                 FeedbackSound.recordStop.play()
-                onToast?(ToastRequest(text: "Kayıt panoya kopyalandı", systemSymbol: "film.circle.fill"))
+                onToast?(ToastRequest(text: "Kayıt kaydedildi", systemSymbol: "film.circle.fill"))
                 onRecordingFinished?(url)
                 logger.notice("Recording finished: \(url.lastPathComponent, privacy: .public)")
             } catch RecordingError.notRecording {
@@ -425,27 +426,14 @@ final class RecordingController {
         indicator.hide()
         pushUI()
         if let salvagedURL {
-            // The engine salvaged the partial file -- hand it to the user the same
-            // way a normal stop would instead of leaving it silently on disk.
-            copyFileURLToClipboard(salvagedURL)
+            // The engine salvaged the partial file -- surface it in the panel (no clipboard;
+            // recordings are never copied) instead of leaving it silently on disk.
             onRecordingFinished?(salvagedURL)
             logger.notice("Salvaged partial recording: \(salvagedURL.lastPathComponent, privacy: .public)")
         } else {
             onFinishing?(false)
         }
         fail("Recording stopped unexpectedly: \(error)")
-    }
-
-    // MARK: - Clipboard
-
-    /// A real fileURL pasteboard item (not raw data) so the finished movie pastes and
-    /// drag-drops as a file -- mirroring the screenshot-to-clipboard UX.
-    private func copyFileURLToClipboard(_ url: URL) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        if !pasteboard.writeObjects([url as NSURL]) {
-            fail("Could not copy the recording's file URL to the clipboard")
-        }
     }
 
     // MARK: - Do Not Disturb

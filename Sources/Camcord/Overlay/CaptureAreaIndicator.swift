@@ -37,7 +37,7 @@ final class CaptureAreaIndicator {
     private var occlusionCheckInterval = 10
     private var occluded = false
 
-    private static let borderPad: CGFloat = 22
+    private static let borderPad: CGFloat = 12
 
     /// The corner radius the border matches: macOS windows use a continuous ~10pt corner
     /// (Big Sur and later). Tunable in one place if a macOS release changes it.
@@ -96,7 +96,10 @@ final class CaptureAreaIndicator {
     private func startFollowing() {
         guard let borderView, let window = borderView.window else { return }
         let fps = max(60, window.screen?.maximumFramesPerSecond ?? 60)
-        occlusionCheckInterval = max(4, fps / 10)
+        // Occlusion changes only on a human timescale (bringing another window forward), so
+        // check it a few times a second — a full window-list query every frame would hitch
+        // the drag. Position still tracks EVERY frame.
+        occlusionCheckInterval = max(24, fps * 2 / 5)
         followTick = 0
         predictor.reset()
         // A CADisplayLink fires on the main run loop right at the top of each display frame,
@@ -284,14 +287,13 @@ final class CaptureAreaIndicator {
     }
 }
 
-/// A GPU-composited glowing border that hugs the window's own rounded corners: a soft accent
-/// bloom under a thin crisp line. Both are plain CALayers with `cornerCurve = .continuous`
-/// (the squircle curve macOS uses for window corners) so the border traces the SAME corner
-/// shape as the window, offset outward by a small uniform gap. Because it's a moved layer,
-/// following a dragged window is a pure reposition with no repaint. Lives in a click-through
-/// panel.
+/// A clean, thin border that hugs the window's own rounded corners — NO glow/shadow (which
+/// bloomed inward over the window and was expensive to composite while dragging). It's a plain
+/// CALayer with `cornerCurve = .continuous` (the squircle curve macOS uses for window corners)
+/// sized to the window box expanded by a small uniform gap, so it traces the same corner shape
+/// offset outward. Because it's a moved layer with no shadow, following a dragged window is a
+/// cheap reposition with no repaint. Lives in a click-through panel.
 private final class AreaBorderView: NSView {
-    private let glowLayer = CALayer()
     private let lineLayer = CALayer()
     private var color: NSColor = .systemRed
 
@@ -302,22 +304,9 @@ private final class AreaBorderView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.masksToBounds = false
-
-        for sublayer in [glowLayer, lineLayer] {
-            sublayer.backgroundColor = NSColor.clear.cgColor
-            sublayer.cornerCurve = .continuous
-            sublayer.masksToBounds = false
-        }
-        // Glow: a wider accent border with a strong accent shadow bloom.
-        glowLayer.borderWidth = 3
-        glowLayer.shadowRadius = 16
-        glowLayer.shadowOpacity = 1
-        glowLayer.shadowOffset = .zero
-        // Crisp line: a thin bright accent edge on top.
-        lineLayer.borderWidth = 1.5
-
-        layer?.addSublayer(glowLayer)
+        lineLayer.backgroundColor = NSColor.clear.cgColor
+        lineLayer.cornerCurve = .continuous
+        lineLayer.borderWidth = 2
         layer?.addSublayer(lineLayer)
     }
 
@@ -330,8 +319,6 @@ private final class AreaBorderView: NSView {
         get { color }
         set {
             color = newValue
-            glowLayer.borderColor = newValue.withAlphaComponent(0.85).cgColor
-            glowLayer.shadowColor = newValue.cgColor
             lineLayer.borderColor = newValue.cgColor
         }
     }
@@ -342,43 +329,34 @@ private final class AreaBorderView: NSView {
     /// animations disabled so a resize snaps rather than lerps.
     func setTarget(_ windowRectInView: CGRect, windowCornerRadius: CGFloat) {
         let frame = windowRectInView.insetBy(dx: -Self.gap, dy: -Self.gap)
-        let radius = windowCornerRadius + Self.gap
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for sublayer in [glowLayer, lineLayer] {
-            sublayer.frame = frame
-            sublayer.cornerRadius = radius
-        }
-        glowLayer.shadowPath = CGPath(
-            roundedRect: CGRect(origin: .zero, size: frame.size),
-            cornerWidth: radius, cornerHeight: radius, transform: nil
-        )
+        lineLayer.frame = frame
+        lineLayer.cornerRadius = windowCornerRadius + Self.gap
         CATransaction.commit()
     }
 
-    /// A gentle settle onto the window when it first appears: fade in while the border eases
-    /// down from a hair larger.
+    /// A gentle settle onto the window when it appears: fade in while the border grows the last
+    /// couple percent into place (grows UP so it never overflows the panel and clips).
     func animateAppear() {
         guard let layer else { return }
         let fade = CABasicAnimation(keyPath: "opacity")
         fade.fromValue = 0
         fade.toValue = 1
-        fade.duration = 0.24
+        fade.duration = 0.2
         layer.opacity = 1
         layer.add(fade, forKey: "appearFade")
-        for sublayer in [glowLayer, lineLayer] {
-            let scale = CASpringAnimation(keyPath: "transform.scale")
-            scale.fromValue = 1.05
-            scale.toValue = 1
-            scale.mass = 0.9
-            scale.stiffness = 240
-            scale.damping = 20
-            scale.duration = scale.settlingDuration
-            sublayer.add(scale, forKey: "appearScale")
-        }
+        let scale = CASpringAnimation(keyPath: "transform.scale")
+        scale.fromValue = 0.97
+        scale.toValue = 1
+        scale.mass = 0.9
+        scale.stiffness = 240
+        scale.damping = 20
+        scale.duration = scale.settlingDuration
+        lineLayer.add(scale, forKey: "appearScale")
     }
 
-    /// Fades the whole border out (occluded) or back in (visible).
+    /// Fades the border out (occluded) or back in (visible).
     func setContentHidden(_ hidden: Bool) {
         guard let layer else { return }
         let fade = CABasicAnimation(keyPath: "opacity")

@@ -417,8 +417,8 @@ private struct FinishedCard: View {
         .task(id: currentURL) { meta = await RecordingMeta.load(currentURL) }
     }
 
-    /// Renames the file on disk (sanitized, collision-safe) and re-copies the new URL to
-    /// the clipboard so a paste yields the renamed file. No-op if unchanged/taken/invalid.
+    /// Renames the file on disk (sanitized, collision-safe). No-op if unchanged/taken/invalid.
+    /// Recordings are never placed on the clipboard, so a rename doesn't touch it either.
     private func commitRename() {
         let cleaned = name
             .components(separatedBy: CharacterSet(charactersIn: "/\\:").union(.controlCharacters)).joined()
@@ -432,9 +432,6 @@ private struct FinishedCard: View {
             try FileManager.default.moveItem(at: currentURL, to: target)
             currentURL = target
             name = cleaned
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            pasteboard.writeObjects([target as NSURL])
         } catch {
             name = original
         }
