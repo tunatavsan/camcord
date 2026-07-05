@@ -17,13 +17,20 @@ final class CaptureAreaIndicator {
     private var stopPanel: NSPanel?
     private var borderView: AreaBorderView?
 
-    /// Live window-follow state (window recording): while set, a timer repositions the
-    /// border + stop pill as the recorded window is moved/resized.
+    /// Live window-follow state (window recording): while set, a display-synced timer
+    /// repositions the border + stop pill as the recorded window is moved/resized, and
+    /// hides them while the window is occluded so the border never floats over the app
+    /// that covered it.
     private var followWindowID: CGWindowID?
     private var followTimer: DispatchSourceTimer?
     private var lastFollowedBounds: CGRect?
+    private var followTick = 0
+    /// Ticks between occlusion checks (position tracks every tick; occlusion ~12 Hz).
+    private var occlusionCheckInterval = 8
+    /// True while the recorded window is currently covered/off-screen (border hidden).
+    private var occluded = false
 
-    private static let borderPad: CGFloat = 14
+    private static let borderPad: CGFloat = 16
 
     func show(cgRect: CGRect, color: NSColor, label: String?, onStop: (() -> Void)?) {
         hide()
@@ -54,6 +61,8 @@ final class CaptureAreaIndicator {
         followTimer = nil
         followWindowID = nil
         lastFollowedBounds = nil
+        followTick = 0
+        occluded = false
         borderView = nil
         borderPanel?.orderOut(nil)
         borderPanel = nil
@@ -64,18 +73,81 @@ final class CaptureAreaIndicator {
     // MARK: - Live window follow
 
     private func startFollowing() {
+        // Track at the display's native refresh (120 Hz on ProMotion) so the border stays
+        // glued to a dragged window instead of stuttering a frame behind. A single-window
+        // CGWindowList query per tick is cheap; occlusion (the full-list query) runs at a
+        // much lower cadence since it only changes when the user reshuffles windows.
+        let fps = max(60, NSScreen.screens.map(\.maximumFramesPerSecond).max() ?? 60)
+        occlusionCheckInterval = max(1, fps / 12)
+        followTick = 0
         let timer = DispatchSource.makeTimerSource(queue: .main)
-        // ~30 Hz: smooth enough to track a dragged window without a perceptible lag,
-        // cheap enough (a single-window CGWindowList query) to run during a recording.
-        timer.schedule(deadline: .now() + .milliseconds(33), repeating: .milliseconds(33))
+        let intervalNs = Int(1_000_000_000 / fps)
+        timer.schedule(deadline: .now() + .nanoseconds(intervalNs), repeating: .nanoseconds(intervalNs))
         timer.setEventHandler { [weak self] in
-            guard let self, let id = self.followWindowID, let bounds = Self.windowBounds(id) else { return }
-            guard bounds != self.lastFollowedBounds else { return }
-            self.lastFollowedBounds = bounds
-            self.reposition(to: bounds)
+            guard let self, let id = self.followWindowID else { return }
+            self.followTick &+= 1
+            if let bounds = Self.windowBounds(id), bounds != self.lastFollowedBounds {
+                self.lastFollowedBounds = bounds
+                self.reposition(to: bounds)
+            }
+            if self.followTick % self.occlusionCheckInterval == 0 {
+                let nowOccluded = !Self.isWindowVisible(id)
+                if nowOccluded != self.occluded {
+                    self.occluded = nowOccluded
+                    self.applyOcclusion()
+                }
+            }
         }
         timer.resume()
         followTimer = timer
+    }
+
+    /// Hides the border + stop pill while the recorded window is covered/off-screen, and
+    /// brings them back (in place) when it's visible again — so the indicator behaves like
+    /// it's attached to the window rather than always floating on top.
+    private func applyOcclusion() {
+        if occluded {
+            borderPanel?.orderOut(nil)
+            stopPanel?.orderOut(nil)
+        } else {
+            borderPanel?.orderFrontRegardless()
+            stopPanel?.orderFrontRegardless()
+        }
+    }
+
+    /// True when the recorded window is currently on-screen AND the topmost normal window
+    /// at its own center — i.e. not covered there by another app. A conservative "can't
+    /// tell" (no window list) counts as visible so the indicator never blinks off wrongly.
+    private static func isWindowVisible(_ windowID: CGWindowID) -> Bool {
+        guard let infoList = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+        ) as? [[String: Any]] else {
+            return true
+        }
+        // Our window's live on-screen bounds — absent means it's minimized/hidden.
+        var targetBounds: CGRect?
+        for info in infoList {
+            guard let number = info[kCGWindowNumber as String] as? Int, CGWindowID(number) == windowID,
+                let boundsDict = info[kCGWindowBounds as String] as? [String: Any],
+                let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
+            else { continue }
+            targetBounds = bounds
+            break
+        }
+        guard let targetBounds else { return false }
+        let center = CGPoint(x: targetBounds.midX, y: targetBounds.midY)
+        // Front-to-back: the first normal window covering the center decides — if it's us,
+        // we're visible there; if it's someone else's window, we're occluded.
+        for info in infoList {
+            guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                let number = info[kCGWindowNumber as String] as? Int,
+                let boundsDict = info[kCGWindowBounds as String] as? [String: Any],
+                let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
+                bounds.contains(center)
+            else { continue }
+            return CGWindowID(number) == windowID
+        }
+        return true
     }
 
     private func reposition(to cgBounds: CGRect) {
@@ -179,17 +251,25 @@ private final class AreaBorderView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let lineWidth: CGFloat = 2
         let strokeRect = targetRect.insetBy(dx: -lineWidth / 2, dy: -lineWidth / 2)
-        let path = NSBezierPath(roundedRect: strokeRect, xRadius: 10, yRadius: 10)
+        // A slightly tighter corner than before (7 vs 10) so it hugs the window edge.
+        let path = NSBezierPath(roundedRect: strokeRect, xRadius: 7, yRadius: 7)
         path.lineWidth = lineWidth
+
+        // A soft, static glow so the frame reads as lit (not just a hairline). Drawn as a
+        // wider, translucent, blurred stroke UNDER the crisp line — never animated.
         NSGraphicsContext.saveGraphicsState()
         let glow = NSShadow()
-        glow.shadowColor = color.withAlphaComponent(0.5)
-        glow.shadowBlurRadius = 4
+        glow.shadowColor = color.withAlphaComponent(0.75)
+        glow.shadowBlurRadius = 9
         glow.shadowOffset = .zero
         glow.set()
-        color.withAlphaComponent(0.9).setStroke()
+        color.withAlphaComponent(0.5).setStroke()
         path.stroke()
         NSGraphicsContext.restoreGraphicsState()
+
+        // The crisp accent line on top.
+        color.withAlphaComponent(0.95).setStroke()
+        path.stroke()
     }
 }
 

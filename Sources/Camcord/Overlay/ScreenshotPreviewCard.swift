@@ -195,7 +195,8 @@ private final class CardBoxView: NSView, NSDraggingSource {
 
     let cardSize: CGSize
     private let imageView = NSImageView()
-    private static let framePad: CGFloat = 5
+    /// Card corner radius — a touch smaller so it reads as a floating photo, not a panel.
+    private static let cornerRadius: CGFloat = 8
 
     private var mouseDownPoint: NSPoint = .zero
     private var didDrag = false
@@ -204,30 +205,34 @@ private final class CardBoxView: NSView, NSDraggingSource {
         self.image = image
         self.diskURL = fileURL
         let thumb = Self.thumbnailSize(for: image)
-        cardSize = CGSize(width: thumb.width + Self.framePad * 2, height: thumb.height + Self.framePad * 2)
+        // No surrounding frame — the shot itself IS the card, floating on a soft shadow with
+        // just a hairline dark edge so it never bleeds into a light background behind it.
+        cardSize = thumb
         super.init(frame: CGRect(origin: .zero, size: cardSize))
 
         wantsLayer = true
-        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
-        layer?.cornerRadius = 10
-        layer?.masksToBounds = false
+        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.cornerRadius = Self.cornerRadius
+        layer?.masksToBounds = false   // let the drop shadow spill past the bounds
         layer?.shadowColor = NSColor.black.cgColor
-        layer?.shadowOpacity = 0.3
-        layer?.shadowRadius = 13
-        layer?.shadowOffset = CGSize(width: 0, height: -3)
+        layer?.shadowOpacity = 0.42
+        layer?.shadowRadius = 16
+        layer?.shadowOffset = CGSize(width: 0, height: -4)
 
-        imageView.frame = CGRect(x: Self.framePad, y: Self.framePad, width: thumb.width, height: thumb.height)
+        imageView.frame = bounds
+        imageView.autoresizingMask = [.width, .height]
         imageView.image = NSImage(cgImage: image, size: thumb)
         imageView.imageScaling = .scaleProportionallyUpOrDown
         imageView.wantsLayer = true
-        imageView.layer?.cornerRadius = 6
+        imageView.layer?.cornerRadius = Self.cornerRadius
         imageView.layer?.masksToBounds = true
         imageView.layer?.borderWidth = 1
-        imageView.layer?.borderColor = NSColor.separatorColor.cgColor
+        imageView.layer?.borderColor = NSColor.black.withAlphaComponent(0.5).cgColor
         addSubview(imageView)
 
-        // A small green "copied" check, tucked into the thumbnail's top-right corner.
-        let badge = CheckBadgeView(frame: CGRect(x: imageView.frame.maxX - 22, y: imageView.frame.maxY - 22, width: 18, height: 18))
+        // A small green "copied" check, tucked into the shot's top-right corner.
+        let badge = CheckBadgeView(frame: CGRect(x: cardSize.width - 24, y: cardSize.height - 24, width: 18, height: 18))
+        badge.autoresizingMask = [.minXMargin, .minYMargin]
         addSubview(badge)
     }
 
@@ -241,11 +246,11 @@ private final class CardBoxView: NSView, NSDraggingSource {
     override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
-        // Keep the shadow-shape path in sync with the rounded corner so the shadow is
-        // rounded (not a rectangle) and appearance changes repaint correctly.
-        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
-        layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: 10, cornerHeight: 10, transform: nil)
-        imageView.layer?.borderColor = NSColor.separatorColor.cgColor
+        // Keep the shadow path in sync with the rounded corner so the shadow is rounded
+        // (not a rectangle). The hairline border is a fixed dark tone (not appearance-
+        // adaptive): it reads as a thin edge on light content and vanishes on dark, which
+        // is exactly the "floating photo" look.
+        layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: Self.cornerRadius, cornerHeight: Self.cornerRadius, transform: nil)
     }
 
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }

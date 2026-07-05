@@ -94,14 +94,17 @@ final class EventTapEngine {
             mask |= 1 << CGEventType.otherMouseDown.rawValue
             mask |= 1 << CGEventType.otherMouseUp.rawValue
         }
-        if [bindings.mouseButton3, bindings.mouseButton4, bindings.mouseButton5].contains(.holdCaptureRegion) {
+        let holdCaptureBound = [bindings.mouseButton3, bindings.mouseButton4, bindings.mouseButton5].contains(.holdCaptureRegion)
+        if holdCaptureBound {
             // Hold-to-capture drags the selection with the button held; the moves
             // arrive as otherMouseDragged (never mouseMoved) during the hold.
             mask |= 1 << CGEventType.otherMouseDragged.rawValue
         }
-        if captureModifierButton != nil {
-            // The capture modifier intercepts LEFT/RIGHT mouse while its button is held,
-            // so those drags drive a screenshot / OCR instead of the app underneath.
+        // Both the capture modifier AND hold-to-capture must see left/right mouse events:
+        // the modifier drives a chord with them, and a hold must SWALLOW them so a stray
+        // click mid-capture can't leak through and act on the app underneath (e.g. closing
+        // an open menu). Without this, a plain hold never sees the click at all.
+        if captureModifierButton != nil || holdCaptureBound {
             for eventType: CGEventType in [
                 .leftMouseDown, .leftMouseDragged, .leftMouseUp,
                 .rightMouseDown, .rightMouseDragged, .rightMouseUp,
@@ -334,6 +337,9 @@ final class EventTapEngine {
             coordinator.finishHoldRegionSelection(atCGPoint: location)
             return true
         }
+        // While a hold-to-capture is in progress, NO other mouse button may reach the app
+        // underneath — swallow every other button press/release until the hold ends.
+        if activeHoldButton != nil { return true }
         guard let action = tapAction(forMouseButton: button) else { return false }
 
         if action == .captureModifier {
@@ -398,6 +404,9 @@ final class EventTapEngine {
 
     private func handleChordDown(isRight: Bool, location: CGPoint) -> Bool {
         lastChordLocation = location
+        // A hold-to-capture is in progress → this click must NOT act on the app underneath
+        // (the reported bug: a left click mid-hold closing an open menu).
+        if activeHoldButton != nil { return true }
         guard modifierArmed else { return swallowChordTail }   // not held → normal click
         if !chordActive {
             chordActive = true
@@ -412,6 +421,7 @@ final class EventTapEngine {
 
     private func handleChordDragged(location: CGPoint) -> Bool {
         lastChordLocation = location
+        if activeHoldButton != nil { return true }   // swallow left/right drags during a hold
         guard modifierArmed else { return swallowChordTail }
         guard chordActive else { return true }
         // Coalesce: remember the latest position; one async redraw drains it per tick so
@@ -432,6 +442,7 @@ final class EventTapEngine {
 
     private func handleChordUp(location: CGPoint) -> Bool {
         lastChordLocation = location
+        if activeHoldButton != nil { return true }   // swallow the click's release during a hold
         if swallowChordTail {
             swallowChordTail = false   // orphaned button finally released → resume normal
             return true

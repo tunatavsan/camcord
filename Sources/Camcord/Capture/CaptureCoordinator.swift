@@ -67,7 +67,8 @@ final class CaptureCoordinator {
         // while the recording target overlay is up and bake its chrome into the shot.
         guard beginExclusiveCapture() else { return nil }
         defer { endExclusiveCapture() }
-        return await overlay.selectRegion(rightClickWholeScreen: true)?.0
+        // Recording target selection is red; screenshot selection stays blue.
+        return await overlay.selectRegion(rightClickWholeScreen: true, accent: .recording)?.0
     }
 
     // MARK: - Region screenshot

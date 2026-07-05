@@ -8,6 +8,21 @@ enum SelectionResult {
     case window(SCWindow)
 }
 
+/// The selection's intent, which drives its accent color: a screenshot pick is blue, a
+/// recording target is red. Everything the overlay draws (region border + window highlight)
+/// uses this one color so the whole gesture reads as "shot" vs "record" at a glance.
+enum SelectionAccent {
+    case screenshot
+    case recording
+
+    var color: NSColor {
+        switch self {
+        case .screenshot: return .systemBlue
+        case .recording: return .systemRed
+        }
+    }
+}
+
 /// A borderless, nonactivating panel covering one screen. `canBecomeKey` must return
 /// true for a `.nonactivatingPanel` to receive key events (Esc) at all.
 final class SelectionPanel: NSPanel {
@@ -43,6 +58,8 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     /// When set (recording target picking), the RIGHT button means "the whole screen
     /// under the pointer" instead of an OCR region — a one-gesture full-screen record.
     private var rightClickWholeScreen = false
+    /// The accent color for this session's overlay (blue = screenshot, red = recording).
+    private var accent: SelectionAccent = .screenshot
     /// True while a HOLD/chord session is in OCR (.text) mode, so the overlay shows the
     /// teal "Metin · OCR" treatment even though no right button drove the selection.
     private var holdIsText = false
@@ -69,10 +86,11 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     /// in-flight session -- it does not overwrite `continuation` or touch its panels.
     /// Returns the picked region/window plus the mode (left button = screenshot,
     /// right button = OCR text). Callers that always mean one mode ignore it.
-    func selectRegion(rightClickWholeScreen: Bool = false) async -> (SelectionResult, HoldCaptureMode)? {
+    func selectRegion(rightClickWholeScreen: Bool = false, accent: SelectionAccent = .screenshot) async -> (SelectionResult, HoldCaptureMode)? {
         guard !isPresenting else { return nil }
         isPresenting = true
         self.rightClickWholeScreen = rightClickWholeScreen
+        self.accent = accent
         return await withCheckedContinuation { continuation in
             self.continuation = continuation
             presentPanels()
@@ -99,6 +117,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         isPresenting = true
         holdEndHandler = onEnd
         holdIsText = mode == .text
+        accent = .screenshot   // hold-to-capture is always a screenshot → blue
         activeIsRight = false   // chord mode comes from `mode` alone, not a stale right-drag
         let point = cgToAppKitPoint(cgPoint)
         dragAnchor = point
@@ -209,6 +228,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
             let view = SelectionView(frame: NSRect(origin: .zero, size: screen.frame.size))
             view.delegate = self
             view.backingScale = screen.backingScaleFactor
+            view.accent = accent.color
             panel.contentView = view
             // A programmatic panel's first responder defaults to the panel ITSELF,
             // which swallows keyDown/cancelOperation — Esc only reaches
@@ -266,6 +286,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         isDragging = false
         highlightedWindow = nil
         rightClickWholeScreen = false
+        accent = .screenshot   // next session defaults to the screenshot (blue) accent
         holdIsText = false
         activeIsRight = false   // never let a prior right-drag leak into the next session's mode/visual
     }
@@ -419,8 +440,9 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         }()
 
         for (screen, view) in zip(NSScreen.screens, views) {
-            // OCR mode from either a right-button drag (activeIsRight) or a .text hold/chord.
-            view.selectionIsText = activeIsRight || holdIsText
+            // OCR mode from either a right-button drag (activeIsRight) or a .text hold/chord —
+            // but NOT while recording, where the right button means "whole screen", not OCR.
+            view.selectionIsText = (activeIsRight || holdIsText) && !rightClickWholeScreen
             guard globalSelection != nil || highlightedWindow != nil else {
                 view.selectionRect = nil
                 view.highlightRect = nil

@@ -21,6 +21,16 @@ final class SelectionView: NSView {
     weak var delegate: SelectionViewDelegate?
     var backingScale: CGFloat = 1
 
+    /// The selection's intent color: blue for a screenshot, red for a recording. Drives
+    /// BOTH the region border and the window-snap highlight so every pick reads the same.
+    var accent: NSColor = .systemBlue {
+        didSet {
+            highlightLayer.strokeColor = accent.cgColor
+            highlightLayer.fillColor = accent.withAlphaComponent(0.14).cgColor
+            needsDisplay = true
+        }
+    }
+
     /// Local-coordinate rect to punch out of the dim + draw the dashed border around.
     /// Nil on screens the current cross-screen selection doesn't intersect.
     var selectionRect: CGRect? {
@@ -57,10 +67,16 @@ final class SelectionView: NSView {
         super.init(frame: frameRect)
         wantsLayer = true
         highlightLayer.frame = bounds
-        highlightLayer.fillColor = NSColor.systemBlue.withAlphaComponent(0.12).cgColor
-        highlightLayer.strokeColor = NSColor.systemBlue.cgColor
+        highlightLayer.fillColor = accent.withAlphaComponent(0.14).cgColor
+        highlightLayer.strokeColor = accent.cgColor
         highlightLayer.lineWidth = 2
         highlightLayer.opacity = 0
+        // A soft glow so the highlight reads like it's lit — the same "floating" feel the
+        // recording border and preview card have.
+        highlightLayer.shadowColor = accent.cgColor
+        highlightLayer.shadowRadius = 6
+        highlightLayer.shadowOpacity = 0.5
+        highlightLayer.shadowOffset = .zero
         layer?.addSublayer(highlightLayer)
     }
 
@@ -154,7 +170,7 @@ final class SelectionView: NSView {
                 border.stroke()
                 drawModeLabel("Metin · OCR", near: selectionRect)
             } else {
-                drawDashedBorder(around: selectionRect)
+                drawAccentBorder(around: selectionRect)
             }
             if let badge {
                 drawBadge(badge.text, near: badge.rect)
@@ -184,24 +200,27 @@ final class SelectionView: NSView {
         attributed.draw(at: CGPoint(x: labelRect.minX + hp, y: labelRect.minY + vp))
     }
 
-    private func drawDashedBorder(around rect: CGRect) {
-        let dashPattern: [CGFloat] = [4, 4]
-
-        let whitePath = NSBezierPath(rect: rect)
-        whitePath.lineWidth = 1
-        dashPattern.withUnsafeBufferPointer { buffer in
-            whitePath.setLineDash(buffer.baseAddress, count: buffer.count, phase: 0)
-        }
-        NSColor.white.setStroke()
-        whitePath.stroke()
-
-        let blackPath = NSBezierPath(rect: rect)
-        blackPath.lineWidth = 1
-        dashPattern.withUnsafeBufferPointer { buffer in
-            blackPath.setLineDash(buffer.baseAddress, count: buffer.count, phase: 4)
-        }
-        NSColor.black.setStroke()
-        blackPath.stroke()
+    /// The region border in the intent color (blue = screenshot, red = recording), lit by a
+    /// soft accent glow so it reads on any background — the same visual language as the
+    /// window-snap highlight, instead of the old colorless dashed marching ants.
+    private func drawAccentBorder(around rect: CGRect) {
+        NSGraphicsContext.saveGraphicsState()
+        let glow = NSShadow()
+        glow.shadowColor = accent.withAlphaComponent(0.7)
+        glow.shadowBlurRadius = 7
+        glow.shadowOffset = .zero
+        glow.set()
+        // A subtle dark hairline just outside keeps the accent line visible even where the
+        // content behind it is the same hue.
+        let outer = NSBezierPath(rect: rect.insetBy(dx: -1, dy: -1))
+        outer.lineWidth = 1
+        NSColor.black.withAlphaComponent(0.35).setStroke()
+        outer.stroke()
+        let path = NSBezierPath(rect: rect)
+        path.lineWidth = 2
+        accent.setStroke()
+        path.stroke()
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     private func drawBadge(_ text: String, near rect: CGRect) {
