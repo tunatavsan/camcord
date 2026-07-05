@@ -28,6 +28,9 @@ final class CaptureAreaIndicator {
     private var followWindowID: CGWindowID?
     private var displayLink: CADisplayLink?
     private var lastFollowedBounds: CGRect?
+    /// Leads the border ahead of the window by its smoothed velocity to cancel the inherent
+    /// one-frame reactive lag of a separate overlay window (pure/tested — see FollowPredictor).
+    private var predictor = FollowPredictor()
     private var followTick = 0
     /// Display-link frames between occlusion checks (position tracks EVERY frame; occlusion
     /// only changes when the user reshuffles windows, so ~10 Hz is plenty).
@@ -35,6 +38,20 @@ final class CaptureAreaIndicator {
     private var occluded = false
 
     private static let borderPad: CGFloat = 22
+
+    /// The corner radius the border matches: macOS windows use a continuous ~10pt corner
+    /// (Big Sur and later). Tunable in one place if a macOS release changes it.
+    private static let macOSWindowCornerRadius: CGFloat = 10
+
+    /// The window's own corner radius to trace: the standard rounded corner for a normal
+    /// window, or 0 for a window that fills a whole display (full-screen / borderless — e.g.
+    /// a game — which has sharp corners).
+    private static func windowCornerRadius(forSize size: CGSize) -> CGFloat {
+        let coversWholeScreen = NSScreen.screens.contains {
+            abs(size.width - $0.frame.width) < 2 && abs(size.height - $0.frame.height) < 2
+        }
+        return coversWholeScreen ? 0 : macOSWindowCornerRadius
+    }
 
     func show(cgRect: CGRect, color: NSColor, label: String?, onStop: (() -> Void)?) {
         hide()
@@ -64,6 +81,7 @@ final class CaptureAreaIndicator {
         displayLink = nil
         followWindowID = nil
         lastFollowedBounds = nil
+        predictor.reset()
         followTick = 0
         occluded = false
         borderView = nil
@@ -80,10 +98,13 @@ final class CaptureAreaIndicator {
         let fps = max(60, window.screen?.maximumFramesPerSecond ?? 60)
         occlusionCheckInterval = max(4, fps / 10)
         followTick = 0
+        predictor.reset()
         // A CADisplayLink fires on the main run loop right at the top of each display frame,
         // so reading the window's position and moving our panel happen in the same beat — no
         // fixed-interval poll wait to trail behind.
         let link = borderView.displayLink(target: self, selector: #selector(followStep(_:)))
+        // Ask for the display's full refresh (120 Hz on ProMotion), not a throttled default.
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: Float(fps), preferred: Float(fps))
         link.add(to: .main, forMode: .common)
         displayLink = link
     }
@@ -91,9 +112,12 @@ final class CaptureAreaIndicator {
     @objc private func followStep(_ link: CADisplayLink) {
         guard let id = followWindowID else { return }
         followTick &+= 1
-        if let bounds = Self.windowBounds(id), bounds != lastFollowedBounds {
-            lastFollowedBounds = bounds
-            reposition(to: bounds)
+        if let bounds = Self.windowBounds(id) {
+            let predicted = leadingBounds(for: bounds)
+            if predicted != lastFollowedBounds {
+                lastFollowedBounds = predicted
+                reposition(to: predicted)
+            }
         }
         if followTick % occlusionCheckInterval == 0 {
             let nowOccluded = !Self.isWindowVisible(id)
@@ -102,6 +126,13 @@ final class CaptureAreaIndicator {
                 applyOcclusion()
             }
         }
+    }
+
+    /// Leads the border ahead of the window using its smoothed velocity (see FollowPredictor),
+    /// cancelling the one-frame reactive lag of a follower overlay so it doesn't trail on a
+    /// fast drag.
+    private func leadingBounds(for current: CGRect) -> CGRect {
+        CGRect(origin: predictor.predict(origin: current.origin), size: current.size)
     }
 
     /// Fades the border + stop pill out while the recorded window is covered/off-screen, and
@@ -167,7 +198,10 @@ final class CaptureAreaIndicator {
             } else {
                 borderPanel.setFrame(frame, display: false)
                 borderView.frame = CGRect(origin: .zero, size: frame.size)
-                borderView.setTarget(CGRect(x: pad, y: pad, width: target.width, height: target.height))
+                borderView.setTarget(
+                    CGRect(x: pad, y: pad, width: target.width, height: target.height),
+                    windowCornerRadius: Self.windowCornerRadius(forSize: target.size)
+                )
             }
         }
 
@@ -192,7 +226,10 @@ final class CaptureAreaIndicator {
         panel.ignoresMouseEvents = true   // the window underneath must stay usable
         let view = AreaBorderView(frame: CGRect(origin: .zero, size: frame.size))
         view.accentColor = color
-        view.setTarget(CGRect(x: pad, y: pad, width: target.width, height: target.height))
+        view.setTarget(
+            CGRect(x: pad, y: pad, width: target.width, height: target.height),
+            windowCornerRadius: Self.windowCornerRadius(forSize: target.size)
+        )
         panel.contentView = view
         borderView = view
         panel.orderFrontRegardless()
@@ -247,33 +284,38 @@ final class CaptureAreaIndicator {
     }
 }
 
-/// A GPU-composited glowing rounded border: a soft accent bloom under a thin crisp line, both
-/// CAShapeLayers so moving the panel never triggers a repaint. A thin line and tight corner
-/// hug the window edge; the glow makes it read as "lit". Lives in a click-through panel.
+/// A GPU-composited glowing border that hugs the window's own rounded corners: a soft accent
+/// bloom under a thin crisp line. Both are plain CALayers with `cornerCurve = .continuous`
+/// (the squircle curve macOS uses for window corners) so the border traces the SAME corner
+/// shape as the window, offset outward by a small uniform gap. Because it's a moved layer,
+/// following a dragged window is a pure reposition with no repaint. Lives in a click-through
+/// panel.
 private final class AreaBorderView: NSView {
-    private let glowLayer = CAShapeLayer()
-    private let lineLayer = CAShapeLayer()
+    private let glowLayer = CALayer()
+    private let lineLayer = CALayer()
     private var color: NSColor = .systemRed
 
-    private let cornerRadius: CGFloat = 5
-    private let lineWidth: CGFloat = 1.5
+    /// Uniform margin between the window edge and the border. Expanding a rounded rect by this
+    /// keeps the corner concentric: border radius = window radius + gap.
+    static let gap: CGFloat = 2
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.masksToBounds = false
 
-        // Glow: a wider accent stroke with a strong accent shadow bloom.
-        glowLayer.fillColor = nil
-        glowLayer.lineWidth = 3
+        for sublayer in [glowLayer, lineLayer] {
+            sublayer.backgroundColor = NSColor.clear.cgColor
+            sublayer.cornerCurve = .continuous
+            sublayer.masksToBounds = false
+        }
+        // Glow: a wider accent border with a strong accent shadow bloom.
+        glowLayer.borderWidth = 3
         glowLayer.shadowRadius = 16
         glowLayer.shadowOpacity = 1
         glowLayer.shadowOffset = .zero
-        glowLayer.masksToBounds = false
-
         // Crisp line: a thin bright accent edge on top.
-        lineLayer.fillColor = nil
-        lineLayer.lineWidth = lineWidth
+        lineLayer.borderWidth = 1.5
 
         layer?.addSublayer(glowLayer)
         layer?.addSublayer(lineLayer)
@@ -288,27 +330,33 @@ private final class AreaBorderView: NSView {
         get { color }
         set {
             color = newValue
-            glowLayer.strokeColor = newValue.withAlphaComponent(0.85).cgColor
+            glowLayer.borderColor = newValue.withAlphaComponent(0.85).cgColor
             glowLayer.shadowColor = newValue.cgColor
-            lineLayer.strokeColor = newValue.cgColor
+            lineLayer.borderColor = newValue.cgColor
         }
     }
 
-    /// Rebuilds the rounded-rect path around `rect` (the target area, in view coords). Called
-    /// on show and on resize; disabled implicit animations so a resize snaps, not lerps.
-    func setTarget(_ rect: CGRect) {
-        let strokeRect = rect.insetBy(dx: -lineWidth / 2, dy: -lineWidth / 2)
-        let path = CGPath(roundedRect: strokeRect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
+    /// Positions the border around `windowRectInView` (the window's bounding box in view
+    /// coords), expanded by `gap`, with a continuous corner of `windowCornerRadius + gap` so it
+    /// sits exactly around the window's own corner. Called on show and on resize; implicit
+    /// animations disabled so a resize snaps rather than lerps.
+    func setTarget(_ windowRectInView: CGRect, windowCornerRadius: CGFloat) {
+        let frame = windowRectInView.insetBy(dx: -Self.gap, dy: -Self.gap)
+        let radius = windowCornerRadius + Self.gap
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        glowLayer.frame = bounds
-        lineLayer.frame = bounds
-        glowLayer.path = path
-        lineLayer.path = path
+        for sublayer in [glowLayer, lineLayer] {
+            sublayer.frame = frame
+            sublayer.cornerRadius = radius
+        }
+        glowLayer.shadowPath = CGPath(
+            roundedRect: CGRect(origin: .zero, size: frame.size),
+            cornerWidth: radius, cornerHeight: radius, transform: nil
+        )
         CATransaction.commit()
     }
 
-    /// A gentle settle onto the window when it first appears: fade in while the frame eases
+    /// A gentle settle onto the window when it first appears: fade in while the border eases
     /// down from a hair larger.
     func animateAppear() {
         guard let layer else { return }
@@ -339,6 +387,45 @@ private final class AreaBorderView: NSView {
         fade.duration = 0.18
         layer.opacity = hidden ? 0 : 1
         layer.add(fade, forKey: "occlusion")
+    }
+}
+
+/// Pure velocity-lead predictor for the window-follow border. A follower overlay window is
+/// composited the frame AFTER it reads the target's position, so on a fast drag it trails by a
+/// frame. Feeding each frame's window origin here returns a position led ~`leadFrames` frames
+/// ahead (current + smoothed per-frame velocity), which cancels that lag for steady motion; at
+/// a standstill the velocity decays to ~0, so there's no overshoot. The lead is clamped so a
+/// stale or jumpy read can't fling the border far. Pure and clock-free → unit-testable.
+struct FollowPredictor {
+    private var velX: CGFloat = 0
+    private var velY: CGFloat = 0
+    private var last: CGPoint?
+
+    let leadFrames: CGFloat
+    let maxLead: CGFloat
+    /// Weight of the newest sample in the velocity EMA (0…1); higher = snappier, noisier.
+    let smoothing: CGFloat
+
+    init(leadFrames: CGFloat = 1.35, maxLead: CGFloat = 300, smoothing: CGFloat = 0.65) {
+        self.leadFrames = leadFrames
+        self.maxLead = maxLead
+        self.smoothing = smoothing
+    }
+
+    mutating func reset() {
+        velX = 0
+        velY = 0
+        last = nil
+    }
+
+    mutating func predict(origin: CGPoint) -> CGPoint {
+        defer { last = origin }
+        guard let prev = last else { return origin }
+        velX = velX * (1 - smoothing) + (origin.x - prev.x) * smoothing
+        velY = velY * (1 - smoothing) + (origin.y - prev.y) * smoothing
+        let lx = max(-maxLead, min(maxLead, velX * leadFrames))
+        let ly = max(-maxLead, min(maxLead, velY * leadFrames))
+        return CGPoint(x: origin.x + lx, y: origin.y + ly)
     }
 }
 
