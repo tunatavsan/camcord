@@ -1,36 +1,32 @@
 import AppKit
+import QuartzCore
 
 /// A floating preview of the screenshot that was just copied — a framed thumbnail with a
-/// soft shadow that springs in at the BOTTOM-RIGHT of the active screen (where macOS's own
-/// capture thumbnail sits). It replaces the small center HUD toast for screenshot captures:
-/// the preview itself is the "it landed on the clipboard" confirmation.
+/// soft shadow at the BOTTOM-RIGHT of the active screen (where macOS's own capture
+/// thumbnail sits). It replaces the small center HUD toast for screenshot captures: the
+/// preview itself is the "it landed on the clipboard" confirmation.
 ///
-/// Interactions, all with our springy motion: it springs in, a click opens the shot for
-/// editing (Preview/Markup), and a drag flings it off to the right to dismiss (release
-/// short of the threshold and it springs back). No close button — the swipe IS the close.
+/// All motion is Core Animation on the card's LAYER (not the window frame, which doesn't
+/// animate reliably for a borderless panel): it springs in from the right edge, and a
+/// while later it leaves the exact same way — reverse motion, back out to the edge. A click
+/// opens the shot for editing (Preview/Markup); a drag flings it off to the right (release
+/// short and it springs back home).
 ///
 /// One instance is owned by `AppDelegate`; showing again replaces the current card.
 @MainActor
 final class ScreenshotPreviewCard {
-    /// Transparent padding baked into the panel around the card so the drop shadow isn't
-    /// clipped by the window bounds.
-    static let shadowInset: CGFloat = 28
+    /// Transparent padding baked into the panel around the card: room for the drop shadow
+    /// AND for the card to slide in/out without the window clipping it.
+    static let shadowInset: CGFloat = 34
     /// Gap from the screen's visible bottom-right corner (above the Dock, inside the edge).
     private static let screenMargin: CGFloat = 34
-    /// How far the card slides on its spring-in entrance.
-    private static let slide: CGFloat = 52
-    /// A springy ease-out-back — the same "fun" feel as the window-snap highlight.
-    private static let springTiming = CAMediaTimingFunction(controlPoints: 0.34, 1.56, 0.64, 1)
 
     private var panel: NSPanel?
+    private var card: PreviewCardView?
     private var dismissTask: Task<Void, Never>?
-    /// The panel's resting origin, so a drag can move it and snap it back.
-    private var restOrigin: CGPoint = .zero
-    private var cardWidth: CGFloat = 0
 
     /// Shows the preview for a freshly captured `image`. `fileURL` is the on-disk PNG when
-    /// disk-saving is on (the card opens that exact file); nil means clipboard-only, and the
-    /// card lazily writes a temp PNG when opened. Respects the "show copy confirmation" pref.
+    /// disk-saving is on; nil means clipboard-only (a temp PNG is written on demand).
     func show(image: CGImage, fileURL: URL?) {
         guard HUDToast.isEnabled() else { return }
         hide()
@@ -38,28 +34,24 @@ final class ScreenshotPreviewCard {
         else { return }
 
         let card = PreviewCardView(image: image, fileURL: fileURL)
-        card.onOpened = { [weak self] in self?.flingOff() }
         card.onHoverChange = { [weak self] hovering in self?.hoverChanged(hovering) }
-        card.onDragChanged = { [weak self] dx in self?.dragChanged(dx) }
-        card.onDragEnded = { [weak self] dx in self?.dragEnded(dx) }
-        cardWidth = card.cardSize.width
+        card.onDismiss = { [weak self] in self?.dismiss() }
 
         let panelSize = CGSize(
             width: card.cardSize.width + Self.shadowInset * 2,
             height: card.cardSize.height + Self.shadowInset * 2
         )
-        // Bottom-right: card right edge `screenMargin` inside the visible edge, bottom edge
-        // `screenMargin` above the Dock. Back out the panel's transparent shadow border.
+        // Static window: the card slides WITHIN it (layer transform), so there's no window
+        // animation to misbehave. Positioned so the card rests `screenMargin` inside the
+        // visible bottom-right corner.
         let visible = screen.visibleFrame
-        let finalOrigin = CGPoint(
+        let origin = CGPoint(
             x: visible.maxX - Self.screenMargin - panelSize.width + Self.shadowInset,
             y: visible.minY + Self.screenMargin - Self.shadowInset
         )
-        restOrigin = finalOrigin
-        let startOrigin = CGPoint(x: finalOrigin.x + Self.slide, y: finalOrigin.y)
 
         let panel = NSPanel(
-            contentRect: CGRect(origin: startOrigin, size: panelSize),
+            contentRect: CGRect(origin: origin, size: panelSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -72,17 +64,12 @@ final class ScreenshotPreviewCard {
         panel.isReleasedWhenClosed = false
         card.frame = CGRect(origin: .zero, size: panelSize)
         panel.contentView = card
-        panel.alphaValue = 0
         panel.orderFrontRegardless()
 
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.36
-            ctx.timingFunction = Self.springTiming
-            panel.animator().setFrameOrigin(finalOrigin)
-            panel.animator().alphaValue = 1
-        }
         self.panel = panel
-        armDismiss(after: 5.0)
+        self.card = card
+        card.animateIn()
+        armDismiss(after: 4.5)
     }
 
     /// Removes the card immediately (no animation) — used when replacing it.
@@ -91,15 +78,15 @@ final class ScreenshotPreviewCard {
         dismissTask = nil
         panel?.orderOut(nil)
         panel = nil
+        card = nil
     }
 
     private func hoverChanged(_ hovering: Bool) {
         if hovering {
-            // Give the user time to read/click: freeze the countdown while the pointer is on it.
             dismissTask?.cancel()
             dismissTask = nil
         } else {
-            armDismiss(after: 2.6)
+            armDismiss(after: 2.4)
         }
     }
 
@@ -108,74 +95,30 @@ final class ScreenshotPreviewCard {
         dismissTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(seconds))
             guard !Task.isCancelled else { return }
-            self?.flingOff()
+            self?.dismiss()
         }
     }
 
-    // MARK: - Swipe-to-dismiss
-
-    /// The card follows the drag (mostly rightward), fading as it goes so the dismissal
-    /// reads before you let go.
-    private func dragChanged(_ dx: CGFloat) {
-        guard let panel else { return }
-        dismissTask?.cancel()
-        dismissTask = nil
-        // A little rubber-band to the left, free travel to the right.
-        let x = restOrigin.x + max(dx, -22)
-        panel.setFrameOrigin(CGPoint(x: x, y: restOrigin.y))
-        panel.alphaValue = dx > 0 ? max(0.35, 1 - dx / max(1, cardWidth) * 0.6) : 1
-    }
-
-    /// Past ~a third of the card's width → fling it off; otherwise spring it back home.
-    private func dragEnded(_ dx: CGFloat) {
-        guard panel != nil else { return }
-        if dx > max(80, cardWidth * 0.3) {
-            flingOff()
-        } else {
-            snapBack()
-        }
-    }
-
-    private func snapBack() {
-        guard let panel else { return }
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.45
-            ctx.timingFunction = Self.springTiming
-            panel.animator().setFrameOrigin(restOrigin)
-            panel.animator().alphaValue = 1
-        }
-        armDismiss(after: 3.0)
-    }
-
-    /// Sends the card off the right edge and fades it out, then orders it away. Shared by
-    /// the swipe, the auto-dismiss timer, and a click (which opens the editor).
-    private func flingOff() {
-        guard let panel else { return }
+    /// Leaves the way it came in — reverse motion out to the right edge + fade — then orders
+    /// the panel away. Shared by the auto-dismiss timer, a completed swipe, and a click.
+    private func dismiss() {
+        guard let panel, let card else { return }
         self.panel = nil
+        self.card = nil
         dismissTask?.cancel()
         dismissTask = nil
-        let target = CGPoint(x: restOrigin.x + cardWidth + Self.shadowInset * 2 + 48, y: panel.frame.origin.y)
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.24
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
-            panel.animator().setFrameOrigin(target)
-            panel.animator().alphaValue = 0
-        }
-        // Order out once the fade completes (we're already on the main actor).
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(260))
+        card.animateOut {
             panel.orderOut(nil)
         }
     }
 }
 
-/// The panel's content: a shadow-padded container holding the framed thumbnail. Owns the
-/// hover tracking (pauses auto-dismiss); the card box owns the click / swipe interaction.
+/// The panel's content: a shadow-padded container holding the framed thumbnail. Owns hover
+/// tracking (pauses auto-dismiss) and forwards the box's dismiss request; the card box owns
+/// the layer motion and the click / swipe interaction.
 private final class PreviewCardView: NSView {
-    var onOpened: (() -> Void)?
     var onHoverChange: ((Bool) -> Void)?
-    var onDragChanged: ((CGFloat) -> Void)?
-    var onDragEnded: ((CGFloat) -> Void)?
+    var onDismiss: (() -> Void)?
 
     let cardSize: CGSize
     private let box: CardBoxView
@@ -188,9 +131,7 @@ private final class PreviewCardView: NSView {
         wantsLayer = true
 
         box.frame = CGRect(x: inset, y: inset, width: cardSize.width, height: cardSize.height)
-        box.onOpened = { [weak self] in self?.onOpened?() }
-        box.onDragChanged = { [weak self] dx in self?.onDragChanged?(dx) }
-        box.onDragEnded = { [weak self] dx in self?.onDragEnded?(dx) }
+        box.onDismiss = { [weak self] in self?.onDismiss?() }
         addSubview(box)
     }
 
@@ -199,12 +140,17 @@ private final class PreviewCardView: NSView {
 
     override var isFlipped: Bool { false }
 
+    func animateIn() { box.animateIn() }
+    func animateOut(completion: @escaping () -> Void) { box.animateOut(completion: completion) }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
+        // Track only the card's rect (not the transparent shadow margin) so hover reflects
+        // the card itself.
         addTrackingArea(NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            rect: box.frame,
+            options: [.mouseEnteredAndExited, .activeAlways],
             owner: self, userInfo: nil
         ))
     }
@@ -214,11 +160,10 @@ private final class PreviewCardView: NSView {
 }
 
 /// The framed thumbnail: an appearance-adaptive rounded frame around the shot, with a soft
-/// drop shadow and a small "copied" check. Click opens it for editing; drag swipes it away.
+/// drop shadow and a small "copied" check. All entrance/exit/swipe motion lives on this
+/// view's layer transform. Click opens it for editing; drag swipes it away.
 private final class CardBoxView: NSView {
-    var onOpened: (() -> Void)?
-    var onDragChanged: ((CGFloat) -> Void)?
-    var onDragEnded: ((CGFloat) -> Void)?
+    var onDismiss: (() -> Void)?
 
     private let image: CGImage
     private let diskURL: URL?
@@ -226,30 +171,33 @@ private final class CardBoxView: NSView {
 
     let cardSize: CGSize
     private let imageView = NSImageView()
-    /// Card corner radius — a touch smaller so it reads as a floating photo, not a panel.
     private static let cornerRadius: CGFloat = 8
+    /// How far the card sits off to the right at the start/end of its travel.
+    private var enterSlide: CGFloat { 34 }
 
-    /// Drag tracking, in absolute screen X so it stays correct while the window itself moves.
+    /// Absolute-screen-X drag tracking (stays correct even as the card translates).
     private var dragStartX: CGFloat = 0
     private var didDrag = false
+    private var currentTranslation: CGFloat = 0
 
     init(image: CGImage, fileURL: URL?) {
         self.image = image
         self.diskURL = fileURL
         let thumb = Self.thumbnailSize(for: image)
-        // No surrounding frame — the shot itself IS the card, floating on a soft shadow with
-        // just a hairline dark edge so it never bleeds into a light background behind it.
         cardSize = thumb
         super.init(frame: CGRect(origin: .zero, size: cardSize))
 
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
         layer?.cornerRadius = Self.cornerRadius
-        layer?.masksToBounds = false   // let the drop shadow spill past the bounds
+        layer?.masksToBounds = false
         layer?.shadowColor = NSColor.black.cgColor
         layer?.shadowOpacity = 0.42
         layer?.shadowRadius = 16
         layer?.shadowOffset = CGSize(width: 0, height: -4)
+        // Start hidden so the window can order in before `animateIn` fades/springs it — no
+        // one-frame flash of the card sitting at rest.
+        layer?.opacity = 0
 
         imageView.frame = bounds
         imageView.autoresizingMask = [.width, .height]
@@ -262,7 +210,6 @@ private final class CardBoxView: NSView {
         imageView.layer?.borderColor = NSColor.black.withAlphaComponent(0.5).cgColor
         addSubview(imageView)
 
-        // A small green "copied" check, tucked into the shot's top-right corner.
         let badge = CheckBadgeView(frame: CGRect(x: cardSize.width - 24, y: cardSize.height - 24, width: 18, height: 18))
         badge.autoresizingMask = [.minXMargin, .minYMargin]
         addSubview(badge)
@@ -272,8 +219,6 @@ private final class CardBoxView: NSView {
     required init?(coder: NSCoder) { nil }
 
     override var isFlipped: Bool { false }
-
-    // Drive appearance updates through updateLayer so the shadow path refreshes on resize.
     override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
@@ -281,6 +226,89 @@ private final class CardBoxView: NSView {
     }
 
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+
+    // MARK: - Motion (layer transform + opacity)
+
+    /// Springs in from the right edge with a bit of bounce — our "fun" motion.
+    func animateIn() {
+        guard let layer else { return }
+        let spring = CASpringAnimation(keyPath: "transform.translation.x")
+        spring.fromValue = enterSlide
+        spring.toValue = 0
+        spring.mass = 1
+        spring.stiffness = 210
+        spring.damping = 19
+        spring.initialVelocity = 0
+        spring.duration = spring.settlingDuration
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0
+        fade.toValue = 1
+        fade.duration = 0.26
+        layer.transform = CATransform3DIdentity
+        layer.opacity = 1
+        currentTranslation = 0
+        layer.add(spring, forKey: "translate")
+        layer.add(fade, forKey: "fade")
+    }
+
+    /// Leaves the exact reverse way — a small anticipation, then flies off to the right +
+    /// fade. `completion` runs when it's fully gone.
+    func animateOut(completion: @escaping () -> Void) {
+        guard let layer else { completion(); return }
+        let target = cardSize.width * 0.8 + 40
+        CATransaction.begin()
+        CATransaction.setCompletionBlock(completion)
+        let move = CABasicAnimation(keyPath: "transform.translation.x")
+        move.fromValue = currentTranslation
+        move.toValue = target
+        move.duration = 0.34
+        // Ease-in with a touch of anticipation (dips left before flying right) — the mirror
+        // of the spring-in.
+        move.timingFunction = CAMediaTimingFunction(controlPoints: 0.5, -0.32, 0.75, 0.1)
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = layer.presentation()?.opacity ?? 1
+        fade.toValue = 0
+        fade.duration = 0.32
+        fade.timingFunction = CAMediaTimingFunction(name: .easeIn)
+        layer.transform = CATransform3DMakeTranslation(target, 0, 0)
+        layer.opacity = 0
+        currentTranslation = target
+        layer.add(move, forKey: "translate")
+        layer.add(fade, forKey: "fade")
+        CATransaction.commit()
+    }
+
+    /// Springs the card back to rest after an incomplete swipe.
+    private func springBack() {
+        guard let layer else { return }
+        let spring = CASpringAnimation(keyPath: "transform.translation.x")
+        spring.fromValue = currentTranslation
+        spring.toValue = 0
+        spring.mass = 1
+        spring.stiffness = 240
+        spring.damping = 20
+        spring.duration = spring.settlingDuration
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = layer.presentation()?.opacity ?? layer.opacity
+        fade.toValue = 1
+        fade.duration = 0.2
+        layer.transform = CATransform3DIdentity
+        layer.opacity = 1
+        currentTranslation = 0
+        layer.add(spring, forKey: "translate")
+        layer.add(fade, forKey: "fade")
+    }
+
+    private func setDragTranslation(_ dx: CGFloat) {
+        guard let layer else { return }
+        let x = max(dx, -22)   // free rightward travel, a little rubber-band left
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.transform = CATransform3DMakeTranslation(x, 0, 0)
+        layer.opacity = dx > 0 ? Float(max(0.35, 1 - dx / max(1, bounds.width) * 0.6)) : 1
+        CATransaction.commit()
+        currentTranslation = x
+    }
 
     // MARK: - Click vs. swipe
 
@@ -292,12 +320,17 @@ private final class CardBoxView: NSView {
     override func mouseDragged(with event: NSEvent) {
         let dx = NSEvent.mouseLocation.x - dragStartX
         if !didDrag, abs(dx) > 4 { didDrag = true }
-        if didDrag { onDragChanged?(dx) }
+        if didDrag { setDragTranslation(dx) }
     }
 
     override func mouseUp(with event: NSEvent) {
         if didDrag {
-            onDragEnded?(NSEvent.mouseLocation.x - dragStartX)
+            let dx = NSEvent.mouseLocation.x - dragStartX
+            if dx > max(80, bounds.width * 0.3) {
+                onDismiss?()          // past the threshold → leave (controller drives animateOut)
+            } else {
+                springBack()
+            }
         } else {
             openForEditing()
         }
@@ -305,9 +338,6 @@ private final class CardBoxView: NSView {
 
     // MARK: - Open for editing
 
-    /// Opens the shot for editing. Prefers Preview (which carries the Markup tools) so a
-    /// click gives real "edit it" behavior until an in-app editor exists; falls back to the
-    /// default image handler if Preview isn't present.
     private func openForEditing() {
         guard let url = exportedFileURL() else { NSSound.beep(); return }
         let workspace = NSWorkspace.shared
@@ -318,11 +348,9 @@ private final class CardBoxView: NSView {
         } else {
             workspace.open(url)
         }
-        onOpened?()
+        onDismiss?()
     }
 
-    /// A real on-disk PNG to open: the saved file if it exists, else a temp PNG written once
-    /// and cached. (The disk save is async and best-effort, so verify it before using it.)
     private func exportedFileURL() -> URL? {
         if let diskURL, FileManager.default.fileExists(atPath: diskURL.path) { return diskURL }
         if let tempURL, FileManager.default.fileExists(atPath: tempURL.path) { return tempURL }
@@ -340,8 +368,6 @@ private final class CardBoxView: NSView {
 
     // MARK: - Sizing
 
-    /// Fits the shot into a tasteful thumbnail box, preserving aspect and never upscaling.
-    /// Image dimensions are in pixels (Retina = 2×), so normal captures land near 1:1.
     private static func thumbnailSize(for image: CGImage) -> CGSize {
         let maxW: CGFloat = 320, maxH: CGFloat = 236
         let w = CGFloat(image.width), h = CGFloat(image.height)
