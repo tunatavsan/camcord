@@ -291,18 +291,49 @@ final class RecordingEngine: NSObject {
         let url = try await writer.finishWriting()
 
         // Collapse system-audio + microphone into ONE track so the mic is audible in
-        // every player. Best-effort: mixInPlace only swaps the file on success, so any
-        // failure (or a single-track file) leaves the finished recording exactly as-is.
+        // every player — but do it OFF the stop path: the file is already finished and
+        // playable, so "recording done" feedback fires instantly while the (in-place,
+        // atomic) mix runs in the background. mixInPlace only swaps the file on success,
+        // so any failure (or a single-track file) leaves the recording exactly as-is.
         if pendingAudioMix {
+            startBackgroundAudioMix(url: url, fileType: outputFileType)
+        }
+        return url
+    }
+
+    // MARK: - Background audio mix (kept off the stop path so feedback is instant)
+
+    /// In-flight background mixes, keyed by id so several can overlap and all be awaited
+    /// on the app-termination path (a Cmd-Q right after stopping still gets the mixed file).
+    private var pendingMixes: [Int: Task<Void, Never>] = [:]
+    private var nextMixID = 0
+
+    /// True while any background audio mix is still running.
+    var isMixing: Bool { !pendingMixes.isEmpty }
+
+    private func startBackgroundAudioMix(url: URL, fileType: AVFileType) {
+        let id = nextMixID
+        nextMixID += 1
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
             do {
-                try await AudioTrackMixer.mixInPlace(url: url, fileType: outputFileType)
+                try await AudioTrackMixer.mixInPlace(url: url, fileType: fileType)
             } catch AudioTrackMixer.MixError.notNeeded {
                 // The file ended up with a single audio track — nothing to mix.
             } catch {
-                logger.error("Audio mix failed; keeping the multi-track recording: \(String(describing: error), privacy: .public)")
+                self.logger.error("Audio mix failed; keeping the multi-track recording: \(String(describing: error), privacy: .public)")
             }
+            self.pendingMixes[id] = nil
         }
-        return url
+        pendingMixes[id] = task
+    }
+
+    /// Awaits every in-flight background mix. Used only on the terminate path so quitting
+    /// right after a stop still completes the single-track file before the process exits.
+    func waitForPendingMixes() async {
+        for task in Array(pendingMixes.values) {
+            await task.value
+        }
     }
 
     private func clearStreamState() {

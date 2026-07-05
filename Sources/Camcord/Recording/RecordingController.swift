@@ -64,16 +64,16 @@ final class RecordingController {
     /// Stop when the output volume drops below this much free space (bytes).
     private static let lowDiskThresholdBytes: Int64 = 500 * 1024 * 1024
 
-    private static let postHideDelay: Duration = .milliseconds(80)
-
     /// The in-flight stop/finalize. `uiState` flips to `.idle` the moment the user
     /// stops (instant UI feedback), but the file's moov atom is only written when
     /// this task completes — anything that treats `.idle` as "nothing in flight"
     /// (starting a new recording, quitting the app) must also consult this.
     private var stopTask: Task<Void, Never>?
 
-    /// True while a stopped recording is still finalizing its file on disk.
-    var isFinalizing: Bool { stopTask != nil }
+    /// True while a stopped recording is still finalizing its file on disk — the moov
+    /// atom write (stopTask) OR the background audio mix (which runs after feedback, so
+    /// termination must still wait it out).
+    var isFinalizing: Bool { stopTask != nil || engine.isMixing }
 
     /// Anything in flight that app termination must not kill mid-way: an interactive
     /// start (stream/writer coming up), a live session, or a finalize still writing.
@@ -140,6 +140,15 @@ final class RecordingController {
     /// pop the selection overlay while the app is trying to quit. If a stop is
     /// already finalizing, it waits for that instead of tearing down twice.
     func stopForTermination() async {
+        await performTerminationStop()
+        // The audio mix runs in the background after a normal stop; on the quit path we
+        // must wait it out so a Cmd-Q right after stopping still leaves the single-track
+        // (mic-audible) file, not the intermediate two-track one. Bounded by the 20s
+        // AppDelegate failsafe.
+        await engine.waitForPendingMixes()
+    }
+
+    private func performTerminationStop() async {
         if let stopTask {
             await stopTask.value
             return
@@ -211,9 +220,10 @@ final class RecordingController {
         }
 
         guard let selection = await coordinator.selectCaptureTarget() else { return }
-        // The overlay tore its panels down before returning; let the compositor flush
-        // the hide before the stream's first frame (same rule as screenshots).
-        try? await Task.sleep(for: Self.postHideDelay)
+        // No compositor-flush wait here (unlike screenshots): SCStream.startCapture's own
+        // warm-up before its first COMPLETE frame far outlasts the overlay's orderOut
+        // flush, so the selection chrome is long gone by the time anything is recorded —
+        // the sleep was pure dead time on the start path.
 
         switch selection {
         case .window(let window):
