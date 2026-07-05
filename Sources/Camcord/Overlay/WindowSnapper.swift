@@ -3,7 +3,39 @@ import ScreenCaptureKit
 
 /// Hit-tests the window under the cursor for the overlay's window-snap mode.
 enum WindowSnapper {
-    private static let minimumSize: CGFloat = 40
+    static let minimumSize: CGFloat = 40
+
+    /// One on-screen window's geometry as reported by the window server, in
+    /// front-to-back z-order. Pure value type so the hit-test is unit-testable
+    /// without a live window server.
+    struct Candidate: Equatable {
+        let windowID: CGWindowID
+        let layer: Int
+        let bounds: CGRect
+    }
+
+    /// Pure hit-test: the topmost eligible window at `point`. `ordered` MUST be
+    /// front-to-back. Eligible = normal layer (0), at least `minimumSize` on each edge,
+    /// containing `point`, ScreenCaptureKit-capturable (`capturableIDs`), and not one of
+    /// our own windows (`ownWindowIDs`). Returns the first match — i.e. a small window
+    /// sitting on top of a larger one wins over the larger one, which is exactly what a
+    /// front-to-back scan guarantees.
+    static func topmost(
+        atCGPoint point: CGPoint,
+        ordered: [Candidate],
+        capturableIDs: Set<CGWindowID>,
+        ownWindowIDs: Set<CGWindowID>
+    ) -> CGWindowID? {
+        for candidate in ordered {
+            guard candidate.layer == 0 else { continue }
+            guard candidate.bounds.width >= minimumSize, candidate.bounds.height >= minimumSize else { continue }
+            guard candidate.bounds.contains(point) else { continue }
+            guard capturableIDs.contains(candidate.windowID) else { continue }
+            guard !ownWindowIDs.contains(candidate.windowID) else { continue }
+            return candidate.windowID
+        }
+        return nil
+    }
 
     /// Returns the topmost eligible window under `point` (CG screen space), or nil.
     ///
@@ -25,22 +57,28 @@ enum WindowSnapper {
             return nil
         }
 
-        // Front-to-back order.
-        for info in infoList {
-            guard (info[kCGWindowLayer as String] as? Int) == 0 else { continue }
+        let ordered: [Candidate] = infoList.compactMap { info in
             guard
+                let layer = info[kCGWindowLayer as String] as? Int,
+                let number = info[kCGWindowNumber as String] as? Int,
                 let boundsDict = info[kCGWindowBounds as String] as? [String: Any],
-                let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
-                bounds.width >= minimumSize, bounds.height >= minimumSize,
-                bounds.contains(point)
-            else { continue }
-            guard let number = info[kCGWindowNumber as String] as? Int else { continue }
-
-            // Only snap to windows ScreenCaptureKit can actually capture.
-            guard let window = byID[CGWindowID(number)], window.isOnScreen else { continue }
-            if window.owningApplication?.bundleIdentifier == ownBundleID { continue }
-            return window
+                let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
+            else { return nil }
+            return Candidate(windowID: CGWindowID(number), layer: layer, bounds: bounds)
         }
-        return nil
+        // Only snap to windows ScreenCaptureKit can actually capture, and never our own.
+        let capturableIDs = Set(content.windows.filter { $0.isOnScreen }.map { $0.windowID })
+        let ownWindowIDs = Set(
+            content.windows
+                .filter { $0.owningApplication?.bundleIdentifier == ownBundleID }
+                .map { $0.windowID }
+        )
+        guard let id = topmost(
+            atCGPoint: point,
+            ordered: ordered,
+            capturableIDs: capturableIDs,
+            ownWindowIDs: ownWindowIDs
+        ) else { return nil }
+        return byID[id]
     }
 }

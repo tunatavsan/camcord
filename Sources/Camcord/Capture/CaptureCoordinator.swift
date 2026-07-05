@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 @preconcurrency import ScreenCaptureKit
 import os
 
@@ -20,6 +21,9 @@ final class CaptureCoordinator {
     /// Wired to the status item's success flash — a visual "it landed" to pair with
     /// the capture sound.
     var onSuccess: (() -> Void)?
+
+    /// Wired by AppDelegate to the HUD toast — a transient thumbnail + "copied" confirmation.
+    var onToast: ((ToastRequest) -> Void)?
 
     /// One capture flow at a time: the overlay's own isPresenting only covers the
     /// on-screen phase, not the post-hide delay + SCK call after it — a re-press in
@@ -158,7 +162,7 @@ final class CaptureCoordinator {
             fail("Scroll capture: clipboard write failed")
             return
         }
-        succeeded(.fullScreenShot)
+        succeeded(.fullScreenShot, toast: ToastRequest(text: "Kaydırmalı görüntü kopyalandı", thumbnail: toastThumbnail(image)))
     }
 
     /// The SCDisplay whose frame contains the region's center.
@@ -220,6 +224,33 @@ final class CaptureCoordinator {
 
     func cancelHoldRegionSelection() {
         overlay.cancelHoldSelection()
+    }
+
+    // MARK: - OCR on an existing image (file / dropped / Services)
+
+    /// Extracts text (+ any QR/barcodes) from an image FILE the user already has and
+    /// copies it to the clipboard — the "I have a screenshot, pull the text out of it"
+    /// flow. Independent of live screen capture, so it needs no Screen Recording grant.
+    func captureTextFromImageFile(_ url: URL) {
+        guard let image = Self.loadCGImage(from: url) else {
+            fail("OCR from file: could not read an image at \(url.path)")
+            return
+        }
+        startOCR(on: image)
+    }
+
+    /// Same, for an image already in memory (e.g. from the Services pasteboard).
+    func captureTextFromImage(_ image: CGImage) {
+        startOCR(on: image)
+    }
+
+    /// Decodes the first image in a file via ImageIO — handles PNG/JPEG/HEIC/TIFF/etc.
+    private static func loadCGImage(from url: URL) -> CGImage? {
+        guard
+            let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+            let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else { return nil }
+        return image
     }
 
     // MARK: - Window screenshot
@@ -287,7 +318,7 @@ final class CaptureCoordinator {
                 fail("captureFullScreen: clipboard write failed")
                 return
             }
-            succeeded(.fullScreenShot)
+            succeeded(.fullScreenShot, toast: ToastRequest(text: "Ekran panoya kopyalandı", thumbnail: toastThumbnail(image)))
         } catch {
             fail("captureFullScreen: capture failed: \(error)")
         }
@@ -302,7 +333,7 @@ final class CaptureCoordinator {
                 fail("Region capture: clipboard write failed")
                 return
             }
-            succeeded(.regionShot)
+            succeeded(.regionShot, toast: ToastRequest(text: "Bölge panoya kopyalandı", thumbnail: toastThumbnail(image)))
         } catch {
             fail("Region capture failed: \(error)")
         }
@@ -324,7 +355,7 @@ final class CaptureCoordinator {
                 fail("Window capture: clipboard write failed")
                 return
             }
-            succeeded(.windowShot)
+            succeeded(.windowShot, toast: ToastRequest(text: "Pencere panoya kopyalandı", thumbnail: toastThumbnail(image)))
         } catch {
             fail("Window capture failed: \(error)")
         }
@@ -368,7 +399,7 @@ final class CaptureCoordinator {
                 fail("Text capture: clipboard write failed")
                 return
             }
-            succeeded(.textOCR)
+            succeeded(.textOCR, toast: ToastRequest(text: "Metin panoya kopyalandı", systemSymbol: "doc.on.clipboard.fill"))
         }
     }
 
@@ -396,11 +427,18 @@ final class CaptureCoordinator {
         ScreenshotSettings.load(from: .standard).uniqueSaveURL(date: Date())
     }
 
-    /// Success feedback: the action's distinct sound + a brief status-glyph flash.
-    private func succeeded(_ sound: FeedbackSound) {
+    /// Success feedback: the action's distinct sound + a brief status-glyph flash + an
+    /// optional HUD toast (thumbnail of what landed on the clipboard).
+    private func succeeded(_ sound: FeedbackSound, toast: ToastRequest? = nil) {
         clipboardEpoch &+= 1   // this capture now owns the clipboard (see startOCR)
         sound.play()
         onSuccess?()
+        if let toast { onToast?(toast) }
+    }
+
+    /// A small NSImage thumbnail for the copy toast, from a captured CGImage.
+    private func toastThumbnail(_ image: CGImage) -> NSImage {
+        NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
     }
 
     private func fail(_ message: String) {

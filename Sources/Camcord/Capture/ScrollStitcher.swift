@@ -34,6 +34,7 @@ final class ScrollStitcher {
     private let uniformBandRange = 24   // a strip flatter than this = blank over-scroll, skip it
     private let endStableLimit = 20.0   // a strip matching the reference's own tail = a bounce dup
     private let maxTotalHeight: Int     // px safety cap on the stitched content
+    private static let previewMaxHeightPx = 1200  // live preview renders at most this tall (tail only)
 
     struct Frame {
         let image: CGImage
@@ -142,9 +143,27 @@ final class ScrollStitcher {
         return render(pieces(), maxWidth: nil)
     }
 
-    /// A width-capped composite for the live preview (cheap to redraw each frame).
+    /// A width-capped composite for the live preview. Only the BOTTOM tail is rendered:
+    /// the panel pins the image to its bottom edge and clips the rest, so compositing the
+    /// full (up to `maxTotalHeight`) panorama every frame would be O(n) work — and O(n²)
+    /// across a long auto-scroll — for pixels no one sees. Rendering just the visible tail
+    /// keeps each redraw bounded regardless of how tall the capture has grown.
     func previewImage(maxWidth: Int) -> CGImage? {
-        render(pieces(), maxWidth: maxWidth)
+        let all = pieces()
+        guard !all.isEmpty else { return nil }
+        let srcW = all.map(\.width).max() ?? 0
+        guard srcW > 0 else { return nil }
+        let scale = srcW > maxWidth ? Double(maxWidth) / Double(srcW) : 1
+        // Enough source rows to more than fill the panel's visible tail once scaled down.
+        let sourceCap = Int((Double(Self.previewMaxHeightPx) / scale).rounded())
+        var tail: [CGImage] = []
+        var accumulated = 0
+        for piece in all.reversed() {
+            tail.append(piece)
+            accumulated += piece.height
+            if accumulated >= sourceCap { break }
+        }
+        return render(Array(tail.reversed()), maxWidth: maxWidth)
     }
 
     // MARK: - Warm-up → committed

@@ -34,10 +34,17 @@ enum ClipboardWriter {
         }
         let wrote = write(png: png, to: pasteboard)
         if let saveURL {
-            do {
-                try png.write(to: saveURL)
-            } catch {
-                logger.error("Failed to save screenshot to \(saveURL.path, privacy: .public): \(String(describing: error), privacy: .public)")
+            // The disk write (often several MB) must NOT run on the main actor: the app's
+            // CGEventTap is serviced by the main run loop, so a slow write to an iCloud /
+            // network / pressured volume would stall system-wide input, not just our UI.
+            // png (Data) and saveURL are Sendable; log via a captured Sendable Logger.
+            let log = logger
+            Task.detached(priority: .utility) {
+                do {
+                    try png.write(to: saveURL)
+                } catch {
+                    log.error("Failed to save screenshot to \(saveURL.path, privacy: .public): \(String(describing: error), privacy: .public)")
+                }
             }
         }
         return wrote

@@ -51,6 +51,12 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         pauseClock = PauseClock(frameDuration: frameDuration)
 
         writer = try AVAssetWriter(outputURL: outputURL, fileType: container.fileType)
+        // Crash resilience: periodically flush a movie fragment (moof) to disk so a
+        // process crash / power loss / force-quit mid-recording leaves a PLAYABLE file
+        // up to the last fragment, instead of a moov-less, totally unreadable loss.
+        // A normal finishWriting() still consolidates into a clean, flat file — this only
+        // pays off on the abnormal-exit path. 5s bounds the worst-case loss to the tail.
+        writer.movieFragmentInterval = CMTime(seconds: 5, preferredTimescale: 600)
 
         var videoSettings: [String: Any] = [
             AVVideoCodecKey: codec.avCodec,

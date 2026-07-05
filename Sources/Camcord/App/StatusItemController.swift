@@ -3,6 +3,7 @@ import AppKit
 import CoreGraphics
 import KeyboardShortcuts
 import ServiceManagement
+import UniformTypeIdentifiers
 import os
 
 @MainActor
@@ -17,6 +18,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let captureActiveWindowItem = NSMenuItem(title: "Aktif Pencereyi Çek", action: nil, keyEquivalent: "")
     private let captureFullScreenItem = NSMenuItem(title: "Tüm Ekranı Çek", action: nil, keyEquivalent: "")
     private let captureTextItem = NSMenuItem(title: "Metni Çek (OCR)", action: nil, keyEquivalent: "")
+    private let captureTextFromFileItem = NSMenuItem(title: "Görüntüden Metni Çıkar…", action: nil, keyEquivalent: "")
     private let recordToggleItem = NSMenuItem(title: "Kayda Başla…", action: nil, keyEquivalent: "")
     private let recordFullScreenItem = NSMenuItem(title: "Tüm Ekranı Kaydet", action: nil, keyEquivalent: "")
     private let pauseResumeItem = NSMenuItem(title: "Kaydı Duraklat", action: nil, keyEquivalent: "")
@@ -87,6 +89,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         captureTextItem.action = #selector(captureTextRegion)
         captureTextItem.setShortcut(for: .captureTextRegion)
         menu.addItem(captureTextItem)
+
+        captureTextFromFileItem.target = self
+        captureTextFromFileItem.action = #selector(captureTextFromFile)
+        menu.addItem(captureTextFromFileItem)
 
         menu.addItem(.separator())
 
@@ -408,6 +414,19 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             try? await Task.sleep(for: .milliseconds(200))
             await coordinator.captureTextRegionInteractive()
         }
+    }
+
+    /// OCR an image the user already has: pick a file, extract its text to the clipboard.
+    @objc private func captureTextFromFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.image]
+        panel.prompt = "Metni Çıkar"
+        panel.message = "Metnini çıkarmak istediğin görüntüyü seç"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        coordinator.captureTextFromImageFile(url)
     }
 
     // MARK: - Actions

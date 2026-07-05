@@ -30,6 +30,9 @@ final class RecordingController {
     var onFinishing: ((Bool) -> Void)?
     /// Fired with the finished recording's URL (drives the panel's "done" card).
     var onRecordingFinished: ((URL) -> Void)?
+    /// Wired by AppDelegate to the HUD toast — transient confirmations (recording copied)
+    /// and important notices (auto-stop on low disk / max duration).
+    var onToast: ((ToastRequest) -> Void)?
 
     private(set) var uiState: UIState = .idle
 
@@ -44,6 +47,22 @@ final class RecordingController {
     private var accumulatedElapsed: TimeInterval = 0
     private var segmentStart: Date?
     private var elapsedTimer: Timer?
+
+    /// The DND "off" Shortcut to run when this recording ends (captured at start so a
+    /// settings change mid-recording can't leave Focus stuck on). Nil = nothing to undo.
+    private var activeDNDOffShortcut: String?
+
+    /// Auto-stop guards captured at start (0 maxSeconds = no duration cap).
+    private struct ActiveLimits {
+        let maxSeconds: TimeInterval
+        let diskGuard: Bool
+        let volumeURL: URL
+    }
+    private var activeLimits: ActiveLimits?
+    /// Latches once a limit fires so the 1 Hz timer can't spawn a second auto-stop.
+    private var didHitLimit = false
+    /// Stop when the output volume drops below this much free space (bytes).
+    private static let lowDiskThresholdBytes: Int64 = 500 * 1024 * 1024
 
     private static let postHideDelay: Duration = .milliseconds(80)
 
@@ -249,20 +268,65 @@ final class RecordingController {
 
             accumulatedElapsed = 0
             segmentStart = Date()
+            // Auto-stop guards + best-effort Do Not Disturb, captured for this recording.
+            activeLimits = ActiveLimits(
+                maxSeconds: settings.maxDurationMinutes > 0 ? Double(settings.maxDurationMinutes) * 60 : 0,
+                diskGuard: settings.stopWhenDiskLow,
+                volumeURL: directory
+            )
+            didHitLimit = false
+            if settings.dndEnabled {
+                DoNotDisturb.run(shortcutNamed: settings.dndShortcutOn)
+                activeDNDOffShortcut = settings.dndShortcutOff
+            } else {
+                activeDNDOffShortcut = nil
+            }
             startElapsedTimer()
             uiState = .recording
             pushUI()
             FeedbackSound.recordStart.play()
-            // A subtle static glow around a recorded window (never full-screen/region,
-            // and never captured — it is a separate window). Clicking it stops.
+            // A subtle glow around a recorded window (never full-screen/region, and never
+            // captured — it is a separate window) that follows the window live. Clicking it stops.
             if settings.windowGlowEnabled, case .window(let window) = target {
-                indicator.showWindow(window.windowID, color: .systemRed, label: nil) { [weak self] in
+                indicator.showWindow(window.windowID, color: .systemRed, label: nil, follow: true) { [weak self] in
                     Task { await self?.toggleRecording() }
                 }
             }
         } catch {
             fail("Recording start failed: \(error)")
         }
+    }
+
+    // MARK: - Auto-stop guards (disk / duration)
+
+    /// Called each 1 Hz elapsed tick while recording: stops (keeping the file) before the
+    /// writer would fail on a full disk, and enforces the optional max-duration cap.
+    private func checkLimits() {
+        guard let limits = activeLimits, !didHitLimit, uiState == .recording else { return }
+        if limits.maxSeconds > 0, currentElapsed >= limits.maxSeconds {
+            didHitLimit = true
+            logger.notice("Max duration reached; auto-stopping and keeping the file")
+            Task { await self.autoStop(message: "Süre sınırına ulaşıldı — kayıt kaydedildi", symbol: "clock.badge.checkmark") }
+            return
+        }
+        if limits.diskGuard, let free = Self.freeBytes(on: limits.volumeURL), free < Self.lowDiskThresholdBytes {
+            didHitLimit = true
+            logger.notice("Low disk (\(free) bytes free); auto-stopping and keeping the file")
+            Task { await self.autoStop(message: "Disk doldu — kayıt kaydedildi", symbol: "externaldrive.badge.exclamationmark") }
+        }
+    }
+
+    /// A graceful, non-failure stop triggered by a guard: finalizes normally (the file is
+    /// kept) and shows an important toast explaining why.
+    private func autoStop(message: String, symbol: String) async {
+        guard uiState != .idle else { return }
+        onToast?(ToastRequest(text: message, systemSymbol: symbol, tint: .systemOrange, important: true))
+        await stop()
+    }
+
+    private static func freeBytes(on url: URL) -> Int64? {
+        let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        return values?.volumeAvailableCapacityForImportantUsage
     }
 
     // MARK: - Stop
@@ -281,6 +345,8 @@ final class RecordingController {
         stopElapsedTimer()
         segmentStart = nil
         uiState = .idle
+        activeLimits = nil
+        endDoNotDisturb()
         indicator.hide()
         // Show "finishing" immediately so the panel never flashes the capture grid
         // between Stop and the file being ready.
@@ -295,6 +361,7 @@ final class RecordingController {
                 let url = try await engine.stop()
                 copyFileURLToClipboard(url)
                 FeedbackSound.recordStop.play()
+                onToast?(ToastRequest(text: "Kayıt panoya kopyalandı", systemSymbol: "film.circle.fill"))
                 onRecordingFinished?(url)
                 logger.notice("Recording finished: \(url.lastPathComponent, privacy: .public)")
             } catch RecordingError.notRecording {
@@ -317,6 +384,8 @@ final class RecordingController {
         segmentStart = nil
         accumulatedElapsed = 0
         uiState = .idle
+        activeLimits = nil
+        endDoNotDisturb()
         indicator.hide()
         pushUI()
         if let salvagedURL {
@@ -343,6 +412,15 @@ final class RecordingController {
         }
     }
 
+    // MARK: - Do Not Disturb
+
+    /// Runs the captured DND "off" Shortcut (once) when a recording ends. Idempotent.
+    private func endDoNotDisturb() {
+        guard let off = activeDNDOffShortcut else { return }
+        activeDNDOffShortcut = nil
+        DoNotDisturb.run(shortcutNamed: off)
+    }
+
     // MARK: - Microphone permission
 
     private func ensureMicrophoneAccess() async -> Bool {
@@ -364,6 +442,7 @@ final class RecordingController {
             guard let self else { return }
             MainActor.assumeIsolated {
                 self.pushUI()
+                self.checkLimits()
             }
         }
         RunLoop.main.add(timer, forMode: .common)

@@ -384,10 +384,14 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         }
         guard generation == snapGeneration, isPresenting else { return }
         let cgPoint = appKitPointToCG(globalPoint, primaryScreenHeight: primaryHeight)
-        // Cursor still inside the currently-highlighted window? The z-order is static
-        // during selection, so skip the (system-wide) window-list query entirely —
-        // otherwise fast movement fires one CGWindowList enumeration per raw move event.
-        if let current = highlightedWindow, current.frame.contains(cgPoint) { return }
+        // Always resolve the TOPMOST window under the cursor. A previous "skip if the
+        // cursor is still inside the current highlight's frame" optimization was wrong:
+        // a small window sitting ON TOP of a larger highlighted one is inside the
+        // larger one's frame, so the guard froze the highlight on the big back window
+        // and you couldn't snap to the front ones without first leaving the big frame.
+        // WindowSnapper hit-tests the live front-to-back list, so re-running it every
+        // move is what makes overlapping/stacked windows selectable; the windowID
+        // compare below still suppresses redundant re-renders when it's unchanged.
         let window = WindowSnapper.window(atCGPoint: cgPoint, content: content)
         if window?.windowID != highlightedWindow?.windowID {
             // Subtle level-change tick as the snap target switches (Finder-style).

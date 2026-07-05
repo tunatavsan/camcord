@@ -2,34 +2,146 @@ import AppKit
 import CoreGraphics
 
 /// A minimal, STATIC border around a captured area (a recorded window, or a scrolling-
-/// capture region), with an optional "Stop" pill. It lives in its own borderless panel
-/// — a different window than the one being captured — and its stroke sits OUTSIDE the
-/// target rect, so it never appears in the capture. Clicking the border/pill stops the
-/// operation; clicks inside the target pass through so the underlying content stays
-/// usable. Red for recording, blue for scrolling capture.
+/// capture region). It lives in its OWN borderless panels — different windows than the one
+/// being captured — and the stroke sits OUTSIDE the target rect, so it never appears in the
+/// capture. Red for recording, blue for scrolling capture.
+///
+/// The border panel is ALWAYS click-through (`ignoresMouseEvents = true`) so the window
+/// underneath stays fully usable while it's being recorded/scrolled — returning nil from a
+/// view's hitTest does NOT pass clicks through to another app's window, only
+/// `ignoresMouseEvents` does. When a stop action is provided, a SEPARATE small pill panel
+/// (which IS interactive) floats near the top edge to end the operation.
 @MainActor
 final class CaptureAreaIndicator {
-    private var panel: NSPanel?
+    private var borderPanel: NSPanel?
+    private var stopPanel: NSPanel?
+    private var borderView: AreaBorderView?
+
+    /// Live window-follow state (window recording): while set, a timer repositions the
+    /// border + stop pill as the recorded window is moved/resized.
+    private var followWindowID: CGWindowID?
+    private var followTimer: DispatchSourceTimer?
+    private var lastFollowedBounds: CGRect?
+
+    private static let borderPad: CGFloat = 14
 
     func show(cgRect: CGRect, color: NSColor, label: String?, onStop: (() -> Void)?) {
         hide()
         guard let primaryHeight = NSScreen.screens.first?.frame.height else { return }
         let target = Geometry.cgToAppKit(cgRect, primaryScreenHeight: primaryHeight)
 
-        let padSide: CGFloat = 14
-        let padBottom: CGFloat = 14
-        let padTop: CGFloat = label != nil ? 44 : 14  // room for the pill above the target
+        borderPanel = makeBorderPanel(target: target, color: color)
+        if let onStop {
+            stopPanel = makeStopPanel(target: target, color: color, onStop: onStop)
+        }
+    }
 
-        let panelFrame = CGRect(
-            x: target.minX - padSide,
-            y: target.minY - padBottom,
-            width: target.width + padSide * 2,
-            height: target.height + padTop + padBottom
-        )
-        let targetInView = CGRect(x: padSide, y: padBottom, width: target.width, height: target.height)
+    /// Convenience for a window target: looks up the window's current bounds. When
+    /// `follow` is true the indicator tracks the window live as it moves/resizes (the
+    /// capture itself already follows the window; this keeps the on-screen border on it).
+    func showWindow(_ windowID: CGWindowID, color: NSColor, label: String?, follow: Bool = false, onStop: (() -> Void)?) {
+        guard let bounds = Self.windowBounds(windowID) else { return }
+        show(cgRect: bounds, color: color, label: label, onStop: onStop)
+        if follow {
+            followWindowID = windowID
+            lastFollowedBounds = bounds
+            startFollowing()
+        }
+    }
 
+    func hide() {
+        followTimer?.cancel()
+        followTimer = nil
+        followWindowID = nil
+        lastFollowedBounds = nil
+        borderView = nil
+        borderPanel?.orderOut(nil)
+        borderPanel = nil
+        stopPanel?.orderOut(nil)
+        stopPanel = nil
+    }
+
+    // MARK: - Live window follow
+
+    private func startFollowing() {
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        // ~30 Hz: smooth enough to track a dragged window without a perceptible lag,
+        // cheap enough (a single-window CGWindowList query) to run during a recording.
+        timer.schedule(deadline: .now() + .milliseconds(33), repeating: .milliseconds(33))
+        timer.setEventHandler { [weak self] in
+            guard let self, let id = self.followWindowID, let bounds = Self.windowBounds(id) else { return }
+            guard bounds != self.lastFollowedBounds else { return }
+            self.lastFollowedBounds = bounds
+            self.reposition(to: bounds)
+        }
+        timer.resume()
+        followTimer = timer
+    }
+
+    private func reposition(to cgBounds: CGRect) {
+        guard let primaryHeight = NSScreen.screens.first?.frame.height else { return }
+        let target = Geometry.cgToAppKit(cgBounds, primaryScreenHeight: primaryHeight)
+        let pad = Self.borderPad
+
+        if let borderPanel, let borderView {
+            let frame = target.insetBy(dx: -pad, dy: -pad)
+            borderPanel.setFrame(frame, display: true)
+            borderView.frame = CGRect(origin: .zero, size: frame.size)
+            borderView.targetRect = CGRect(x: pad, y: pad, width: target.width, height: target.height)
+            borderView.needsDisplay = true
+        }
+
+        if let stopPanel {
+            let size = stopPanel.frame.size
+            let screenFrame = (NSScreen.screens.first { $0.frame.intersects(target) } ?? NSScreen.main)?.frame ?? target
+            var origin = CGPoint(x: target.midX - size.width / 2, y: target.maxY + 8)
+            if origin.y + size.height > screenFrame.maxY - 4 {
+                origin.y = target.maxY - size.height - 8
+            }
+            origin.x = min(max(origin.x, screenFrame.minX + 4), screenFrame.maxX - size.width - 4)
+            stopPanel.setFrameOrigin(origin)
+        }
+    }
+
+    // MARK: - Panels
+
+    private func makeBorderPanel(target: CGRect, color: NSColor) -> NSPanel {
+        let pad = Self.borderPad
+        let frame = target.insetBy(dx: -pad, dy: -pad)
+        let panel = borderlessPanel(frame: frame)
+        // ALWAYS click-through: the window underneath must stay usable.
+        panel.ignoresMouseEvents = true
+        let view = AreaBorderView(frame: CGRect(origin: .zero, size: frame.size))
+        view.targetRect = CGRect(x: pad, y: pad, width: target.width, height: target.height)
+        view.color = color
+        panel.contentView = view
+        borderView = view
+        panel.orderFrontRegardless()
+        return panel
+    }
+
+    private func makeStopPanel(target: CGRect, color: NSColor, onStop: @escaping () -> Void) -> NSPanel {
+        let size = CGSize(width: 148, height: 30)
+        let bounds = (NSScreen.screens.first { $0.frame.intersects(target) } ?? NSScreen.main)?.frame ?? target
+        var origin = CGPoint(x: target.midX - size.width / 2, y: target.maxY + 8)
+        // If there's no room above the window (near the screen top), tuck it just inside.
+        if origin.y + size.height > bounds.maxY - 4 {
+            origin.y = target.maxY - size.height - 8
+        }
+        origin.x = min(max(origin.x, bounds.minX + 4), bounds.maxX - size.width - 4)
+
+        let panel = borderlessPanel(frame: CGRect(origin: origin, size: size))
+        panel.ignoresMouseEvents = false
+        let pill = StopPillView(frame: CGRect(origin: .zero, size: size), color: color)
+        pill.onClick = onStop
+        panel.contentView = pill
+        panel.orderFrontRegardless()
+        return panel
+    }
+
+    private func borderlessPanel(frame: CGRect) -> NSPanel {
         let panel = NSPanel(
-            contentRect: panelFrame,
+            contentRect: frame,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -40,30 +152,7 @@ final class CaptureAreaIndicator {
         panel.level = .screenSaver
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
         panel.isReleasedWhenClosed = false
-        // A purely decorative frame (no pill, no action) must let every click AND scroll
-        // pass through to the window underneath — e.g. during a manual scrolling capture,
-        // the user scrolls the target through this border.
-        panel.ignoresMouseEvents = (label == nil && onStop == nil)
-
-        let view = AreaBorderView(frame: CGRect(origin: .zero, size: panelFrame.size))
-        view.targetRect = targetInView
-        view.color = color
-        view.label = label
-        view.onStop = onStop
-        panel.contentView = view
-        panel.orderFrontRegardless()
-        self.panel = panel
-    }
-
-    /// Convenience for a window target: looks up the window's current bounds.
-    func showWindow(_ windowID: CGWindowID, color: NSColor, label: String?, onStop: (() -> Void)?) {
-        guard let bounds = Self.windowBounds(windowID) else { return }
-        show(cgRect: bounds, color: color, label: label, onStop: onStop)
-    }
-
-    func hide() {
-        panel?.orderOut(nil)
-        panel = nil
+        return panel
     }
 
     private static func windowBounds(_ windowID: CGWindowID) -> CGRect? {
@@ -79,31 +168,13 @@ final class CaptureAreaIndicator {
     }
 }
 
-/// Draws a thin rounded stroke just outside `targetRect`, plus an optional pill above
-/// it. Only the outer band + pill are clickable; the target interior passes through.
+/// Draws a thin rounded stroke just outside `targetRect`. No interactivity — it lives in a
+/// click-through panel.
 private final class AreaBorderView: NSView {
     var targetRect: CGRect = .zero
     var color: NSColor = .systemRed
-    var label: String?
-    var onStop: (() -> Void)?
 
     override var isFlipped: Bool { false }
-
-    private var pillRect: CGRect {
-        guard let label else { return .zero }
-        let attrs = pillAttributes
-        let textSize = NSAttributedString(string: label, attributes: attrs).size()
-        let w = textSize.width + 30  // padding + stop glyph
-        let h: CGFloat = 24
-        var x = targetRect.midX - w / 2
-        x = max(2, min(x, bounds.width - w - 2))
-        let y = targetRect.maxY + 8
-        return CGRect(x: x, y: y, width: w, height: h)
-    }
-
-    private var pillAttributes: [NSAttributedString.Key: Any] {
-        [.font: NSFont.systemFont(ofSize: 11.5, weight: .semibold), .foregroundColor: NSColor.white]
-    }
 
     override func draw(_ dirtyRect: NSRect) {
         let lineWidth: CGFloat = 2
@@ -119,32 +190,48 @@ private final class AreaBorderView: NSView {
         color.withAlphaComponent(0.9).setStroke()
         path.stroke()
         NSGraphicsContext.restoreGraphicsState()
+    }
+}
 
-        if let label {
-            let r = pillRect
-            color.setFill()
-            NSBezierPath(roundedRect: r, xRadius: 12, yRadius: 12).fill()
-            // small white stop square + label
-            let square = CGRect(x: r.minX + 9, y: r.midY - 4, width: 8, height: 8)
-            NSColor.white.setFill()
-            NSBezierPath(roundedRect: square, xRadius: 1.5, yRadius: 1.5).fill()
-            let attributed = NSAttributedString(string: label, attributes: pillAttributes)
-            attributed.draw(at: CGPoint(x: square.maxX + 6, y: r.midY - attributed.size().height / 2))
-        }
+/// A small clickable "stop" pill (stop square + label) in its own interactive panel.
+private final class StopPillView: NSView {
+    var onClick: (() -> Void)?
+    private let color: NSColor
+    private let label = NSTextField(labelWithString: "Kaydı Durdur")
+
+    init(frame: NSRect, color: NSColor) {
+        self.color = color
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = 15
+        layer?.backgroundColor = color.cgColor
+        label.font = .systemFont(ofSize: 11.5, weight: .semibold)
+        label.textColor = .white
+        label.backgroundColor = .clear
+        label.isBezeled = false
+        label.isEditable = false
+        addSubview(label)
     }
 
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        if label != nil, pillRect.contains(point) { return self }
-        // Clickable ring band; interior passes through.
-        let interior = targetRect.insetBy(dx: 3, dy: 3)
-        return interior.contains(point) ? nil : self
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override var isFlipped: Bool { false }
+
+    override func layout() {
+        super.layout()
+        label.frame = CGRect(x: 30, y: (bounds.height - 16) / 2, width: bounds.width - 36, height: 16)
     }
 
-    override func mouseDown(with event: NSEvent) {
-        onStop?()
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        // A small white stop square on the left.
+        let square = CGRect(x: 12, y: bounds.midY - 5, width: 10, height: 10)
+        NSColor.white.setFill()
+        NSBezierPath(roundedRect: square, xRadius: 2, yRadius: 2).fill()
     }
 
-    override func resetCursorRects() {
-        if label != nil { addCursorRect(pillRect, cursor: .pointingHand) }
-    }
+    override func mouseDown(with event: NSEvent) { onClick?() }
+
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
 }

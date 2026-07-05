@@ -135,10 +135,12 @@ struct GeneralSettingsView: View {
 
     @State private var launchAtLogin = LoginItem.isEnabled
     @State private var soundEnabled: Bool
+    @State private var toastEnabled: Bool
 
     init(defaultsSuite: UserDefaults) {
         self.defaultsSuite = defaultsSuite
         _soundEnabled = State(initialValue: FeedbackSound.isEnabled(in: defaultsSuite))
+        _toastEnabled = State(initialValue: HUDToast.isEnabled(in: defaultsSuite))
     }
 
     var body: some View {
@@ -157,6 +159,13 @@ struct GeneralSettingsView: View {
                         FeedbackSound.setEnabled(newValue, in: defaultsSuite)
                     }
                 Text("Her işlem için ayrı bir ses çalar (bölge, pencere, OCR, kayıt, yapıştır…).")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Toggle("Kopyalandı bildirimini göster", isOn: $toastEnabled)
+                    .onChange(of: toastEnabled) { _, newValue in
+                        HUDToast.setEnabled(newValue, in: defaultsSuite)
+                    }
+                Text("Bir çekim/OCR panoya düşünce küçük bir küçük-resim onayı belirir ve kaybolur.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -343,13 +352,46 @@ struct RecordingSettingsView: View {
                         }
                     }
                 }
+                if settings.systemAudio && settings.microphone {
+                    Toggle("Sistem sesi + mikrofonu tek parçada birleştir", isOn: $settings.mixAudioTracks)
+                    Text(settings.mixAudioTracks
+                        ? "Tek ses parçası — mikrofon her oynatıcıda/platformda duyulur (varsayılan)."
+                        : "İki ayrı ses parçası yazılır (düzenleme için ideal), ama çoğu oynatıcı yalnızca ilkini (sistem sesi) çalar; mikrofon duyulmayabilir.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("Gösterge") {
                 Toggle("Pencere kaydında pencereyi vurgula", isOn: $settings.windowGlowEnabled)
-                Text("Kaydedilen pencerenin çevresinde ince bir parıltı gösterilir (kayda girmez).")
+                Text("Kaydedilen pencerenin çevresinde ince bir parıltı gösterilir (pencereyi taşırsan takip eder, kayda girmez).")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Güvenlik") {
+                Picker("Otomatik durdurma", selection: $settings.maxDurationMinutes) {
+                    Text("Sınırsız").tag(0)
+                    Text("5 dakika").tag(5)
+                    Text("15 dakika").tag(15)
+                    Text("30 dakika").tag(30)
+                    Text("60 dakika").tag(60)
+                }
+                Toggle("Disk dolmadan önce durdur ve dosyayı koru", isOn: $settings.stopWhenDiskLow)
+                Text("Kayıt, boş alan ~500 MB'ın altına inince güvenle sonlandırılır — yazıcı çöküp kaydı kaybetmez.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Bildirimler (Rahatsız Etme)") {
+                Toggle("Kayıt sırasında Focus/Rahatsız Etme'yi çalıştır", isOn: $settings.dndEnabled)
+                if settings.dndEnabled {
+                    TextField("Açma kısayolu adı", text: $settings.dndShortcutOn)
+                    TextField("Kapatma kısayolu adı", text: $settings.dndShortcutOff)
+                    Text("macOS'ta Focus'u açıp kapatmanın halka açık API'si yok. Kısayollar uygulamasında birer 'Odak Ayarla' kısayolu oluştur (ör. açma/kapatma), adlarını buraya yaz — Camcord kayıt başlar/biterken çalıştırır. Boş bırakılırsa atlanır.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("Dosyalar") {

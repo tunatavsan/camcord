@@ -48,6 +48,28 @@ struct RecordingSettings: Codable, Equatable {
     var microphone: Bool
     /// The AVCaptureDevice.uniqueID of the mic to record; nil = system default input.
     var microphoneDeviceID: String?
+    /// When both system audio AND microphone are recorded, mix them into ONE audio
+    /// track at finalize (default). A file with two separate audio tracks makes most
+    /// players/platforms play only the first (the mic is then silently inaudible);
+    /// mixing guarantees the mic is heard everywhere. Turn off to keep separate tracks
+    /// for editing.
+    var mixAudioTracks: Bool
+
+    // Safety limits
+    /// Auto-stop after this many minutes (0 = unlimited). Guards against a forgotten
+    /// recording filling the disk.
+    var maxDurationMinutes: Int
+    /// Auto-stop (and keep the file) when the output volume's free space runs low,
+    /// instead of letting the writer fail and lose the whole recording.
+    var stopWhenDiskLow: Bool
+
+    // Do Not Disturb (best-effort via the Shortcuts CLI; no public Focus API exists)
+    /// Run the on/off Shortcuts around a recording to silence notifications.
+    var dndEnabled: Bool
+    /// The name of a user-made Shortcut that turns Focus/DND ON (empty = skip).
+    var dndShortcutOn: String
+    /// The name of a user-made Shortcut that turns Focus/DND OFF (empty = skip).
+    var dndShortcutOff: String
 
     // Quality
     /// The active quality preset. Non-`.custom` profiles override `codec`/`bitrateMbps`.
@@ -77,6 +99,12 @@ struct RecordingSettings: Codable, Equatable {
         systemAudio: Bool = true,
         microphone: Bool = true,
         microphoneDeviceID: String? = nil,
+        mixAudioTracks: Bool = true,
+        maxDurationMinutes: Int = 0,
+        stopWhenDiskLow: Bool = true,
+        dndEnabled: Bool = true,
+        dndShortcutOn: String = "",
+        dndShortcutOff: String = "",
         profile: RecordingProfile = .balanced,
         codec: VideoCodecChoice = .hevc,
         container: VideoContainer = .mp4,
@@ -91,6 +119,12 @@ struct RecordingSettings: Codable, Equatable {
         self.systemAudio = systemAudio
         self.microphone = microphone
         self.microphoneDeviceID = microphoneDeviceID
+        self.mixAudioTracks = mixAudioTracks
+        self.maxDurationMinutes = maxDurationMinutes
+        self.stopWhenDiskLow = stopWhenDiskLow
+        self.dndEnabled = dndEnabled
+        self.dndShortcutOn = dndShortcutOn
+        self.dndShortcutOff = dndShortcutOff
         self.profile = profile
         self.codec = codec
         self.container = container
@@ -102,6 +136,10 @@ struct RecordingSettings: Codable, Equatable {
         self.filenamePrefix = filenamePrefix
         self.windowGlowEnabled = windowGlowEnabled
     }
+
+    /// True when a recording will produce two separate audio tracks that should be
+    /// collapsed into one at finalize.
+    var shouldMixAudioTracks: Bool { mixAudioTracks && systemAudio && microphone }
 
     /// The codec actually used: the profile's codec, or the custom one.
     var resolvedCodec: VideoCodecChoice { profile.codec ?? codec }
@@ -122,6 +160,12 @@ struct RecordingSettings: Codable, Equatable {
         systemAudio = try c.decodeIfPresent(Bool.self, forKey: .systemAudio) ?? d.systemAudio
         microphone = try c.decodeIfPresent(Bool.self, forKey: .microphone) ?? d.microphone
         microphoneDeviceID = try c.decodeIfPresent(String.self, forKey: .microphoneDeviceID)
+        mixAudioTracks = try c.decodeIfPresent(Bool.self, forKey: .mixAudioTracks) ?? d.mixAudioTracks
+        maxDurationMinutes = try c.decodeIfPresent(Int.self, forKey: .maxDurationMinutes) ?? d.maxDurationMinutes
+        stopWhenDiskLow = try c.decodeIfPresent(Bool.self, forKey: .stopWhenDiskLow) ?? d.stopWhenDiskLow
+        dndEnabled = try c.decodeIfPresent(Bool.self, forKey: .dndEnabled) ?? d.dndEnabled
+        dndShortcutOn = try c.decodeIfPresent(String.self, forKey: .dndShortcutOn) ?? d.dndShortcutOn
+        dndShortcutOff = try c.decodeIfPresent(String.self, forKey: .dndShortcutOff) ?? d.dndShortcutOff
         // A blob predating the profile system has `codec`/`bitrateMbps` but no `profile`.
         // Default those to `.custom` (not `.balanced`) so the user's explicitly-chosen
         // codec/bitrate keep being honored instead of being silently overridden.
@@ -148,6 +192,12 @@ struct RecordingSettings: Codable, Equatable {
         if systemAudio != old.systemAudio { r.systemAudio = systemAudio }
         if microphone != old.microphone { r.microphone = microphone }
         if microphoneDeviceID != old.microphoneDeviceID { r.microphoneDeviceID = microphoneDeviceID }
+        if mixAudioTracks != old.mixAudioTracks { r.mixAudioTracks = mixAudioTracks }
+        if maxDurationMinutes != old.maxDurationMinutes { r.maxDurationMinutes = maxDurationMinutes }
+        if stopWhenDiskLow != old.stopWhenDiskLow { r.stopWhenDiskLow = stopWhenDiskLow }
+        if dndEnabled != old.dndEnabled { r.dndEnabled = dndEnabled }
+        if dndShortcutOn != old.dndShortcutOn { r.dndShortcutOn = dndShortcutOn }
+        if dndShortcutOff != old.dndShortcutOff { r.dndShortcutOff = dndShortcutOff }
         if profile != old.profile { r.profile = profile }
         if codec != old.codec { r.codec = codec }
         if container != old.container { r.container = container }

@@ -26,5 +26,26 @@
 	<string>Camcord records the microphone when you include it in a screen recording.</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Camcord captures the screen to take screenshots and recordings you trigger.</string>
+	<key>NSServices</key>
+	<array>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>Camcord ile Metni Çıkar</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>extractText</string>
+			<key>NSPortName</key>
+			<string>Camcord</string>
+			<key>NSRequiredContext</key>
+			<dict/>
+			<key>NSSendTypes</key>
+			<array>
+				<string>public.image</string>
+				<string>public.file-url</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

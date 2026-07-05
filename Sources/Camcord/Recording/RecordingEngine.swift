@@ -28,6 +28,11 @@ final class RecordingEngine: NSObject {
     private var streamWriter: StreamWriter?
     private var delegateRelay: StreamDelegateRelay?
 
+    /// Set at `start()`: whether to collapse the file's two audio tracks into one at
+    /// finalize, and which container that file is, so `finalize` can run the mixer.
+    private var pendingAudioMix = false
+    private var outputFileType: AVFileType = .mov
+
     var isRecording: Bool { stream != nil }
 
     /// Called (on the main actor) when the stream dies out from under us -- display
@@ -39,6 +44,11 @@ final class RecordingEngine: NSObject {
 
     func start(target: Target, settings: RecordingSettings, outputURL: URL) async throws {
         guard stream == nil else { throw RecordingError.alreadyRecording }
+
+        // Recorded now (independent of the codec-fallback chain below): whether the
+        // finished file's two audio tracks should be mixed into one, and its container.
+        pendingAudioMix = settings.shouldMixAudioTracks
+        outputFileType = settings.effectiveContainer.fileType
 
         // Walk the whole fallback chain (ProRes → HEVC → H.264) so a failure shared by
         // the higher-quality codecs still degrades all the way to the most compatible
@@ -278,7 +288,21 @@ final class RecordingEngine: NSObject {
                 continuation.resume()
             }
         }
-        return try await writer.finishWriting()
+        let url = try await writer.finishWriting()
+
+        // Collapse system-audio + microphone into ONE track so the mic is audible in
+        // every player. Best-effort: mixInPlace only swaps the file on success, so any
+        // failure (or a single-track file) leaves the finished recording exactly as-is.
+        if pendingAudioMix {
+            do {
+                try await AudioTrackMixer.mixInPlace(url: url, fileType: outputFileType)
+            } catch AudioTrackMixer.MixError.notNeeded {
+                // The file ended up with a single audio track — nothing to mix.
+            } catch {
+                logger.error("Audio mix failed; keeping the multi-track recording: \(String(describing: error), privacy: .public)")
+            }
+        }
+        return url
     }
 
     private func clearStreamState() {

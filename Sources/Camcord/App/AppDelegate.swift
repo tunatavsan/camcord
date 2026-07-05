@@ -12,6 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItemController: StatusItemController?
     private var panelController: PanelController?
     private var recordingStateModel: RecordingStateModel?
+    private var hudToast: HUDToast?
+    private var servicesProvider: ServicesProvider?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Warm the feedback-sound cache so the first cue has zero setup latency.
@@ -80,6 +82,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         coordinator.onSuccess = { [weak statusItemController] in
             statusItemController?.flashSuccess()
         }
+
+        // A transient HUD toast confirming what landed on the clipboard (opt-out for
+        // routine copies; important auto-stop notices bypass the setting).
+        let hudToast = HUDToast()
+        self.hudToast = hudToast
+        let showToast: (ToastRequest) -> Void = { [weak hudToast] request in
+            hudToast?.show(
+                text: request.text,
+                thumbnail: request.thumbnail,
+                systemSymbol: request.systemSymbol,
+                tint: request.tint,
+                respectsSetting: !request.important
+            )
+        }
+        coordinator.onToast = showToast
+        recordingController.onToast = showToast
+
+        // macOS Services: "Camcord ile Metni Çıkar" on any image selection.
+        let servicesProvider = ServicesProvider(coordinator: coordinator)
+        self.servicesProvider = servicesProvider
+        NSApp.servicesProvider = servicesProvider
+        NSUpdateDynamicServices()
 
         let panelActions = makePanelActions(coordinator: coordinator, recordingController: recordingController)
         let panelController = PanelController(model: recordingStateModel, actions: panelActions)
