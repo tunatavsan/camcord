@@ -25,6 +25,12 @@ final class CaptureCoordinator {
     /// Wired by AppDelegate to the HUD toast — a transient thumbnail + "copied" confirmation.
     var onToast: ((ToastRequest) -> Void)?
 
+    /// Wired by AppDelegate to the bottom-left screenshot preview card. Screenshots surface
+    /// here instead of the center toast: the framed preview IS their "copied" confirmation,
+    /// and it's clickable (opens for editing) / draggable. `fileURL` is the on-disk PNG when
+    /// disk-saving is on, else nil (the card writes a temp file on demand).
+    var onScreenshotPreview: ((CGImage, URL?) -> Void)?
+
     /// One capture flow at a time: the overlay's own isPresenting only covers the
     /// on-screen phase, not the post-hide delay + SCK call after it — a re-press in
     /// that window would open a NEW overlay whose chrome gets baked into the still-
@@ -158,11 +164,12 @@ final class CaptureCoordinator {
         // captured pixel scale so DPI-aware pastes stay correct.
         let scale = clampedRegion.width > 0 ? CGFloat(image.width) / clampedRegion.width : 2
         let pointSize = CGSize(width: clampedRegion.width, height: CGFloat(image.height) / max(scale, 0.01))
-        guard await ClipboardWriter.copyPNG(image, pointSize: pointSize, saveTo: screenshotSaveURL()) else {
+        let saveURL = screenshotSaveURL()
+        guard await ClipboardWriter.copyPNG(image, pointSize: pointSize, saveTo: saveURL) else {
             fail("Scroll capture: clipboard write failed")
             return
         }
-        succeeded(.fullScreenShot, toast: ToastRequest(text: "Kaydırmalı görüntü kopyalandı", thumbnail: toastThumbnail(image)))
+        succeeded(.fullScreenShot, preview: (image, saveURL))
     }
 
     /// The SCDisplay whose frame contains the region's center.
@@ -314,11 +321,12 @@ final class CaptureCoordinator {
                 return
             }
             let image = try await ScreenshotService.captureDisplay(display)
-            guard await ClipboardWriter.copyPNG(image, pointSize: screen.frame.size, saveTo: screenshotSaveURL()) else {
+            let saveURL = screenshotSaveURL()
+            guard await ClipboardWriter.copyPNG(image, pointSize: screen.frame.size, saveTo: saveURL) else {
                 fail("captureFullScreen: clipboard write failed")
                 return
             }
-            succeeded(.fullScreenShot, toast: ToastRequest(text: "Ekran panoya kopyalandı", thumbnail: toastThumbnail(image)))
+            succeeded(.fullScreenShot, preview: (image, saveURL))
         } catch {
             fail("captureFullScreen: capture failed: \(error)")
         }
@@ -329,11 +337,12 @@ final class CaptureCoordinator {
     private func performRegionScreenshot(_ cgRect: CGRect) async {
         do {
             let image = try await ScreenshotService.captureRegion(cgRect: cgRect)
-            guard await ClipboardWriter.copyPNG(image, pointSize: cgRect.size, saveTo: screenshotSaveURL()) else {
+            let saveURL = screenshotSaveURL()
+            guard await ClipboardWriter.copyPNG(image, pointSize: cgRect.size, saveTo: saveURL) else {
                 fail("Region capture: clipboard write failed")
                 return
             }
-            succeeded(.regionShot, toast: ToastRequest(text: "Bölge panoya kopyalandı", thumbnail: toastThumbnail(image)))
+            succeeded(.regionShot, preview: (image, saveURL))
         } catch {
             fail("Region capture failed: \(error)")
         }
@@ -351,11 +360,12 @@ final class CaptureCoordinator {
     private func performWindowCapture(_ window: SCWindow) async {
         do {
             let image = try await ScreenshotService.captureWindow(window)
-            guard await ClipboardWriter.copyPNG(image, pointSize: window.frame.size, saveTo: screenshotSaveURL()) else {
+            let saveURL = screenshotSaveURL()
+            guard await ClipboardWriter.copyPNG(image, pointSize: window.frame.size, saveTo: saveURL) else {
                 fail("Window capture: clipboard write failed")
                 return
             }
-            succeeded(.windowShot, toast: ToastRequest(text: "Pencere panoya kopyalandı", thumbnail: toastThumbnail(image)))
+            succeeded(.windowShot, preview: (image, saveURL))
         } catch {
             fail("Window capture failed: \(error)")
         }
@@ -427,18 +437,16 @@ final class CaptureCoordinator {
         ScreenshotSettings.load(from: .standard).uniqueSaveURL(date: Date())
     }
 
-    /// Success feedback: the action's distinct sound + a brief status-glyph flash + an
-    /// optional HUD toast (thumbnail of what landed on the clipboard).
-    private func succeeded(_ sound: FeedbackSound, toast: ToastRequest? = nil) {
+    /// Success feedback: the action's distinct sound + a brief status-glyph flash, plus
+    /// EITHER a HUD toast (OCR text, which has no image) OR the bottom-left screenshot
+    /// preview card (`preview` — the image that just landed on the clipboard, + its saved
+    /// URL when disk-saving is on).
+    private func succeeded(_ sound: FeedbackSound, toast: ToastRequest? = nil, preview: (image: CGImage, url: URL?)? = nil) {
         clipboardEpoch &+= 1   // this capture now owns the clipboard (see startOCR)
         sound.play()
         onSuccess?()
         if let toast { onToast?(toast) }
-    }
-
-    /// A small NSImage thumbnail for the copy toast, from a captured CGImage.
-    private func toastThumbnail(_ image: CGImage) -> NSImage {
-        NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+        if let preview { onScreenshotPreview?(preview.image, preview.url) }
     }
 
     private func fail(_ message: String) {

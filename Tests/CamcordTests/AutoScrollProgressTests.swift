@@ -5,12 +5,41 @@ import Testing
 @Suite("AutoScrollProgress")
 struct AutoScrollProgressTests {
 
-    @Test("warm-up frames are progress, never stall")
-    func warmupIsProgress() {
-        var p = AutoScrollProgress(flipThreshold: 3, endThreshold: 3)
-        for _ in 0..<10 {
-            #expect(p.record(advanced: false, warmup: true) == .keepScrolling)
-        }
+    @Test("warm-up frames within the grace window are progress, not stalls")
+    func warmupWithinGraceIsProgress() {
+        var p = AutoScrollProgress(flipThreshold: 3, endThreshold: 3, warmupGrace: 3)
+        // Grace-many warm-up frames followed by a commit never flip — the normal start of a
+        // correct scroll (the stitcher buffers a couple of frames, then commits).
+        #expect(p.record(advanced: false, warmup: true) == .keepScrolling)
+        #expect(p.record(advanced: false, warmup: true) == .keepScrolling)
+        #expect(p.record(advanced: false, warmup: true) == .keepScrolling)
+        #expect(p.record(advanced: true, warmup: false) == .keepScrolling)
+    }
+
+    @Test("warm-up beyond the grace window still drives the wrong-direction flip")
+    func warmupBeyondGraceFlips() {
+        // A wrong direction looks like an endless warm-up (nothing ever moves). Past the
+        // grace, warm-up frames must count as stalls so the flip fires promptly instead of
+        // hiding behind the stitcher's full buffer.
+        var p = AutoScrollProgress(flipThreshold: 3, endThreshold: 4, warmupGrace: 2)
+        #expect(p.record(advanced: false, warmup: true) == .keepScrolling)   // grace 1
+        #expect(p.record(advanced: false, warmup: true) == .keepScrolling)   // grace 2
+        #expect(p.record(advanced: false, warmup: true) == .keepScrolling)   // stall 1
+        #expect(p.record(advanced: false, warmup: true) == .keepScrolling)   // stall 2
+        #expect(p.record(advanced: false, warmup: true) == .flipDirection)   // stall 3 → flip
+    }
+
+    @Test("a corrected direction gets a fresh warm-up grace after a flip")
+    func freshGraceAfterFlip() {
+        var p = AutoScrollProgress(flipThreshold: 3, endThreshold: 4, warmupGrace: 2)
+        // Drive the wrong-direction flip (2 grace + 3 stalls).
+        for _ in 0..<4 { #expect(p.record(advanced: false, warmup: true) == .keepScrolling) }
+        #expect(p.record(advanced: false, warmup: true) == .flipDirection)
+        // The corrected direction buffers a couple of frames of its own before committing —
+        // that must NOT be mistaken for "both directions failed" and end the scroll.
+        #expect(p.record(advanced: false, warmup: true) == .keepScrolling)
+        #expect(p.record(advanced: false, warmup: true) == .keepScrolling)
+        #expect(p.record(advanced: true, warmup: false) == .keepScrolling)
     }
 
     @Test("advancing keeps scrolling and never ends")
@@ -57,18 +86,6 @@ struct AutoScrollProgressTests {
         #expect(p.record(advanced: false, warmup: false) == .flipDirection)   // flip
         #expect(p.record(advanced: false, warmup: false) == .keepScrolling)   // streak resets after flip
         #expect(p.record(advanced: false, warmup: false) == .reachedEnd)      // still nothing → give up
-    }
-
-    @Test("a static baseline (warm-up frames) does not block the wrong-direction flip")
-    func warmupBaselineThenStallsStillFlips() {
-        // Mirrors the real sequence when auto picks the wrong direction: the stitcher buffers
-        // and force-commits a baseline (all reported warmup:true), then every frame stalls —
-        // the flip must still fire (advancedEver must NOT be set by the baseline).
-        var p = AutoScrollProgress(flipThreshold: 3, endThreshold: 4)
-        for _ in 0..<7 { #expect(p.record(advanced: false, warmup: true) == .keepScrolling) }
-        #expect(p.record(advanced: false, warmup: false) == .keepScrolling)   // stall 1
-        #expect(p.record(advanced: false, warmup: false) == .keepScrolling)   // stall 2
-        #expect(p.record(advanced: false, warmup: false) == .flipDirection)   // stall 3 → flip
     }
 
     @Test("advancing after a flip switches to end-detection, not another flip")

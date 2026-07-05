@@ -52,6 +52,31 @@ enum ScreenshotService {
         }
     }
 
+    /// Captures a single window downscaled to at most `maxWidth` points wide — a cheap
+    /// thumbnail for the recording window picker (a full-res grab of a 4K game window would
+    /// be wasteful when it renders into a ~240pt cell).
+    static func captureWindowThumbnail(_ window: SCWindow, maxWidth: CGFloat) async throws -> CGImage {
+        let filter = SCContentFilter(desktopIndependentWindow: window)
+        let configuration = SCStreamConfiguration()
+        configuration.ignoreShadowsSingleWindow = true
+        configuration.showsCursor = false
+        let contentRect = filter.contentRect
+        let scale = contentRect.width > maxWidth ? maxWidth / contentRect.width : 1
+        configuration.width = max(2, Int((contentRect.width * scale).rounded()))
+        configuration.height = max(2, Int((contentRect.height * scale).rounded()))
+        let box = FilterConfigurationBox(filter: filter, configuration: configuration)
+
+        return try await withRetry {
+            try await withTimeout {
+                do {
+                    return try await SCScreenshotManager.captureImage(contentFilter: box.filter, configuration: box.configuration)
+                } catch {
+                    throw CaptureError.sckFailure(error)
+                }
+            }
+        }
+    }
+
     /// Captures an entire display.
     static func captureDisplay(_ display: SCDisplay) async throws -> CGImage {
         let filter = SCContentFilter(display: display, excludingWindows: [])

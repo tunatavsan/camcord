@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panelController: PanelController?
     private var recordingStateModel: RecordingStateModel?
     private var hudToast: HUDToast?
+    private var screenshotPreviewCard: ScreenshotPreviewCard?
     private var servicesProvider: ServicesProvider?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -99,6 +100,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         coordinator.onToast = showToast
         recordingController.onToast = showToast
 
+        // Screenshots land as a framed preview at the bottom-left (their own "copied"
+        // confirmation), instead of the center toast — clickable to edit, draggable to lift.
+        let screenshotPreviewCard = ScreenshotPreviewCard()
+        self.screenshotPreviewCard = screenshotPreviewCard
+        coordinator.onScreenshotPreview = { [weak screenshotPreviewCard] image, url in
+            screenshotPreviewCard?.show(image: image, fileURL: url)
+        }
+
         // macOS Services: "Camcord ile Metni Çıkar" on any image selection.
         let servicesProvider = ServicesProvider(coordinator: coordinator)
         self.servicesProvider = servicesProvider
@@ -154,6 +163,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Stopping is instant; keep the panel up so the row morphs back.
                 Task { await recordingController?.toggleRecording() }
             }
+        }
+        actions.recordWindow = { [weak recordingController] in
+            afterClosingPanel { await recordingController?.recordWindow() }
         }
         actions.recordFullScreen = { [weak recordingController] in
             afterClosingPanel { await recordingController?.recordFullScreen() }

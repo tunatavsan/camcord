@@ -294,6 +294,9 @@ final class ScrollingCaptureSession {
         if autoScrolling, capturedGeneration == autoGeneration {
             let advanced = outcome == .appended
             let warmup = outcome == .buffered || outcome == .baselined
+            // A real downward append proves the current wheel-sign scrolls this Mac's pages
+            // down — remember it so the next session starts in the right direction.
+            if advanced { autoScroller?.confirmDirection() }
             switch autoProgress.record(advanced: advanced, warmup: warmup) {
             case .keepScrolling: break
             case .flipDirection: autoScroller?.flipDirection()

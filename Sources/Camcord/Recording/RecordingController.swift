@@ -17,6 +17,7 @@ final class RecordingController {
     private let coordinator: CaptureCoordinator
     private let engine = RecordingEngine()
     private let indicator = CaptureAreaIndicator()
+    private let windowPicker = WindowPickerPanel()
     private let logger = Logger(subsystem: "dev.tavsan.camcord", category: "recording-controller")
 
     /// Wired by AppDelegate to the status item; pushed on every state/elapsed change.
@@ -108,6 +109,31 @@ final class RecordingController {
         case .idle:
             await beginInteractive()
         }
+    }
+
+    /// Opens the window picker and records the chosen window. Unlike the region overlay's
+    /// hover-snap, an explicit grid can pick a full-screen app (a game) that leaves no
+    /// desktop to drag a region on. The `.window` target follows that window across Spaces
+    /// and keeps recording it when it's occluded or sent to the back.
+    func recordWindow() async {
+        guard uiState == .idle, !isStarting, stopTask == nil else { return }
+        isStarting = true
+        defer { isStarting = false }
+
+        guard CGPreflightScreenCaptureAccess() else {
+            fail("recordWindow: Screen Recording permission missing")
+            return
+        }
+        let content: SCShareableContent
+        do {
+            // Force-refresh so the grid reflects the CURRENT windows, not a 5s-old snapshot.
+            content = try await coordinator.contentCache.content(forceRefresh: true)
+        } catch {
+            fail("recordWindow: shareable content fetch failed: \(error)")
+            return
+        }
+        guard let window = await windowPicker.pick(content: content) else { return }   // dismissed
+        await begin(target: .window(window))
     }
 
     /// Records the entire display under the mouse pointer (menu action).

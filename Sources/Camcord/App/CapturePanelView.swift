@@ -30,6 +30,8 @@ struct PanelActions {
     var captureScroll: () -> Void = {}
     /// Start an interactive recording when idle; stop it otherwise.
     var toggleRecording: () -> Void = {}
+    /// Open the window picker and record the chosen window.
+    var recordWindow: () -> Void = {}
     var recordFullScreen: () -> Void = {}
     var pauseResume: () -> Void = {}
     var revealRecording: (URL) -> Void = { _ in }
@@ -154,6 +156,7 @@ struct CapturePanelView: View {
                             .fill(Color.primary.opacity(hovering ? 0.07 : 0.045))
                     )
                 }
+                RecordTargetButton(symbol: "macwindow", help: "Pencere kaydet", action: actions.recordWindow)
                 RecordTargetButton(symbol: "display", help: "Tüm ekranı kaydet", action: actions.recordFullScreen)
             }
 
