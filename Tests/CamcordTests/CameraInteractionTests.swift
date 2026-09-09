@@ -478,8 +478,64 @@ struct CameraInteractionTests {
         #expect(nativePanel.frame == confined)
     }
 
-    @Test("arming opens the preview and hands the owner's own choice back afterwards")
-    @MainActor func armedPreviewRestoresAfterTheRecording() {
+    @Test("arm -> start -> drag -> stop with the preview closed opens nothing and still places the camera")
+    @MainActor func hiddenPlacementLandsInTheFileWithoutOpeningThePreview() {
+        _ = NSApplication.shared
+        let defaults = UserDefaults.standard
+        let key = RecordingSettings.defaultsKey
+        let savedData = defaults.data(forKey: key)
+        let overlay = CameraOverlayController.shared
+        let monitor = CameraPreviewMonitor.shared
+        let savedPreview = overlay.previewVisible
+        let savedCallback = overlay.onPlacementChange
+        defer {
+            overlay.onPlacementChange = nil
+            overlay.previewVisible = false
+            overlay.recordingEnded()
+            overlay.previewVisible = savedPreview
+            overlay.hide()
+            overlay.onPlacementChange = savedCallback
+            if let savedData { defaults.set(savedData, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+
+        // Everything the compositor draws into the file comes through this funnel.
+        var composited: [CameraOptions] = []
+        overlay.onPlacementChange = { composited.append($0) }
+        overlay.previewVisible = false
+        overlay.hide()
+
+        // arm(): the placement rect goes up, the preview does not. `show()` is the only
+        // thing that claims the device, so an unobserved monitor means zero camera starts.
+        let window = CGRect(x: -10_000, y: -10_000, width: 1280, height: 720)
+        overlay.prepareRecording(cgRect: window, options: CameraOptions(enabled: true))
+        #expect(!overlay.previewVisible)
+        #expect(!overlay.isVisible)
+        #expect(!monitor.isObserved)
+
+        // begin(): the same rect the file is composited against.
+        overlay.prepareRecording(cgRect: window, options: CameraOptions(enabled: true))
+        // The owner places the camera from the settings/stage surface while it records.
+        let placed = CameraOptions(enabled: true, widthFraction: 0.32,
+                                   position: CameraPosition(x: 0.8, y: 0.2))
+        overlay.applyPlacement(placed, source: .settings)
+        #expect(!overlay.previewVisible)
+        #expect(!overlay.isVisible)
+        #expect(!monitor.isObserved)
+
+        // The file's camera rect is exactly the placement.
+        #expect(composited.last == placed.resolved())
+        #expect(composited.last?.rect(in: window.size) == placed.resolved().rect(in: window.size))
+        #expect(RecordingSettings.load(from: defaults).camera == placed.resolved())
+
+        // stop(): the confinement goes, the owner's "closed" survives.
+        overlay.recordingEnded()
+        #expect(!overlay.previewVisible)
+        #expect(!overlay.isVisible)
+        #expect(!monitor.isObserved)
+    }
+
+    @Test("only the chip and the menu item change the preview's visibility")
+    @MainActor func previewVisibilityHasExactlyTwoWriters() {
         _ = NSApplication.shared
         let overlay = CameraOverlayController.shared
         let savedPreview = overlay.previewVisible
@@ -490,24 +546,32 @@ struct CameraInteractionTests {
             overlay.hide()
         }
 
-        overlay.previewVisible = false
-        overlay.hide()
-        overlay.armPreview()
-        #expect(overlay.previewVisible)
-        // A second arm-time open (the camera switch flipped on while armed) still
-        // remembers the owner's "off", and the recording's teardown restores it.
-        overlay.armPreview()
-        overlay.recordingEnded()
-        #expect(!overlay.previewVisible)
-        #expect(!overlay.isVisible)
-        // The next recording must not resurrect a preview nobody asked for.
-        overlay.recordingEnded()
-        #expect(!overlay.previewVisible)
-        // An explicit toggle while armed is the owner's own choice and outlives the arming.
-        overlay.armPreview()
+        let window = CGRect(x: -10_000, y: -10_000, width: 1280, height: 720)
+        let moved = CGRect(x: -9_400, y: -9_800, width: 1280, height: 720)
+        let placed = CameraOptions(enabled: true, widthFraction: 0.28,
+                                   position: CameraPosition(x: 0.1, y: 0.9))
+        for ownerWantsPreview in [false, true] {
+            overlay.previewVisible = ownerWantsPreview
+            overlay.prepareRecording(cgRect: window, options: CameraOptions(enabled: true))  // arm() / begin()
+            #expect(overlay.previewVisible == ownerWantsPreview)
+            // Open or closed, the preview is confined to the recorded rect and follows it.
+            #expect(overlay.isVisible == ownerWantsPreview)
+            overlay.updateRecordingBounds(cgRect: moved)                                     // the window is dragged
+            #expect(overlay.previewVisible == ownerWantsPreview)
+            overlay.applyPlacement(placed, source: .floating, persists: false)               // a live placement drag
+            #expect(overlay.previewVisible == ownerWantsPreview)
+            // Closed before the teardown: recordingEnded() with the preview still open
+            // restarts the camera device, which a unit test must not do.
+            overlay.previewVisible = false
+            overlay.recordingEnded()                                                         // stop()
+            #expect(!overlay.previewVisible)
+            #expect(!overlay.isVisible)
+        }
+
+        // The chip does change it. Only the closing direction is safe to drive here:
+        // opening asks the device for permission.
+        overlay.previewVisible = true
         overlay.togglePreview()
-        #expect(!overlay.previewVisible)
-        overlay.recordingEnded()
         #expect(!overlay.previewVisible)
     }
 

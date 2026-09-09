@@ -298,6 +298,13 @@ struct CapturePanelView: View {
                         .foregroundStyle(Color.primary.opacity(0.62))
                 }
                 Spacer()
+                // The preview is reachable while recording too: opening it here confines it
+                // to the recorded rect, and dragging it there lands in the file live.
+                RoundIconButton(
+                    symbol: previewVisible ? "eye.fill" : "eye.slash",
+                    help: previewVisible ? "Kamera önizlemesini gizle" : "Kamera önizlemesini aç",
+                    action: togglePreviewWindow
+                )
                 RoundIconButton(
                     symbol: model.state == .paused ? "play.fill" : "pause.fill",
                     help: model.state == .paused ? "Sürdür" : "Duraklat",
@@ -323,6 +330,14 @@ struct CapturePanelView: View {
 
     }
 
+    /// The panel's half of the preview switch -- with the status-menu item, the only two
+    /// things that open or close the preview. Recording state never gates it.
+    private func togglePreviewWindow() {
+        guard !designPreview else { return }
+        CameraOverlayController.shared.togglePreview()
+        previewVisible = CameraOverlayController.shared.previewVisible
+    }
+
     private var cameraRow: some View {
         HStack(spacing: 8) {
             Image(systemName: cameraEnabled ? "video.fill" : "video.slash")
@@ -332,11 +347,7 @@ struct CapturePanelView: View {
             if cameraRunning { Circle().fill(.green).frame(width: 6, height: 6) }
             // A real, visible control: the record switch alone left the preview
             // unreachable (the owner never found the bare text button next to it).
-            HoverScaleButton(action: {
-                guard !designPreview else { return }
-                CameraOverlayController.shared.togglePreview()
-                previewVisible = CameraOverlayController.shared.previewVisible
-            }) { hovering in
+            HoverScaleButton(action: togglePreviewWindow) { hovering in
                 HStack(spacing: 4) {
                     Image(systemName: previewVisible ? "eye.fill" : "eye.slash")
                     Text("Önizleme")

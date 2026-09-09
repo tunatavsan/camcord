@@ -11,6 +11,9 @@ final class CameraOverlayController: NSObject {
 
     var onPlacementChange: ((CameraOptions) -> Void)?
     var isVisible: Bool { panel.isVisible }
+    /// Only the chip and the status-menu item change `previewVisible`: the preview belongs
+    /// to the owner. Arming and recording may CONFINE it (`prepareRecording`), never open
+    /// it -- a placement made with it closed lands in the file just the same.
     var previewVisible = false
 
     private let panel: NSPanel
@@ -29,10 +32,6 @@ final class CameraOverlayController: NSObject {
     /// The last latched magnet/size stop, so each latch ticks exactly once.
     private var hapticCorner: CameraCorner?
     private(set) var hapticWidthStop: Double?
-    /// What the owner had before arming forced the preview open to place the camera.
-    /// The end of the arming -- cancelled, or the recording it started -- puts it back,
-    /// so a placement session never leaves the preview (and the device) running behind it.
-    private var previewBeforeArming: Bool?
     /// Guards a fade-out completion against a show() that raced it.
     private var visibilityToken = 0
 
@@ -100,24 +99,16 @@ final class CameraOverlayController: NSObject {
         onPlacementChange?(self.options)
     }
 
+    /// One of the two writers of `previewVisible`; the status-menu item is the other.
     func togglePreview() {
-        // An explicit choice outlives the arming that forced the preview open.
-        previewBeforeArming = nil
         previewVisible.toggle()
         if previewVisible { showPreview(requestPermission: true) } else { hide(animated: true) }
     }
 
-    /// Arming opens the preview even when the owner keeps it closed: it is the only way
-    /// to place the camera. Nothing else may turn the preview on.
-    func armPreview() {
-        if previewBeforeArming == nil { previewBeforeArming = previewVisible }
-        previewVisible = true
-    }
-
+    /// Drops the confinement rect an arming or a recording put up. The owner's choice is
+    /// untouched: an open preview goes back to free-floating, a closed one stays closed.
     func recordingEnded() {
         recordingBounds = nil
-        if let previewBeforeArming { previewVisible = previewBeforeArming }
-        previewBeforeArming = nil
         if previewVisible { showPreview() } else { hide() }
     }
 
