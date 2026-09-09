@@ -630,6 +630,13 @@ struct RecordingSettingsView: View {
             }
         }
         .task(id: settings.outputDirectoryPath) { await loadRecents() }
+        // The shortcut and the panel write the same fields. Without this the window's
+        // snapshot goes stale and the next edit here writes the whole stale struct back,
+        // silently undoing what the owner just did somewhere else.
+        .onReceive(NotificationCenter.default.publisher(for: RecordingSettings.didChangeNotification)) { _ in
+            let stored = RecordingSettings.load(from: defaultsSuite)
+            if stored != settings { settings = stored }
+        }
         .onDisappear { Task { await microphoneMonitor.stop() } }
         .onChange(of: settings.microphoneDeviceID) { _, _ in Task { await microphoneMonitor.stop() } }
         .onChange(of: settings.microphone) { _, enabled in

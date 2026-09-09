@@ -169,6 +169,19 @@ struct HoldGestureDetectorTests {
                                            to: .toggleCameraPreview, in: assignments) == nil)
     }
 
+    @Test("every shortcut Settings offers is actually bound to a handler")
+    @MainActor func everyShortcutIsBound() {
+        let coordinator = CaptureCoordinator()
+        let controller = RecordingController(coordinator: coordinator)
+        _ = HotkeyCenter(coordinator: coordinator, recordingController: controller)
+        // Settings can record a key for anything in the catalogue; anything the catalogue
+        // lists but HotkeyCenter never binds is a key that does nothing when pressed.
+        for entry in ShortcutCatalogue.all {
+            #expect(HotkeyCenter.boundNames.contains(entry.name.rawValue),
+                    "\(entry.label) is offered in Settings but nothing listens for it")
+        }
+    }
+
     @Test("every shortcut Settings offers has a label and appears exactly once")
     func shortcutCatalogueIsComplete() {
         let names = ShortcutCatalogue.all.map(\.name)

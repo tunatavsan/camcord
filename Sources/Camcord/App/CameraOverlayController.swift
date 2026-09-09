@@ -11,12 +11,12 @@ final class CameraOverlayController: NSObject {
 
     var onPlacementChange: ((CameraOptions) -> Void)?
     var isVisible: Bool { panel.isVisible }
-    /// Only the owner's own surfaces change `previewVisible` -- the panel chip, the
-    /// status-menu item, the tile's own close button and the shortcut, all through
-    /// `setPreviewVisible`. Arming and recording may CONFINE the preview
+    /// Only the owner's own surfaces change `previewVisible`, and only through the two named
+    /// intents below: `togglePreview()` (panel chip, status-menu item, shortcut) and
+    /// `closeFromTile()` (the × on the tile). Arming and recording may CONFINE the preview
     /// (`prepareRecording`), never open it: a placement made with it closed lands in the
-    /// file just the same. `private(set)` is what enforces that -- no arming, recording or
-    /// panel-visible path can even compile a write to it.
+    /// file just the same. `private(set)` plus a PRIVATE setter is what enforces that -- no
+    /// arming, recording or panel-visible path can even compile a write to it.
     private(set) var previewVisible = false
 
     /// Posted whenever `previewVisible` changes, so a chip drawn elsewhere (the panel) does
@@ -37,6 +37,10 @@ final class CameraOverlayController: NSObject {
     /// camera's first frame so the preview never flashes an empty black tile.
     private var pendingReveal = false
     private var revealTimeout: Task<Void, Never>?
+    /// True during the dismissal fade. A reopen inside it is still an APPEARANCE — the tile
+    /// on screen is a corpse at alpha 0-ish, and treating it as visible would skip the
+    /// wait-for-first-frame and show the placeholder instead.
+    private var fadingOut = false
     private var motion: CameraDragMotion?
     private var motionTimestamp: CFTimeInterval?
     private var motionLink: CADisplayLink?
@@ -71,7 +75,7 @@ final class CameraOverlayController: NSObject {
         panel.contentView = cameraView
         panel.animationBehavior = .none
         cameraView.onDrag = { [weak self] phase, point, corner in self?.drag(phase, point: point, corner: corner) }
-        cameraView.onClose = { [weak self] in self?.setPreviewVisible(false) }
+        cameraView.onClose = { [weak self] in self?.closeFromTile() }
         let monitor = CameraPreviewMonitor.shared
         monitor.$image.sink { [weak self] image in
             MainActor.assumeIsolated {
@@ -118,9 +122,12 @@ final class CameraOverlayController: NSObject {
     func setPreviewVisibleForTesting(_ value: Bool) { previewVisible = value }
     #endif
 
+    /// The tile's own × — an owner intent like the chip, not a recording-driven change.
+    func closeFromTile() { setPreviewVisible(false) }
+
     /// The single writer behind every owner surface: chip, status menu, the tile's × and
-    /// the shortcut. Opening asks for permission only when the owner asked for it directly.
-    func setPreviewVisible(_ visible: Bool, requestPermission: Bool = false) {
+    /// the shortcut. Private on purpose — see `previewVisible`.
+    private func setPreviewVisible(_ visible: Bool, requestPermission: Bool = false) {
         guard previewVisible != visible else { return }
         previewVisible = visible
         if visible { showPreview(requestPermission: requestPermission) } else { hide(animated: true) }
@@ -180,7 +187,8 @@ final class CameraOverlayController: NSObject {
         cameraView.mirrored = options.mirrored
         CameraPreviewMonitor.shared.setVisible(true, owner: "floating")
         visibilityToken &+= 1
-        let appearing = !panel.isVisible
+        let appearing = !panel.isVisible || fadingOut
+        fadingOut = false
         layout()
         // Opening onto a black rectangle while the device warms up is the ugliest second of
         // the whole flow. The panel goes up (so confinement, layout and every caller's
@@ -259,13 +267,17 @@ final class CameraOverlayController: NSObject {
         pendingReveal = false
         revealTimeout?.cancel()
         revealTimeout = nil
-        panel.ignoresMouseEvents = false
+        cameraView.resetIndication()
         visibilityToken &+= 1
         guard animated, panel.isVisible, !Self.reducesMotion else {
             releaseDevice()
             orderOutPanels()
             return
         }
+        // A tile that is fading out must not eat the click the × invited: the pointer is
+        // already on it, and the next 150 ms would swallow whatever the owner clicks next.
+        panel.ignoresMouseEvents = true
+        fadingOut = true
         let token = visibilityToken
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.15
@@ -293,6 +305,8 @@ final class CameraOverlayController: NSObject {
         panel.orderOut(nil)
         panel.alphaValue = 1
         shadowPanel.alphaValue = 1
+        panel.ignoresMouseEvents = false
+        fadingOut = false
     }
 
     static var reducesMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
@@ -459,6 +473,8 @@ final class FloatingCameraView: NSView {
     private(set) var indicated: CameraHotspot?
     var indicatedCorner: CameraCorner? { indicated?.corner }
     private var dragging = false
+    /// Set when a mouse-down dismissed the preview, so its mouse-up is inert.
+    private var closedOnDown = false
     private var tracking: NSTrackingArea?
     private let handle = CALayer()
     private let grip = CAShapeLayer()
@@ -541,10 +557,13 @@ final class FloatingCameraView: NSView {
     override func mouseMoved(with event: NSEvent) { track(event) }
     override func mouseExited(with event: NSEvent) { if !dragging { indicate(nil) } }
     override func mouseDown(with event: NSEvent) {
-        let hotspot = CameraResizeGeometry.hotspot(at: convert(event.locationInWindow, from: nil), in: bounds)
+        let point = convert(event.locationInWindow, from: nil)
+        let hotspot = CameraResizeGeometry.hotspot(at: point, in: bounds)
         // The × is a button: it closes on mouse-DOWN and starts no drag, so the tile can
-        // never be dragged out from under the click that was meant to dismiss it.
-        if hotspot == .close {
+        // never be dragged out from under the click that was meant to dismiss it. Only the
+        // button itself closes — pressing elsewhere in the reveal zone drags, as before.
+        if CameraResizeGeometry.pressClosesPreview(at: point, in: bounds) {
+            closedOnDown = true
             indicate(nil)
             onClose?()
             return
@@ -555,13 +574,33 @@ final class FloatingCameraView: NSView {
         (resizeCorner.map { cursor(for: $0) } ?? .closedHand).set()
         onDrag?(.began, NSEvent.mouseLocation, resizeCorner)
     }
-    override func mouseDragged(with event: NSEvent) { onDrag?(.changed, NSEvent.mouseLocation, resizeCorner) }
+    override func mouseDragged(with event: NSEvent) {
+        guard dragging else { return }
+        onDrag?(.changed, NSEvent.mouseLocation, resizeCorner)
+    }
     override func mouseUp(with event: NSEvent) {
+        // A press that closed the preview never began a drag, so it must not end one — and
+        // re-tracking here would light the × back up on a tile that is already leaving.
+        if closedOnDown {
+            closedOnDown = false
+            return
+        }
         onDrag?(.ended, NSEvent.mouseLocation, resizeCorner)
         resizeCorner = nil
         dragging = false
         track(event)
         window?.invalidateCursorRects(for: self)
+    }
+
+    /// Clears the hover badges — the tile is leaving the screen, and `indicated` would
+    /// otherwise still be set when it comes back with no pointer on it.
+    func resetIndication() {
+        indicate(nil)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        handle.opacity = 0
+        closeBadge.opacity = 0
+        CATransaction.commit()
     }
 
     #if DEBUG

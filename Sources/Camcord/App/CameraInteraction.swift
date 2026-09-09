@@ -141,9 +141,12 @@ enum CameraHotspot: Equatable {
 }
 
 enum CameraResizeGeometry {
-    /// The indicator, cursor and mouse-down all share these generous corner zones.
+    /// The indicator, cursor and mouse-down all share these generous corner zones. The zone
+    /// must CONTAIN the grip it reveals: the grip is drawn on the tile's own corner curve, so
+    /// it reaches `cornerRadius` out along both axes, and a zone that stopped short left the
+    /// visible grip dragging the tile instead of resizing it on any large camera.
     static func hitRect(_ corner: CameraCorner, in bounds: CGRect) -> CGRect {
-        let extent = min(max(44, CameraOptions.cornerRadius(for: bounds.size) * 0.48 + 16),
+        let extent = min(max(44, CameraOptions.cornerRadius(for: bounds.size) + 8),
                          bounds.width * 0.32, bounds.height * 0.46)
         let right = corner == .topRight || corner == .bottomRight
         let top = corner == .topLeft || corner == .topRight
@@ -213,28 +216,53 @@ enum CameraResizeGeometry {
         // Two ways a × does not belong: it would crowd the resize corners, or it would be a
         // third of the tile. A camera that small is closed from the chip, the menu or the key.
         guard bounds.width - 2 * corners >= diameter + 8, bounds.height >= diameter * 3 else { return nil }
-        let margin = max(6, min(bounds.width, bounds.height) * 0.05)
+        let margin = min(max(6, min(bounds.width, bounds.height) * 0.05), 14)
         return CGRect(x: bounds.midX - diameter / 2,
                       y: bounds.maxY - margin - diameter,
                       width: diameter, height: diameter)
     }
 
-    /// The generous zone that reveals the close button — the owner moves to the top middle,
-    /// not onto a 20 pt circle. Never overlaps the corner resize zones.
-    static func closeHitRect(in bounds: CGRect) -> CGRect? {
+    /// What a PRESS on the close button counts as: the drawn circle plus a small slop ring.
+    /// Deliberately much smaller than the reveal zone — a mouse-down on bare video near the
+    /// top of the tile is a drag, not a dismissal.
+    static func closeButtonRect(in bounds: CGRect) -> CGRect? {
         guard let circle = closeFrame(in: bounds) else { return nil }
-        let corners = hitRect(.topLeft, in: bounds).width
-        let width = min(max(circle.width * 2.4, 44), bounds.width - 2 * corners)
-        let height = min(max(circle.height * 1.9, 34), bounds.height * 0.5)
-        return CGRect(x: bounds.midX - width / 2, y: bounds.maxY - height, width: width, height: height)
+        let slop = max(4, circle.width * 0.18)
+        return circle.insetBy(dx: -slop, dy: -slop)
     }
 
-    /// What the pointer is over. Corners keep priority: `closeHitRect` is already carved to
-    /// avoid them, and a resize started from a corner must never be stolen by the ×.
+    /// The zone that REVEALS the close button — the owner moves to the top middle, not onto a
+    /// 20 pt circle. Grown from the circle itself (two independent formulas drifted apart and
+    /// left the drawn × outside the zone that summoned it), extended to the top edge, and
+    /// clipped clear of the corner resize zones so it never steals a resize.
+    static func closeHitRect(in bounds: CGRect) -> CGRect? {
+        guard let circle = closeFrame(in: bounds) else { return nil }
+        let pad = max(8, circle.width * 0.3)
+        let zone = CGRect(x: circle.minX - pad, y: circle.minY - pad,
+                          width: circle.width + pad * 2, height: bounds.maxY - circle.minY + pad)
+        let corners = hitRect(.topLeft, in: bounds).width
+        let free = CGRect(x: bounds.minX + corners, y: bounds.minY,
+                          width: max(0, bounds.width - 2 * corners), height: bounds.height)
+        let clipped = zone.intersection(free)
+        // If clipping would cut into the button itself, there is no room for a × here.
+        guard !clipped.isNull, clipped.contains(circle) else { return nil }
+        return clipped
+    }
+
+    /// What the pointer HOVERS over. Corners keep priority: `closeHitRect` is already carved
+    /// to avoid them, and a resize started from a corner must never be stolen by the ×.
     static func hotspot(at point: CGPoint, in bounds: CGRect) -> CameraHotspot? {
         if let corner = corner(at: point, in: bounds) { return .resize(corner) }
         if let close = closeHitRect(in: bounds), close.contains(point) { return .close }
         return nil
+    }
+
+    /// Whether a PRESS at `point` dismisses the preview. Only the button itself does — the
+    /// reveal zone is a hover affordance, and closing from anywhere in it would turn a drag
+    /// that started near the top of the tile into a dismissal.
+    static func pressClosesPreview(at point: CGPoint, in bounds: CGRect) -> Bool {
+        guard corner(at: point, in: bounds) == nil, let button = closeButtonRect(in: bounds) else { return false }
+        return button.contains(point)
     }
 
     /// The sizes people actually pick, and the half-window around each where a resize

@@ -90,17 +90,27 @@ final class HotkeyCenter {
         // The panel/menu chips write the same state, so nothing else has to be told.
         Self.onKeyDown(.toggleCameraRecording, "toggleCameraRecording") { [weak self] _ in
             guard let self else { return }
-            self.onToast?(Self.toggleCameraRecording())
+            self.onToast?(Self.toggleCameraRecording(isBusy: self.recordingController.isBusy))
         }
     }
 
     /// The panel may well be closed when this fires, so the shortcuts say what they did.
     var onToast: ((ToastRequest) -> Void)?
 
-    /// Flips "Kamerayı kaydet" through the same field the panel toggle writes. The
-    /// compositor reads the flag live, so this needs no idle gate.
+    /// Flips "Kamerayı kaydet" through the same field the panel toggle writes — and refuses
+    /// mid-recording exactly like that toggle does. The engine binds its camera source when
+    /// the recording starts: turning the flag on afterwards composites nothing, so a toast
+    /// promising a camera in the file would be a lie.
     @discardableResult
-    static func toggleCameraRecording() -> ToastRequest {
+    static func toggleCameraRecording(isBusy: Bool) -> ToastRequest {
+        guard !isBusy else {
+            return ToastRequest(
+                text: "Kayıt sürerken değiştirilemez",
+                systemSymbol: "exclamationmark.circle.fill",
+                tint: .systemOrange,
+                important: true
+            )
+        }
         var settings = RecordingSettings.load(from: .standard)
         settings.camera.enabled.toggle()
         settings.save(to: .standard)
@@ -128,11 +138,16 @@ final class HotkeyCenter {
     /// Every binding logs itself before it runs: in a fullscreen game the first question
     /// is whether the trigger reached us at all (Phase G.1). The measured context is
     /// handed to the action so routing on it costs no second window-list sweep.
+    /// Every name this process has bound a handler to. A shortcut the owner can record in
+    /// Settings but that nothing listens for is a dead key, and nothing else would catch it.
+    private(set) static var boundNames: Set<String> = []
+
     private static func onKeyDown(
         _ name: KeyboardShortcuts.Name,
         _ label: String,
         _ action: @escaping @MainActor (FullscreenContext) async -> Void
     ) {
+        boundNames.insert(name.rawValue)
         KeyboardShortcuts.onKeyDown(for: name) {
             Task { @MainActor in
                 await action(TriggerLog.fired("hotkey.\(label)"))

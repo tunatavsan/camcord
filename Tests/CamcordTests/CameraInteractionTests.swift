@@ -554,11 +554,11 @@ struct CameraInteractionTests {
         overlay.setPreviewVisibleForTesting(true)
         // What the × does. (The opening direction asks the device for permission, so only
         // the closing one is safe to drive from a unit test.)
-        overlay.setPreviewVisible(false)
+        overlay.closeFromTile()
         #expect(!overlay.previewVisible)
         #expect(announcements == 1)
         // Idempotent: a second close is not a state change and must not announce one.
-        overlay.setPreviewVisible(false)
+        overlay.closeFromTile()
         #expect(announcements == 1)
     }
 
@@ -575,16 +575,25 @@ struct CameraInteractionTests {
         settings.camera.enabled = false
         settings.save(to: defaults)
 
-        let on = HotkeyCenter.toggleCameraRecording()
+        let on = HotkeyCenter.toggleCameraRecording(isBusy: false)
         #expect(RecordingSettings.load(from: defaults).camera.enabled)
         #expect(on.systemSymbol == "video.fill")
         // Important, or the owner's own toast preference would silence the only feedback a
         // shortcut has when the panel is closed.
         #expect(on.important)
 
-        let off = HotkeyCenter.toggleCameraRecording()
+        let off = HotkeyCenter.toggleCameraRecording(isBusy: false)
         #expect(!RecordingSettings.load(from: defaults).camera.enabled)
         #expect(off.systemSymbol == "video.slash.fill")
+
+        // Mid-recording the engine's camera source is already bound, so the flag would
+        // promise a camera the file cannot get: refuse, and say so, changing nothing.
+        settings = RecordingSettings.load(from: defaults)
+        settings.camera.enabled = true
+        settings.save(to: defaults)
+        let busy = HotkeyCenter.toggleCameraRecording(isBusy: true)
+        #expect(RecordingSettings.load(from: defaults).camera.enabled)
+        #expect(busy.text.contains("Kayıt sürerken"))
     }
 
     @Test("the resize grip is a quarter circle concentric with the tile's own corner")
@@ -623,6 +632,98 @@ struct CameraInteractionTests {
                 #expect(tile.contains(onArc))
             }
         }
+    }
+
+    /// Tile sizes the owner can actually produce: the camera is 15-60 % of the recorded
+    /// frame's width at 16:9, and the frame is anything from a small window to a 4K display.
+    private static let reachableTiles: [CGSize] = [96, 160, 227, 320, 454, 583, 760, 907,
+                                                  1037, 1152, 1536, 2304]
+        .map { (width: CGFloat) in CGSize(width: width, height: (width * 9 / 16).rounded()) }
+
+    @Test("hover zones contain the badges they reveal, at every size the owner can reach")
+    func zonesContainTheirBadges() throws {
+        for size in Self.reachableTiles {
+            let bounds = CGRect(origin: .zero, size: size)
+            let radius = CameraOptions.cornerRadius(for: size)
+            let line = CameraResizeGeometry.badgeLineWidth(in: bounds)
+
+            for corner in CameraCorner.allCases {
+                // The grip is drawn ON the tile's corner curve, so it reaches `radius` out
+                // along both axes. A zone that stopped short left the visible grip dragging
+                // the tile instead of resizing it.
+                let zone = CameraResizeGeometry.hitRect(corner, in: bounds)
+                let center = CameraResizeGeometry.cornerArcCenter(corner, in: bounds)
+                let arc = CameraResizeGeometry.gripArcRadius(in: bounds)
+                // Every point of the visible quarter arc is inside its own zone.
+                let angles = CameraResizeGeometry.gripArcAngles(corner)
+                for step in 0...8 {
+                    let theta = angles.start + (angles.end - angles.start) * CGFloat(step) / 8
+                    let point = CGPoint(x: center.x + cos(theta) * (arc + line / 2),
+                                        y: center.y + sin(theta) * (arc + line / 2))
+                    #expect(zone.contains(point), "grip point \(point) outside its zone at \(size)")
+                }
+            }
+
+            guard let circle = CameraResizeGeometry.closeFrame(in: bounds) else { continue }
+            let zone = try #require(CameraResizeGeometry.closeHitRect(in: bounds))
+            let button = try #require(CameraResizeGeometry.closeButtonRect(in: bounds))
+            // Hovering the drawn × must keep it up, and pressing it must close.
+            #expect(zone.contains(circle), "close zone lost its circle at \(size)")
+            #expect(zone.contains(button), "close press target escapes its zone at \(size)")
+            #expect(button.contains(circle))
+            #expect(CameraResizeGeometry.pressClosesPreview(at: CGPoint(x: circle.midX, y: circle.midY), in: bounds))
+            for corner in CameraCorner.allCases {
+                #expect(!zone.intersects(CameraResizeGeometry.hitRect(corner, in: bounds)),
+                        "close zone overlaps \(corner) at \(size)")
+            }
+            // The tile stays draggable: the reveal zone is a corner of it, not a third.
+            #expect(zone.width <= bounds.width * 0.5)
+            #expect(zone.height <= bounds.height * 0.42)
+        }
+    }
+
+    @Test("a press closes only on the button, never on the bare video that reveals it")
+    func onlyTheButtonCloses() throws {
+        let bounds = CGRect(x: 0, y: 0, width: 320, height: 180)
+        let circle = try #require(CameraResizeGeometry.closeFrame(in: bounds))
+        let zone = try #require(CameraResizeGeometry.closeHitRect(in: bounds))
+        #expect(CameraResizeGeometry.pressClosesPreview(at: CGPoint(x: circle.midX, y: circle.midY), in: bounds))
+        // Inside the reveal zone but off the button: that is a drag, not a dismissal.
+        let offButton = CGPoint(x: zone.minX + 2, y: zone.maxY - 2)
+        #expect(zone.contains(offButton))
+        #expect(!CameraResizeGeometry.pressClosesPreview(at: offButton, in: bounds))
+        // And a corner press is always a resize.
+        #expect(!CameraResizeGeometry.pressClosesPreview(at: CGPoint(x: 3, y: bounds.maxY - 3), in: bounds))
+    }
+
+    @Test("the × fires onClose once on mouse-down and starts no drag")
+    @MainActor func closeButtonIsWiredToTheTile() throws {
+        _ = NSApplication.shared
+        let bounds = CGRect(x: 0, y: 0, width: 320, height: 180)
+        let view = FloatingCameraView(frame: bounds)
+        var closes = 0
+        var dragPhases: [FloatingCameraView.DragPhase] = []
+        view.onClose = { closes += 1 }
+        view.onDrag = { phase, _, _ in dragPhases.append(phase) }
+
+        let circle = try #require(CameraResizeGeometry.closeFrame(in: bounds))
+        view.mouseDown(with: try Self.leftMouseDown(at: CGPoint(x: circle.midX, y: circle.midY)))
+        view.mouseUp(with: try Self.leftMouseDown(at: CGPoint(x: circle.midX, y: circle.midY)))
+        #expect(closes == 1)
+        #expect(dragPhases.isEmpty, "the dismissing click also moved the tile")
+
+        // A press on the bare tile still drags, and ends its drag exactly once.
+        view.mouseDown(with: try Self.leftMouseDown(at: CGPoint(x: bounds.midX, y: bounds.midY)))
+        view.mouseUp(with: try Self.leftMouseDown(at: CGPoint(x: bounds.midX, y: bounds.midY)))
+        #expect(closes == 1)
+        #expect(dragPhases == [.began, .ended])
+    }
+
+    private static func leftMouseDown(at point: CGPoint) throws -> NSEvent {
+        try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+        ))
     }
 
     @Test("the close button sits on the top edge and never overlaps a resize corner")
@@ -819,6 +920,10 @@ struct CameraInteractionTests {
         overlay.setPreviewVisibleForTesting(true)
         overlay.prepareRecording(cgRect: window, options: CameraOptions(enabled: true))
         let panel = try #require(NSApp.windows.first { $0.contentView is FloatingCameraView })
+        let view = try #require(panel.contentView as? FloatingCameraView)
+        // A live tile has a frame on screen; without one the re-show below would correctly
+        // wait for the camera instead of snapping back (see previewWaitsForItsFirstFrame).
+        view.image = NSImage(size: CGSize(width: 16, height: 9))
         #expect(monitor.isObserved)
         overlay.hide(animated: true)
         guard !CameraOverlayController.reducesMotion else {
