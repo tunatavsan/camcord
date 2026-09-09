@@ -15,13 +15,78 @@ struct CameraInteractionTests {
             motion.follow(CGPoint(x: 500 + Double(tick) * 5, y: 350))
             motion.step(seconds: 1.0 / 120)
         }
+        // The follow spring trails by ~16 ms, half of what it used to.
         let lag = 800 - motion.frame.minX
-        #expect(lag > 10 && lag < 28)
+        #expect(lag > 4 && lag < 10)
         #expect(motion.magnetCorner == nil)
+        // Releasing throws it: the rightward flick docks bottom-right, not where it stopped.
         motion.follow(CGPoint(x: 800, y: 350), released: true)
         for _ in 0..<90 { motion.step(seconds: 1.0 / 120) }
         #expect(motion.isSettled)
-        #expect(abs(motion.frame.minX - 800) < 0.01)
+        #expect(motion.magnetCorner == .bottomRight)
+        let dock = CameraOptions(corner: .bottomRight).rect(in: area)
+        #expect(hypot(motion.frame.minX - dock.minX, motion.frame.minY - dock.minY) < 0.1)
+    }
+
+    @Test("a release docks to the corner its throw was heading for")
+    func releaseFlingProjection() {
+        let size = CGSize(width: 396, height: 222.75)
+        let centre = CGPoint(x: (area.width - size.width) / 2, y: (area.height - size.height) / 2)
+        let flicks: [(CGPoint, CameraCorner)] = [
+            (CGPoint(x: 2_000, y: -1_200), .bottomRight),
+            (CGPoint(x: -2_000, y: -1_200), .bottomLeft),
+            (CGPoint(x: 2_000, y: 1_200), .topRight),
+            (CGPoint(x: -2_000, y: 1_200), .topLeft),
+        ]
+        for (velocity, expected) in flicks {
+            var motion = CameraDragMotion(frame: CGRect(origin: centre, size: size),
+                                          area: area, velocity: velocity)
+            motion.follow(centre, released: true)
+            #expect(motion.magnetCorner == expected)
+        }
+        // A fast flick left docks left even though the frame is still on the right.
+        let right = CameraOptions(corner: .bottomRight).rect(in: area)
+        var thrown = CameraDragMotion(frame: right, area: area, velocity: CGPoint(x: -3_000, y: 0))
+        thrown.follow(right.origin, released: true)
+        #expect(thrown.magnetCorner == .bottomLeft)
+    }
+
+    @Test("the released dock seats within 450 ms without overshooting the corner")
+    func releasedDockSettles() {
+        let size = CGSize(width: 396, height: 222.75)
+        let centre = CGPoint(x: (area.width - size.width) / 2, y: (area.height - size.height) / 2)
+        var motion = CameraDragMotion(frame: CGRect(origin: centre, size: size),
+                                      area: area, velocity: CGPoint(x: 2_000, y: -1_200))
+        motion.follow(centre, released: true)
+        let target = motion.target
+        let distance = hypot(target.x - centre.x, target.y - centre.y)
+        var elapsed = 0.0
+        var overshoot = 0.0
+        while elapsed < 0.45, !motion.isSettled {
+            motion.step(seconds: 1.0 / 120)
+            elapsed += 1.0 / 120
+            let beyond = (motion.frame.minX - target.x) * (target.x - centre.x)
+                + (motion.frame.minY - target.y) * (target.y - centre.y)
+            overshoot = max(overshoot, beyond / distance)
+        }
+        #expect(motion.isSettled)
+        #expect(elapsed < 0.45)
+        #expect(overshoot <= distance * 0.04)
+    }
+
+    @Test("Reduce Motion seats the release in one pass, with no animated steps left")
+    func reduceMotionFinishesImmediately() {
+        let size = CGSize(width: 396, height: 222.75)
+        let centre = CGPoint(x: (area.width - size.width) / 2, y: (area.height - size.height) / 2)
+        var motion = CameraDragMotion(frame: CGRect(origin: centre, size: size),
+                                      area: area, velocity: CGPoint(x: 2_000, y: -1_200))
+        motion.follow(centre, released: true)
+        motion.finishImmediately()
+        let seated = motion.frame
+        #expect(motion.isSettled)
+        #expect(seated.origin == motion.target)
+        motion.step(seconds: 1.0 / 120)
+        #expect(motion.frame == seated)
     }
 
     @Test("dock stretches, breaks away without a jump, attracts again and seats on release")
@@ -46,7 +111,9 @@ struct CameraInteractionTests {
             #expect(motion.frame == previous)
             #expect(motion.velocity == velocity)
             motion.step(seconds: 1.0 / 120)
-            #expect(hypot(motion.frame.minX - previous.minX, motion.frame.minY - previous.minY) < 30)
+            // Catching up to the pointer is fast but never a teleport.
+            let reach = hypot(far.x - previous.minX, far.y - previous.minY)
+            #expect(hypot(motion.frame.minX - previous.minX, motion.frame.minY - previous.minY) < reach * 0.5)
             for _ in 0..<90 { motion.step(seconds: 1.0 / 120) }
             #expect(hypot(motion.frame.minX - far.x, motion.frame.minY - far.y) < 0.1)
             motion.follow(near)
@@ -73,6 +140,29 @@ struct CameraInteractionTests {
         fast.step(seconds: 10)
         #expect(fast.frame.minX.isFinite && fast.frame.minY.isFinite)
         #expect(fast.frame.minX >= CameraOptions.margin(in: area))
+    }
+
+    @Test("resizing latches onto the common sizes and stays free between them")
+    func resizeWidthSnaps() {
+        for stop in CameraResizeGeometry.widthStops {
+            #expect(CameraResizeGeometry.snappedWidthFraction(stop + 0.014) == stop)
+            #expect(CameraResizeGeometry.snappedWidthFraction(stop - 0.014) == stop)
+        }
+        // 0.28 sits outside every window (0.25 and 0.33 are both further than 0.015).
+        #expect(CameraResizeGeometry.snappedWidthFraction(0.28) == 0.28)
+
+        var options = CameraOptions(widthFraction: 0.22)
+        options.place(CGRect(x: 600, y: 400, width: 396, height: 222.75), in: area)
+        let start = options.rect(in: area)
+        // Grow by just under one snap window's worth past 0.25 (450 pt of 1800).
+        let pull = 450 - start.width + area.width * 0.010
+        let snapped = CameraResizeGeometry.resize(start: start, translation: CGPoint(x: pull, y: pull / CameraOptions.aspectRatio),
+                                                  corner: .topRight, options: options, in: area)
+        #expect(snapped.widthFraction == 0.25)
+        let free = CameraResizeGeometry.resize(start: start, translation: CGPoint(x: pull + area.width * 0.020,
+                                                                                 y: (pull + area.width * 0.020) / CameraOptions.aspectRatio),
+                                               corner: .topRight, options: options, in: area)
+        #expect(abs(free.widthFraction - 0.28) < 0.001)
     }
 
     @Test("each corner resizes continuously with a fixed opposite corner and aspect ratio")

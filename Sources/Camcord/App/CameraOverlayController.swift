@@ -26,6 +26,11 @@ final class CameraOverlayController: NSObject {
     private var motion: CameraDragMotion?
     private var motionTimestamp: CFTimeInterval?
     private var motionLink: CADisplayLink?
+    /// The last latched magnet/size stop, so each latch ticks exactly once.
+    private var hapticCorner: CameraCorner?
+    private var hapticWidthStop: Double?
+    /// Guards a fade-out completion against a show() that raced it.
+    private var visibilityToken = 0
 
     private override init() {
         panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -87,7 +92,7 @@ final class CameraOverlayController: NSObject {
 
     func togglePreview() {
         previewVisible.toggle()
-        if previewVisible { showPreview(requestPermission: true) } else { hide() }
+        if previewVisible { showPreview(requestPermission: true) } else { hide(animated: true) }
     }
 
     func recordingEnded() {
@@ -135,18 +140,60 @@ final class CameraOverlayController: NSObject {
     private func show() {
         cameraView.mirrored = options.mirrored
         CameraPreviewMonitor.shared.setVisible(true, owner: "floating")
+        visibilityToken &+= 1
+        let appearing = !panel.isVisible
         layout()
+        panel.alphaValue = 1
+        shadowPanel.alphaValue = 1
         shadowPanel.orderFrontRegardless()
         panel.orderFrontRegardless()
+        guard appearing, !Self.reducesMotion else { return }
+        let final = panel.frame
+        panel.setFrame(final.insetBy(dx: final.width * 0.04, dy: final.height * 0.04), display: false)
+        panel.alphaValue = 0
+        shadowPanel.alphaValue = 0
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().setFrame(final, display: true)
+            panel.animator().alphaValue = 1
+            shadowPanel.animator().alphaValue = 1
+        }
     }
 
-    func hide() {
+    /// `animated` is the owner dismissing the preview. Every other caller (recording
+    /// preparation, teardown) must leave the screen in the same run loop pass, or a
+    /// fading preview would burn into the recording's first frames.
+    func hide(animated: Bool = false) {
         stopMotion()
-        shadowPanel.orderOut(nil)
-        panel.orderOut(nil)
         restartTask?.cancel()
         CameraPreviewMonitor.shared.setVisible(false, owner: "floating")
         Task { await CameraPreviewMonitor.shared.stopIfUnobserved() }
+        visibilityToken &+= 1
+        guard animated, panel.isVisible, !Self.reducesMotion else { orderOutPanels(); return }
+        let token = visibilityToken
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.15
+            panel.animator().alphaValue = 0
+            shadowPanel.animator().alphaValue = 0
+        } completionHandler: { [weak self] in
+            guard let self, self.visibilityToken == token else { return }
+            self.orderOutPanels()
+        }
+    }
+
+    private func orderOutPanels() {
+        shadowPanel.orderOut(nil)
+        panel.orderOut(nil)
+        panel.alphaValue = 1
+        shadowPanel.alphaValue = 1
+    }
+
+    static var reducesMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+    /// One alignment tick when a magnet or a size stop latches -- never while sliding.
+    private func latchHaptic() {
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
     }
 
     private func settingsChanged() {
@@ -204,7 +251,7 @@ final class CameraOverlayController: NSObject {
     }
 
     private func startMotion() {
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+        if Self.reducesMotion {
             motion?.finishImmediately()
             displayMotion()
             if dragStart == nil { stopMotion() }
@@ -222,6 +269,10 @@ final class CameraOverlayController: NSObject {
         guard let motion else { return }
         options.place(motion.frame, in: bounds.size)
         if let corner = motion.magnetCorner { options.corner = corner }
+        if motion.magnetCorner != hapticCorner {
+            hapticCorner = motion.magnetCorner
+            if hapticCorner != nil { latchHaptic() }
+        }
         applyPlacement(options, source: .floating, persists: false)
     }
 
@@ -229,9 +280,11 @@ final class CameraOverlayController: NSObject {
         guard motion != nil else { stopDisplayLink(); return }
         let elapsed = link.timestamp - (motionTimestamp ?? link.timestamp - 1.0 / 120)
         motionTimestamp = link.timestamp
+        let wasThrown = motion?.released == true
         motion?.step(seconds: elapsed)
         displayMotion()
         if motion?.isSettled == true {
+            if wasThrown { latchHaptic() }
             stopDisplayLink()
             if dragStart == nil { motion = nil }
         }
@@ -243,10 +296,12 @@ final class CameraOverlayController: NSObject {
             let velocity = motion?.velocity ?? .zero
             stopMotion()
             dragStart = (panel.frame, point, corner)
+            hapticWidthStop = nil
             if corner == nil {
                 motion = CameraDragMotion(frame: panel.frame.offsetBy(dx: -bounds.minX, dy: -bounds.minY),
                                           area: bounds.size, velocity: velocity)
             }
+            hapticCorner = motion?.magnetCorner
         case .changed, .ended:
             guard let start = dragStart else { return }
             let translation = CGPoint(x: point.x - start.point.x, y: point.y - start.point.y)
@@ -255,6 +310,11 @@ final class CameraOverlayController: NSObject {
             if let corner = start.corner {
                 options = CameraResizeGeometry.resize(start: local, translation: translation,
                                                       corner: corner, options: options, in: bounds.size)
+                let stop = CameraResizeGeometry.widthStops.first { $0 == options.widthFraction }
+                if stop != hapticWidthStop {
+                    hapticWidthStop = stop
+                    if stop != nil { latchHaptic() }
+                }
                 final = options
                 applyPlacement(options, source: .floating, persists: phase == .ended)
             } else {

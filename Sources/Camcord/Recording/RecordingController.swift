@@ -180,20 +180,10 @@ final class RecordingController: NSObject {
             return
         }
         guard let window = await windowPicker.pick(content: content) else { return }   // dismissed
-        if RecordingSettings.load(from: .standard).armBeforeWindowRecording {
-            arm(target: .window(window))
-            return
-        }
-        // A display-sized pick (a fullscreen game) records the DISPLAY instead: window-surface
-        // capture freezes once a fullscreen app stops presenting after losing focus, while
-        // display capture keeps compositing regardless — and it sidesteps the double-scale
-        // window-size quirk those apps trigger.
-        if let display = fullscreenDisplay(for: window, in: content) {
-            let ownApp = content.applications.first { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
-            await begin(target: .display(display, scale: scale(for: display), excluding: ownApp))
-            return
-        }
-        await begin(target: .window(window))
+        // Every window pick arms: the red frame shows what will be recorded and the owner
+        // places the camera before pressing Başlat. The fullscreen→display conversion the
+        // window path needs happens inside startArmed(), so a game window arms too.
+        arm(target: .window(window))
     }
 
     private func arm(target: RecordingEngine.Target) {
@@ -219,7 +209,7 @@ final class RecordingController: NSObject {
             }
         }
         indicator.showRecordingWindow(window.windowID, initialCGRect: window.frame, showsBorder: true,
-                                      title: "Başlat", glyph: .play, color: .systemBlue,
+                                      title: "Başlat", glyph: .play, color: .systemRed,
                                       onCancel: { [weak self] in self?.cancelArmed() }) { [weak self] in
             Task { await self?.startArmed() }
         }
@@ -250,6 +240,10 @@ final class RecordingController: NSObject {
         clearArmedControls()
         armed = nil
         onArmedChange?(false)
+        // A display-sized pick (a fullscreen game) records the DISPLAY instead: window-surface
+        // capture freezes once a fullscreen app stops presenting after losing focus, while
+        // display capture keeps compositing regardless — and it sidesteps the double-scale
+        // window-size quirk those apps trigger.
         var target = requestedTarget
         if case .window(let window) = target,
            let content = try? await coordinator.contentCache.content(),
@@ -442,11 +436,7 @@ final class RecordingController: NSObject {
 
         switch selection {
         case .window(let window):
-            if RecordingSettings.load(from: .standard).armBeforeWindowRecording {
-                arm(target: .window(window))
-            } else {
-                await begin(target: .window(window))
-            }
+            arm(target: .window(window))
         case .region(let cgRect):
             do {
                 let content = try await coordinator.contentCache.content()

@@ -558,7 +558,6 @@ struct RecordingSettingsView: View {
             }
 
             Section("Gösterge") {
-                Toggle("Pencere kaydında önce yerleştir", isOn: $settings.armBeforeWindowRecording)
                 Toggle("Pencere kaydında pencereyi vurgula", isOn: $settings.windowGlowEnabled)
                 Text("Kaydedilen pencerenin çevresinde ince bir parıltı gösterilir (pencereyi taşırsan takip eder, kayda girmez).")
                     .font(.footnote)

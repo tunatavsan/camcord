@@ -21,8 +21,21 @@ struct CameraDragMotion {
         }
     }
 
+    /// How far ahead a release is projected: a flick docks where the throw was heading,
+    /// not where the pointer happened to stop.
+    static let flingProjection: TimeInterval = 0.35
+
     mutating func follow(_ origin: CGPoint, released: Bool = false) {
         self.released = released
+        if released {
+            let projected = CGRect(x: origin.x + velocity.x * Self.flingProjection,
+                                   y: origin.y + velocity.y * Self.flingProjection,
+                                   width: frame.width, height: frame.height)
+            let dock = CameraOptions.magnet(for: projected, in: area, latched: nil, reach: .infinity)
+            magnetCorner = dock?.corner
+            target = constrained(dock?.rect.origin ?? origin)
+            return
+        }
         let pointerFrame = CGRect(origin: origin, size: frame.size)
         let magnet = CameraOptions.magnet(for: pointerFrame, in: area, latched: magnetCorner)
         magnetCorner = magnet?.corner
@@ -54,10 +67,10 @@ struct CameraDragMotion {
         let elapsed = min(max(seconds, 0), 1.0 / 30)
         let steps = max(1, Int(ceil(elapsed * 480)))
         let dt = elapsed / Double(steps)
-        // Free motion trails by about 33 ms. The dock feels heavier while held,
-        // then uses a faster, lightly underdamped spring when the button is lifted.
-        let stiffness: CGFloat = magnetCorner == nil ? 3600 : (released ? 1800 : 1100)
-        let damping: CGFloat = magnetCorner == nil ? 120 : (released ? 70 : 55)
+        // Free motion trails by about 16 ms (damping/stiffness). The dock feels heavier
+        // while held, then springs home lightly underdamped once the button is lifted.
+        let stiffness: CGFloat = magnetCorner == nil ? 14400 : (released ? 1800 : 1100)
+        let damping: CGFloat = magnetCorner == nil ? 240 : (released ? 62 : 55)
         for _ in 0..<steps {
             velocity.x += ((target.x - frame.minX) * stiffness - velocity.x * damping) * dt
             velocity.y += ((target.y - frame.minY) * stiffness - velocity.y * damping) * dt
@@ -91,6 +104,15 @@ enum CameraResizeGeometry {
         CameraCorner.allCases.first { hitRect($0, in: bounds).contains(point) }
     }
 
+    /// The sizes people actually pick, and the half-window around each where a resize
+    /// latches on. Anything further away stays free.
+    static let widthStops: [Double] = [0.15, 0.20, 0.25, 0.33]
+    static let widthSnapWindow = 0.015
+
+    static func snappedWidthFraction(_ fraction: Double) -> Double {
+        widthStops.first { abs($0 - fraction) <= widthSnapWindow } ?? fraction
+    }
+
     static func resize(start: CGRect, translation: CGPoint, corner: CameraCorner,
                        options: CameraOptions, in area: CGSize) -> CameraOptions {
         guard area.width > 0, area.height > 0 else { return options }
@@ -103,7 +125,7 @@ enum CameraResizeGeometry {
         // slight change in pointer direction can no longer reverse/jump the size.
         let widthChange = (dx + dy / ratio) / (1 + 1 / (ratio * ratio))
         var result = options
-        result.widthFraction = (start.width + widthChange) / area.width
+        result.widthFraction = snappedWidthFraction((start.width + widthChange) / area.width)
         result = result.resolved()
         let size = result.rect(in: area).size
         let rect = CGRect(x: right ? start.minX : start.maxX - size.width,

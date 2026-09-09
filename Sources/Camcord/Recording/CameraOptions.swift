@@ -89,7 +89,10 @@ struct CameraOptions: Codable, Equatable, Sendable {
 
     /// Hysteresis keeps the attraction stable around the capture area's inset corners.
     /// The pointer is never warped; only the camera is pulled toward its resting place.
-    static func magnet(for rect: CGRect, in size: CGSize, latched: CameraCorner?) -> (rect: CGRect, corner: CameraCorner)? {
+    /// `reach` overrides the proximity limit — a release projects its throw and must be
+    /// able to pick the nearest corner from anywhere in the frame.
+    static func magnet(for rect: CGRect, in size: CGSize, latched: CameraCorner?,
+                       reach limit: CGFloat? = nil) -> (rect: CGRect, corner: CameraCorner)? {
         let margin = margin(in: size)
         func destination(_ corner: CameraCorner) -> CGRect {
             let unit = CameraPosition(corner: corner)
@@ -97,7 +100,7 @@ struct CameraOptions: Codable, Equatable, Sendable {
                           y: margin + max(0, size.height - margin * 2 - rect.height) * unit.y,
                           width: rect.width, height: rect.height)
         }
-        let reach = min(84, min(size.width, size.height) * 0.18)
+        let reach = limit ?? min(84, min(size.width, size.height) * 0.18)
         let candidates = latched.map { [$0] } ?? CameraCorner.allCases
         let nearest = candidates.min {
             hypot(destination($0).minX - rect.minX, destination($0).minY - rect.minY)

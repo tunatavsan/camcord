@@ -133,6 +133,34 @@ struct StreamWriterCameraTests {
         #expect(try #require(frames.last).color(atCI: cameraPoint).isMostlyBlue)
     }
 
+    @Test("a placement change between two live screen frames moves the camera in the file")
+    func livePlacementLandsInTheFile() async throws {
+        let url = temporaryMovieURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let source = FakeCameraFrameSource(try pixelBuffer(width: 80, height: 60, color: .red))
+        var options = CameraOptions(enabled: true, corner: .bottomRight, widthFraction: 0.30, mirrored: false)
+        let writer = try makeWriter(url: url, source: source, options: options)
+
+        // The mid-recording drag: the preview persists a new placement while the display
+        // stream keeps delivering frames, so the very next composited frame must move.
+        writer.consume(try screenSample(pts: CMTime(value: 100, timescale: 30)), of: .screen)
+        options.corner = .topLeft
+        options.position = CameraPosition(corner: .topLeft)
+        writer.updateCameraOptions(options)
+        writer.consume(try screenSample(pts: CMTime(value: 101, timescale: 30)), of: .screen)
+        writer.markFinished(atHostTime: nil)
+        _ = try await writer.finishWriting()
+
+        let frames = try await decodedFrames(at: url)
+        #expect(frames.count == 2)
+        let before = try #require(frames.first), after = try #require(frames.last)
+        let bottomRight = CGPoint(x: 260, y: 48), topLeft = CGPoint(x: 50, y: 150)
+        #expect(before.color(atCI: bottomRight).isMostlyRed)
+        #expect(before.color(atCI: topLeft).isMostlyBlue)
+        #expect(after.color(atCI: bottomRight).isMostlyBlue)
+        #expect(after.color(atCI: topLeft).isMostlyRed)
+    }
+
     @Test("moving and resizing the live camera changes already-running video frames")
     func liveCameraPlacement() async throws {
         let url = temporaryMovieURL()
