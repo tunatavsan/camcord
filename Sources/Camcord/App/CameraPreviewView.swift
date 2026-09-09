@@ -171,6 +171,10 @@ final class CameraPreviewMonitor: ObservableObject {
         }
     }
 
+    /// True while any surface still holds the preview open — the floating preview keeps
+    /// its claim through the fade-out, so the device outlives the last visible frame.
+    var isObserved: Bool { visible }
+
     func stopIfUnobserved() async {
         if visibleOwners.isEmpty { await stop() }
     }

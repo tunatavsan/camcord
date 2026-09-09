@@ -8,6 +8,9 @@ struct CameraDragMotion {
     private(set) var target: CGPoint
     private(set) var magnetCorner: CameraCorner?
     private(set) var released = false
+    /// How far the release has to travel: the dock spring is chosen once, at the throw,
+    /// so it cannot stiffen underneath the owner as the frame closes in.
+    private var throwDistance: CGFloat = 0
     let area: CGSize
 
     init(frame: CGRect, area: CGSize, velocity: CGPoint = .zero) {
@@ -24,16 +27,46 @@ struct CameraDragMotion {
     /// How far ahead a release is projected: a flick docks where the throw was heading,
     /// not where the pointer happened to stop.
     static let flingProjection: TimeInterval = 0.35
+    /// Only a throw docks. A slower release leaves the camera where it was dropped, with
+    /// the ordinary magnet still catching a drop made near a corner.
+    static let flingSpeed: CGFloat = 600
+
+    /// A released dock softens with the distance it has to cover: 84 pt seats crisply,
+    /// while a centre-to-corner throw at the same stiffness feels flung. Damping tracks
+    /// stiffness at ζ ≈ 0.73 — one light overshoot, seated well inside 450 ms.
+    static func releasedSpring(distance: CGFloat) -> (stiffness: CGFloat, damping: CGFloat) {
+        let reach = min(max((distance - 84) / (780 - 84), 0), 1)
+        let stiffness = 1800 - reach * 900
+        return (stiffness, 2 * 0.73 * sqrt(stiffness))
+    }
+
+    /// One unbounded spring step. The live drag runs it inside its own clamp; a test can
+    /// run it against a target no bound sits on and see the overshoot the owner feels.
+    static func integrate(_ position: inout CGPoint, velocity: inout CGPoint, toward target: CGPoint,
+                          stiffness: CGFloat, damping: CGFloat, seconds dt: TimeInterval) {
+        velocity.x += ((target.x - position.x) * stiffness - velocity.x * damping) * dt
+        velocity.y += ((target.y - position.y) * stiffness - velocity.y * damping) * dt
+        position.x += velocity.x * dt
+        position.y += velocity.y * dt
+    }
 
     mutating func follow(_ origin: CGPoint, released: Bool = false) {
         self.released = released
         if released {
-            let projected = CGRect(x: origin.x + velocity.x * Self.flingProjection,
-                                   y: origin.y + velocity.y * Self.flingProjection,
-                                   width: frame.width, height: frame.height)
-            let dock = CameraOptions.magnet(for: projected, in: area, latched: nil, reach: .infinity)
-            magnetCorner = dock?.corner
-            target = constrained(dock?.rect.origin ?? origin)
+            if hypot(velocity.x, velocity.y) >= Self.flingSpeed {
+                let projected = CGRect(x: origin.x + velocity.x * Self.flingProjection,
+                                       y: origin.y + velocity.y * Self.flingProjection,
+                                       width: frame.width, height: frame.height)
+                let dock = CameraOptions.magnet(for: projected, in: area, latched: nil, reach: .infinity)
+                magnetCorner = dock?.corner
+                target = constrained(dock?.rect.origin ?? origin)
+            } else {
+                let dropped = CGRect(origin: origin, size: frame.size)
+                let dock = CameraOptions.magnet(for: dropped, in: area, latched: magnetCorner)
+                magnetCorner = dock?.corner
+                target = constrained(dock?.rect.origin ?? origin)
+            }
+            throwDistance = hypot(target.x - frame.minX, target.y - frame.minY)
             return
         }
         let pointerFrame = CGRect(origin: origin, size: frame.size)
@@ -69,12 +102,19 @@ struct CameraDragMotion {
         let dt = elapsed / Double(steps)
         // Free motion trails by about 16 ms (damping/stiffness). The dock feels heavier
         // while held, then springs home lightly underdamped once the button is lifted.
-        let stiffness: CGFloat = magnetCorner == nil ? 14400 : (released ? 1800 : 1100)
-        let damping: CGFloat = magnetCorner == nil ? 240 : (released ? 62 : 55)
+        let stiffness: CGFloat
+        let damping: CGFloat
+        if magnetCorner == nil {
+            (stiffness, damping) = (14400, 240)
+        } else if released {
+            (stiffness, damping) = Self.releasedSpring(distance: throwDistance)
+        } else {
+            (stiffness, damping) = (1100, 55)
+        }
         for _ in 0..<steps {
-            velocity.x += ((target.x - frame.minX) * stiffness - velocity.x * damping) * dt
-            velocity.y += ((target.y - frame.minY) * stiffness - velocity.y * damping) * dt
-            let next = CGPoint(x: frame.minX + velocity.x * dt, y: frame.minY + velocity.y * dt)
+            var next = frame.origin
+            Self.integrate(&next, velocity: &velocity, toward: target,
+                           stiffness: stiffness, damping: damping, seconds: dt)
             frame.origin = constrained(next)
             if frame.minX != next.x { velocity.x = 0 }
             if frame.minY != next.y { velocity.y = 0 }
@@ -108,6 +148,10 @@ enum CameraResizeGeometry {
     /// latches on. Anything further away stays free.
     static let widthStops: [Double] = [0.15, 0.20, 0.25, 0.33]
     static let widthSnapWindow = 0.015
+
+    /// The stop a size is exactly latched onto, if any. A resize ticks its haptic when
+    /// this changes — including the seed at mouse-down, so starting on a stop is silent.
+    static func latchedStop(of fraction: Double) -> Double? { widthStops.first { $0 == fraction } }
 
     static func snappedWidthFraction(_ fraction: Double) -> Double {
         widthStops.first { abs($0 - fraction) <= widthSnapWindow } ?? fraction

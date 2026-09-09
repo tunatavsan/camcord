@@ -19,13 +19,43 @@ struct CameraInteractionTests {
         let lag = 800 - motion.frame.minX
         #expect(lag > 4 && lag < 10)
         #expect(motion.magnetCorner == nil)
-        // Releasing throws it: the rightward flick docks bottom-right, not where it stopped.
+        // Held still, then let go gently: it catches up to the pointer and stays there.
+        for _ in 0..<40 {
+            motion.follow(CGPoint(x: 800, y: 350))
+            motion.step(seconds: 1.0 / 120)
+        }
         motion.follow(CGPoint(x: 800, y: 350), released: true)
         for _ in 0..<90 { motion.step(seconds: 1.0 / 120) }
         #expect(motion.isSettled)
-        #expect(motion.magnetCorner == .bottomRight)
-        let dock = CameraOptions(corner: .bottomRight).rect(in: area)
-        #expect(hypot(motion.frame.minX - dock.minX, motion.frame.minY - dock.minY) < 0.1)
+        #expect(motion.magnetCorner == nil)
+        #expect(hypot(motion.frame.minX - 800, motion.frame.minY - 350) < 0.1)
+    }
+
+    @Test("a throw docks; a gentle release stays where it was dropped")
+    func releaseSpeedThreshold() {
+        let size = CGSize(width: 396, height: 222.75)
+        let centre = CGPoint(x: (area.width - size.width) / 2, y: (area.height - size.height) / 2)
+        let frame = CGRect(origin: centre, size: size)
+        // Just under the fling speed the drop is free placement: no corner, no travel.
+        var slow = CameraDragMotion(frame: frame, area: area,
+                                    velocity: CGPoint(x: CameraDragMotion.flingSpeed - 60, y: 0))
+        slow.follow(centre, released: true)
+        #expect(slow.magnetCorner == nil)
+        #expect(slow.target == centre)
+        // The same gesture just over it flies to the corner it was heading for.
+        var fast = CameraDragMotion(frame: frame, area: area,
+                                    velocity: CGPoint(x: CameraDragMotion.flingSpeed + 60,
+                                                      y: -(CameraDragMotion.flingSpeed + 60)))
+        fast.follow(centre, released: true)
+        #expect(fast.magnetCorner == .bottomRight)
+        // A slow drop inside the magnet's 18 % / 84 pt reach still seats on the corner.
+        let dock = CameraOptions(corner: .topLeft).rect(in: area)
+        let near = CGPoint(x: dock.minX + 40, y: dock.minY - 30)
+        var dropped = CameraDragMotion(frame: CGRect(origin: near, size: size), area: area)
+        dropped.follow(near, released: true)
+        #expect(dropped.magnetCorner == .topLeft)
+        for _ in 0..<120 { dropped.step(seconds: 1.0 / 120) }
+        #expect(hypot(dropped.frame.minX - dock.minX, dropped.frame.minY - dock.minY) < 0.1)
     }
 
     @Test("a release docks to the corner its throw was heading for")
@@ -51,7 +81,7 @@ struct CameraInteractionTests {
         #expect(thrown.magnetCorner == .bottomLeft)
     }
 
-    @Test("the released dock seats within 450 ms without overshooting the corner")
+    @Test("a centre-to-corner throw still seats within 450 ms")
     func releasedDockSettles() {
         let size = CGSize(width: 396, height: 222.75)
         let centre = CGPoint(x: (area.width - size.width) / 2, y: (area.height - size.height) / 2)
@@ -60,18 +90,43 @@ struct CameraInteractionTests {
         motion.follow(centre, released: true)
         let target = motion.target
         let distance = hypot(target.x - centre.x, target.y - centre.y)
+        #expect(distance > 700)
         var elapsed = 0.0
-        var overshoot = 0.0
         while elapsed < 0.45, !motion.isSettled {
             motion.step(seconds: 1.0 / 120)
             elapsed += 1.0 / 120
-            let beyond = (motion.frame.minX - target.x) * (target.x - centre.x)
-                + (motion.frame.minY - target.y) * (target.y - centre.y)
-            overshoot = max(overshoot, beyond / distance)
         }
         #expect(motion.isSettled)
         #expect(elapsed < 0.45)
-        #expect(overshoot <= distance * 0.04)
+    }
+
+    @Test("the release spring stays lightly underdamped at every throw distance")
+    func releasedSpringOvershoot() {
+        // Measured against an unclamped target: a dock target sits exactly on the clamp,
+        // which absorbs the overshoot and zeroes the velocity before it can be seen.
+        for distance in [84.0, 300.0, 782.0] {
+            let spring = CameraDragMotion.releasedSpring(distance: distance)
+            #expect(abs(spring.damping / (2 * sqrt(spring.stiffness)) - 0.73) < 0.005)
+            let target = CGPoint(x: distance, y: 0)
+            var position = CGPoint.zero
+            var velocity = CGPoint.zero
+            var elapsed = 0.0
+            var overshoot = 0.0
+            while elapsed < 0.45 {
+                CameraDragMotion.integrate(&position, velocity: &velocity, toward: target,
+                                           stiffness: spring.stiffness, damping: spring.damping,
+                                           seconds: 1.0 / 480)
+                elapsed += 1.0 / 480
+                overshoot = max(overshoot, position.x - target.x)
+            }
+            // Lightly underdamped: it passes the target once, by no more than 4 %.
+            #expect(overshoot > 0)
+            #expect(overshoot <= distance * 0.04)
+            #expect(abs(position.x - target.x) < distance * 0.005)
+        }
+        // A long throw is softer than a short dock, so it does not feel flung.
+        #expect(CameraDragMotion.releasedSpring(distance: 780).stiffness
+                    < CameraDragMotion.releasedSpring(distance: 84).stiffness)
     }
 
     @Test("Reduce Motion seats the release in one pass, with no animated steps left")
@@ -421,6 +476,155 @@ struct CameraInteractionTests {
         overlay.recordingEnded()
         overlay.updateRecordingBounds(cgRect: moved)
         #expect(nativePanel.frame == confined)
+    }
+
+    @Test("arming opens the preview and hands the owner's own choice back afterwards")
+    @MainActor func armedPreviewRestoresAfterTheRecording() {
+        _ = NSApplication.shared
+        let overlay = CameraOverlayController.shared
+        let savedPreview = overlay.previewVisible
+        defer {
+            overlay.previewVisible = false
+            overlay.recordingEnded()
+            overlay.previewVisible = savedPreview
+            overlay.hide()
+        }
+
+        overlay.previewVisible = false
+        overlay.hide()
+        overlay.armPreview()
+        #expect(overlay.previewVisible)
+        // A second arm-time open (the camera switch flipped on while armed) still
+        // remembers the owner's "off", and the recording's teardown restores it.
+        overlay.armPreview()
+        overlay.recordingEnded()
+        #expect(!overlay.previewVisible)
+        #expect(!overlay.isVisible)
+        // The next recording must not resurrect a preview nobody asked for.
+        overlay.recordingEnded()
+        #expect(!overlay.previewVisible)
+        // An explicit toggle while armed is the owner's own choice and outlives the arming.
+        overlay.armPreview()
+        overlay.togglePreview()
+        #expect(!overlay.previewVisible)
+        overlay.recordingEnded()
+        #expect(!overlay.previewVisible)
+    }
+
+    @Test("the mouse-up leaves the placement to the spring instead of teleporting")
+    @MainActor func releaseDoesNotTeleportToTheDock() throws {
+        _ = NSApplication.shared
+        let defaults = UserDefaults.standard
+        let key = RecordingSettings.defaultsKey
+        let savedData = defaults.data(forKey: key)
+        let overlay = CameraOverlayController.shared
+        let savedPreview = overlay.previewVisible
+        defer {
+            overlay.applyPlacement(CameraOptions(), source: .settings)
+            overlay.previewVisible = false
+            overlay.recordingEnded()
+            overlay.previewVisible = savedPreview
+            overlay.hide()
+            if let savedData { defaults.set(savedData, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+
+        let seated = CameraOptions(enabled: true, widthFraction: 0.25,
+                                   position: CameraPosition(x: 0.5, y: 0.5)).resolved()
+        overlay.previewVisible = true
+        overlay.prepareRecording(cgRect: CGRect(x: 200, y: 200, width: 1200, height: 800), options: seated)
+        overlay.applyPlacement(seated, source: .settings)
+        let panel = try #require(NSApp.windows.first { $0.contentView is FloatingCameraView })
+        let start = panel.frame
+
+        overlay.drag(.began, point: CGPoint(x: start.midX, y: start.midY), corner: nil)
+        overlay.drag(.ended, point: CGPoint(x: start.midX - 380, y: start.midY - 260), corner: nil)
+        if CameraOverlayController.reducesMotion {
+            // No spring to wait for: the release seats and persists in the same pass.
+            #expect(RecordingSettings.load(from: defaults).camera != seated)
+        } else {
+            #expect(panel.frame == start)
+            #expect(RecordingSettings.load(from: defaults).camera == seated)
+        }
+    }
+
+    @Test("a resize that starts on a size stop seeds its latch instead of ticking")
+    @MainActor func resizeSeedsTheSizeLatch() throws {
+        _ = NSApplication.shared
+        let overlay = CameraOverlayController.shared
+        let savedPreview = overlay.previewVisible
+        defer {
+            overlay.applyPlacement(CameraOptions(), source: .settings)
+            overlay.previewVisible = false
+            overlay.recordingEnded()
+            overlay.previewVisible = savedPreview
+            overlay.hide()
+        }
+
+        overlay.previewVisible = true
+        overlay.prepareRecording(cgRect: CGRect(x: 200, y: 200, width: 1200, height: 800),
+                                 options: CameraOptions(enabled: true, widthFraction: 0.25))
+        let panel = try #require(NSApp.windows.first { $0.contentView is FloatingCameraView })
+        overlay.drag(.began, point: CGPoint(x: panel.frame.maxX - 4, y: panel.frame.maxY - 4), corner: .topRight)
+        #expect(overlay.hapticWidthStop == 0.25)
+        overlay.drag(.ended, point: CGPoint(x: panel.frame.maxX - 4, y: panel.frame.maxY - 4), corner: .topRight)
+
+        overlay.applyPlacement(CameraOptions(enabled: true, widthFraction: 0.28), source: .settings)
+        overlay.drag(.began, point: CGPoint(x: panel.frame.maxX - 4, y: panel.frame.maxY - 4), corner: .topRight)
+        #expect(overlay.hapticWidthStop == nil)
+        overlay.drag(.ended, point: CGPoint(x: panel.frame.maxX - 4, y: panel.frame.maxY - 4), corner: .topRight)
+    }
+
+    @Test("the fade-out keeps the device until its last frame, and a show cancels it")
+    @MainActor func fadeOutKeepsTheDeviceAndYieldsToAShow() throws {
+        _ = NSApplication.shared
+        let overlay = CameraOverlayController.shared
+        let monitor = CameraPreviewMonitor.shared
+        let savedPreview = overlay.previewVisible
+        defer {
+            overlay.previewVisible = false
+            overlay.recordingEnded()
+            overlay.previewVisible = savedPreview
+            overlay.hide()
+        }
+
+        let window = CGRect(x: 200, y: 200, width: 1200, height: 800)
+        overlay.previewVisible = true
+        overlay.prepareRecording(cgRect: window, options: CameraOptions(enabled: true))
+        let panel = try #require(NSApp.windows.first { $0.contentView is FloatingCameraView })
+        #expect(monitor.isObserved)
+        overlay.hide(animated: true)
+        guard !CameraOverlayController.reducesMotion else {
+            #expect(!monitor.isObserved)
+            return
+        }
+        // The device is released by the fade's completion, not before it: dropping it
+        // early blanks the view back to the placeholder mid-dissolve.
+        #expect(monitor.isObserved)
+        overlay.prepareRecording(cgRect: window, options: CameraOptions(enabled: true))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        #expect(overlay.isVisible)
+        #expect(panel.alphaValue == 1)
+        #expect(monitor.isObserved)
+    }
+
+    @Test("the armed Esc monitor only takes Esc from Camcord's own capture surfaces")
+    @MainActor func armedEscapeStaysWithinTheCaptureSurfaces() {
+        _ = NSApplication.shared
+        let palette = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 200, height: 120),
+                              styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        let titled = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 200, height: 120),
+                             styleMask: [.titled, .closable, .utilityWindow, .nonactivatingPanel],
+                             backing: .buffered, defer: false)
+        let settings = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 200, height: 120),
+                                styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        for window in [palette, titled, settings] { window.isReleasedWhenClosed = false }
+        defer { palette.close(); titled.close(); settings.close() }
+        // The indicator's panels and the capture panel cancel the arming...
+        #expect(RecordingController.armedEscapeCancels(palette))
+        #expect(RecordingController.armedEscapeCancels(titled))
+        #expect(RecordingController.armedEscapeCancels(nil))
+        // ...while the Settings window keeps its own Esc.
+        #expect(!RecordingController.armedEscapeCancels(settings))
     }
 
     @Test("stage camera geometry scales exactly with its thumbnail")

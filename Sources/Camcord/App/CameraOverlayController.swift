@@ -28,7 +28,11 @@ final class CameraOverlayController: NSObject {
     private var motionLink: CADisplayLink?
     /// The last latched magnet/size stop, so each latch ticks exactly once.
     private var hapticCorner: CameraCorner?
-    private var hapticWidthStop: Double?
+    private(set) var hapticWidthStop: Double?
+    /// What the owner had before arming forced the preview open to place the camera.
+    /// The end of the arming -- cancelled, or the recording it started -- puts it back,
+    /// so a placement session never leaves the preview (and the device) running behind it.
+    private var previewBeforeArming: Bool?
     /// Guards a fade-out completion against a show() that raced it.
     private var visibilityToken = 0
 
@@ -86,17 +90,34 @@ final class CameraOverlayController: NSObject {
                 settings.save(to: .standard)
             }
         }
-        if panel.isVisible { cameraView.mirrored = self.options.mirrored; layout() }
+        // While a spring is running it owns the panel's frame (`displayMotion` lays out
+        // every frame): laying out here would snap the panel to the dock mid-flight and
+        // the next spring step would jump it back.
+        if panel.isVisible {
+            cameraView.mirrored = self.options.mirrored
+            if motion == nil { layout() }
+        }
         onPlacementChange?(self.options)
     }
 
     func togglePreview() {
+        // An explicit choice outlives the arming that forced the preview open.
+        previewBeforeArming = nil
         previewVisible.toggle()
         if previewVisible { showPreview(requestPermission: true) } else { hide(animated: true) }
     }
 
+    /// Arming opens the preview even when the owner keeps it closed: it is the only way
+    /// to place the camera. Nothing else may turn the preview on.
+    func armPreview() {
+        if previewBeforeArming == nil { previewBeforeArming = previewVisible }
+        previewVisible = true
+    }
+
     func recordingEnded() {
         recordingBounds = nil
+        if let previewBeforeArming { previewVisible = previewBeforeArming }
+        previewBeforeArming = nil
         if previewVisible { showPreview() } else { hide() }
     }
 
@@ -139,6 +160,13 @@ final class CameraOverlayController: NSObject {
 
     private func show() {
         cameraView.mirrored = options.mirrored
+        // A show() landing inside the 150 ms fade-out has to cancel it through the same
+        // animator: a plain assignment loses the race and leaves the panel at alpha 0.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            panel.animator().alphaValue = 1
+            shadowPanel.animator().alphaValue = 1
+        }
         CameraPreviewMonitor.shared.setVisible(true, owner: "floating")
         visibilityToken &+= 1
         let appearing = !panel.isVisible
@@ -167,19 +195,32 @@ final class CameraOverlayController: NSObject {
     func hide(animated: Bool = false) {
         stopMotion()
         restartTask?.cancel()
-        CameraPreviewMonitor.shared.setVisible(false, owner: "floating")
-        Task { await CameraPreviewMonitor.shared.stopIfUnobserved() }
         visibilityToken &+= 1
-        guard animated, panel.isVisible, !Self.reducesMotion else { orderOutPanels(); return }
+        guard animated, panel.isVisible, !Self.reducesMotion else {
+            releaseDevice()
+            orderOutPanels()
+            return
+        }
         let token = visibilityToken
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.15
             panel.animator().alphaValue = 0
             shadowPanel.animator().alphaValue = 0
         } completionHandler: { [weak self] in
-            guard let self, self.visibilityToken == token else { return }
-            self.orderOutPanels()
+            // AppKit runs this on the main thread; the closure itself is only Sendable.
+            MainActor.assumeIsolated {
+                guard let self, self.visibilityToken == token else { return }
+                self.releaseDevice()
+                self.orderOutPanels()
+            }
         }
+    }
+
+    /// Dropping the device blanks the view back to "Kamera açılıyor…", so it waits for
+    /// the fade: the preview must dissolve on its last frame, not on a placeholder.
+    private func releaseDevice() {
+        CameraPreviewMonitor.shared.setVisible(false, owner: "floating")
+        Task { await CameraPreviewMonitor.shared.stopIfUnobserved() }
     }
 
     private func orderOutPanels() {
@@ -254,7 +295,7 @@ final class CameraOverlayController: NSObject {
         if Self.reducesMotion {
             motion?.finishImmediately()
             displayMotion()
-            if dragStart == nil { stopMotion() }
+            if dragStart == nil { settleMotion() }
             return
         }
         guard motionLink == nil else { return }
@@ -274,6 +315,15 @@ final class CameraOverlayController: NSObject {
             if hapticCorner != nil { latchHaptic() }
         }
         applyPlacement(options, source: .floating, persists: false)
+        if panel.isVisible { layout() }
+    }
+
+    /// The spring, not the mouse-up, hands over the final placement: persisting at the
+    /// release would send the compositor to the dock before the preview gets there.
+    private func settleMotion() {
+        stopDisplayLink()
+        motion = nil
+        applyPlacement(options, source: .floating)
     }
 
     @objc private func animateDrag(_ link: CADisplayLink) {
@@ -286,17 +336,19 @@ final class CameraOverlayController: NSObject {
         if motion?.isSettled == true {
             if wasThrown { latchHaptic() }
             stopDisplayLink()
-            if dragStart == nil { motion = nil }
+            if dragStart == nil { settleMotion() }
         }
     }
 
-    private func drag(_ phase: FloatingCameraView.DragPhase, point: CGPoint, corner: CameraCorner?) {
+    /// Screen-space gesture from the floating view: the whole rectangle drags, its four
+    /// corners resize. `.ended` hands the placement to the spring, which persists it.
+    func drag(_ phase: FloatingCameraView.DragPhase, point: CGPoint, corner: CameraCorner?) {
         switch phase {
         case .began:
             let velocity = motion?.velocity ?? .zero
             stopMotion()
             dragStart = (panel.frame, point, corner)
-            hapticWidthStop = nil
+            hapticWidthStop = CameraResizeGeometry.latchedStop(of: options.widthFraction)
             if corner == nil {
                 motion = CameraDragMotion(frame: panel.frame.offsetBy(dx: -bounds.minX, dy: -bounds.minY),
                                           area: bounds.size, velocity: velocity)
@@ -306,29 +358,20 @@ final class CameraOverlayController: NSObject {
             guard let start = dragStart else { return }
             let translation = CGPoint(x: point.x - start.point.x, y: point.y - start.point.y)
             let local = start.frame.offsetBy(dx: -bounds.minX, dy: -bounds.minY)
-            var final = options
             if let corner = start.corner {
                 options = CameraResizeGeometry.resize(start: local, translation: translation,
                                                       corner: corner, options: options, in: bounds.size)
-                let stop = CameraResizeGeometry.widthStops.first { $0 == options.widthFraction }
+                let stop = CameraResizeGeometry.latchedStop(of: options.widthFraction)
                 if stop != hapticWidthStop {
                     hapticWidthStop = stop
                     if stop != nil { latchHaptic() }
                 }
-                final = options
                 applyPlacement(options, source: .floating, persists: phase == .ended)
             } else {
                 motion?.follow(CGPoint(x: local.minX + translation.x, y: local.minY + translation.y),
                                released: phase == .ended)
-                if let motion {
-                    final.place(CGRect(origin: motion.target, size: motion.frame.size), in: bounds.size)
-                    if let corner = motion.magnetCorner { final.corner = corner }
-                }
             }
-            if phase == .ended {
-                dragStart = nil
-                applyPlacement(final, source: .floating)
-            }
+            if phase == .ended { dragStart = nil }
             if start.corner == nil { startMotion() }
         }
     }

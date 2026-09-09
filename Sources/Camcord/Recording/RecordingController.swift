@@ -53,7 +53,10 @@ final class RecordingController: NSObject {
     /// Guards the selection/starting window so a second hotkey press can't start a
     /// parallel flow (the overlay's own isPresenting guard covers the overlay part).
     private var armed: RecordingEngine.Target?
-    private var previewBeforeArming = false
+    /// "Kamerayı kaydet" as it stood when the arming last opened (or closed) its preview,
+    /// so only a real flip of the switch reopens it — a placement drag persists settings
+    /// on every gesture and must not.
+    private var armedCameraEnabled = false
     private var armedPoll: Timer?
     private var armedMissingBounds = 0
     private var armedEscapeMonitor: Any?
@@ -190,24 +193,13 @@ final class RecordingController: NSObject {
         guard armed == nil, !isTerminating, case .window(let window) = target else { return }
         armed = target
         armedMissingBounds = 0
-        let overlay = CameraOverlayController.shared
-        previewBeforeArming = overlay.previewVisible
         let settings = RecordingSettings.load(from: .standard)
+        armedCameraEnabled = settings.camera.enabled
         // Arming exists to place the camera. With the camera out of the recording there is
         // nothing to place: never open the device, and never leave a confinement rect
         // behind that would follow the free preview for the rest of the session.
-        if settings.camera.enabled {
-            overlay.previewVisible = true
-            // Same rect begin() composites against, so the placement made while armed is
-            // the placement that lands in the file (window.frame is double-scaled for
-            // fullscreen-exclusive apps).
-            overlay.prepareRecording(cgRect: CaptureAreaIndicator.windowBounds(window.windowID) ?? window.frame,
-                                     options: settings.camera)
-            armedPreviewTask = Task {
-                await CameraPreviewMonitor.shared.start(deviceID: settings.camera.resolved().deviceID,
-                                                        fps: settings.fps, requestPermission: true)
-            }
-        }
+        if settings.camera.enabled { openArmedPreview(window: window, settings: settings) }
+        // The frame is the placement frame, not the window glow, so it is always drawn.
         indicator.showRecordingWindow(window.windowID, initialCGRect: window.frame, showsBorder: true,
                                       title: "Başlat", glyph: .play, color: .systemRed,
                                       onCancel: { [weak self] in self?.cancelArmed() }) { [weak self] in
@@ -226,7 +218,7 @@ final class RecordingController: NSObject {
         // The global monitor never sees events routed to our own key window, and the panel
         // is deliberately held open while armed — so Esc needs the local path too.
         armedEscapeLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard event.keyCode == 53 else { return event }
+            guard event.keyCode == 53, Self.armedEscapeCancels(event.window) else { return event }
             self?.cancelArmed()
             return nil
         }
@@ -259,10 +251,35 @@ final class RecordingController: NSObject {
         guard armed != nil else { return }
         clearArmedControls()
         armed = nil
-        let overlay = CameraOverlayController.shared
-        overlay.previewVisible = previewBeforeArming
-        overlay.recordingEnded()
+        // recordingEnded() gives the owner's own preview choice back and drops the
+        // confinement rect the placement frame was using.
+        CameraOverlayController.shared.recordingEnded()
         onArmedChange?(false)
+    }
+
+    /// The placement preview an armed window gets: the same rect begin() composites
+    /// against, so what is placed while armed is what lands in the file (window.frame is
+    /// double-scaled for fullscreen-exclusive apps).
+    private func openArmedPreview(window: SCWindow, settings: RecordingSettings) {
+        let overlay = CameraOverlayController.shared
+        overlay.armPreview()
+        overlay.prepareRecording(cgRect: CaptureAreaIndicator.windowBounds(window.windowID) ?? window.frame,
+                                 options: settings.camera)
+        armedPreviewTask?.cancel()
+        armedPreviewTask = Task {
+            await CameraPreviewMonitor.shared.start(deviceID: settings.camera.resolved().deviceID,
+                                                    fps: settings.fps, requestPermission: true)
+        }
+    }
+
+    /// Esc while armed cancels the arming, but the local monitor must not eat every Esc
+    /// in the app: only Camcord's own floating capture surfaces (the panel or popover
+    /// holding Başlat, the indicator's panels) hand it over. A titled window, a sheet or
+    /// a save panel keeps its own Esc; with no key window at all the Esc is ours.
+    static func armedEscapeCancels(_ window: NSWindow?) -> Bool {
+        guard let window else { return true }
+        guard let panel = window as? NSPanel, !panel.isSheet, !(panel is NSSavePanel) else { return false }
+        return true
     }
 
     private func clearArmedControls() {
@@ -816,7 +833,17 @@ final class RecordingController: NSObject {
             let settings = RecordingSettings.load(from: .standard)
             self?.engine.updateAudioGains(settings)
             self?.engine.updateCameraOptions(settings.camera)
+            self?.armedCameraSwitched(settings)
         }
+    }
+
+    /// Arming reads the camera switch once. Turning "Kamerayı kaydet" on while the red
+    /// frame is up has to give the placement preview it would have opened at arm time.
+    private func armedCameraSwitched(_ settings: RecordingSettings) {
+        guard case .window(let window)? = armed, settings.camera.enabled != armedCameraEnabled else { return }
+        armedCameraEnabled = settings.camera.enabled
+        guard settings.camera.enabled else { return }
+        openArmedPreview(window: window, settings: settings)
     }
 
     private func startHealthTimer() {

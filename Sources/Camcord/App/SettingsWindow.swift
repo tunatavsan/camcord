@@ -559,7 +559,7 @@ struct RecordingSettingsView: View {
 
             Section("Gösterge") {
                 Toggle("Pencere kaydında pencereyi vurgula", isOn: $settings.windowGlowEnabled)
-                Text("Kaydedilen pencerenin çevresinde ince bir parıltı gösterilir (pencereyi taşırsan takip eder, kayda girmez).")
+                Text("Kaydedilen pencerenin çevresinde ince bir parıltı gösterilir (pencereyi taşırsan takip eder, kayda girmez). Pencere seçtikten sonra çıkan kırmızı yerleştirme çerçevesi bu ayardan bağımsızdır: her zaman gösterilir.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
