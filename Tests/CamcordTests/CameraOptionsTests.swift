@@ -132,9 +132,8 @@ struct CameraOptionsTests {
     @Test("the camera tile keeps a light, scale-free corner and a visible hairline")
     func cameraTileEdgeGeometry() {
         let preview = CGSize(width: 320, height: 180)
-        // ~16 pt on a 320x180 self-view: what macOS gives a small floating video tile,
-        // not the 29 pt bubble the old 16 % produced.
-        #expect(abs(CameraOptions.cornerRadius(for: preview) - 16.2) < 0.01)
+        // A 320x180 self-view lands exactly on the app's one corner radius.
+        #expect(abs(CameraOptions.cornerRadius(for: preview) - CamcordStyle.Radius.surface) < 0.01)
         // The same fraction at composite resolution, so the file matches what was placed.
         let composited = CGSize(width: 1280, height: 720)
         #expect(abs(CameraOptions.cornerRadius(for: composited) / composited.height

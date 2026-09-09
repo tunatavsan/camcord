@@ -10,11 +10,10 @@ enum CameraCorner: String, Codable, CaseIterable, Sendable {
 struct CameraOptions: Codable, Equatable, Sendable {
     static let aspectRatio: CGFloat = 16.0 / 9.0
     static let widthRange = 0.08...0.60
-    /// The camera tile's corner, on screen and in the file. Kept as a fraction of the short
-    /// side so it is resolution-independent, but a much flatter one than a card's: macOS
-    /// rounds a small floating video tile lightly (a 320x180 self-view reads right at ~16 pt,
-    /// not the 29 pt bubble 16 % produced).
-    static func cornerRadius(for size: CGSize) -> CGFloat { min(size.width, size.height) * 0.09 }
+    /// The camera tile's corner, on screen and in the file. A fraction rather than a constant
+    /// because the same placement is composited at video resolution, and it is tuned so a
+    /// 320x180 preview lands exactly on `CamcordStyle.Radius.surface` -- the app's one corner.
+    static func cornerRadius(for size: CGSize) -> CGFloat { min(size.width, size.height) * 0.10 }
 
     /// Hairline that separates the tile from whatever is behind it — one physical line at
     /// preview sizes, still visible after a 4K downscale.

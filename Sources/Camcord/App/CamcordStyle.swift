@@ -7,6 +7,21 @@ enum CamcordStyle {
 
     static let innerBorder = Color.primary.opacity(0.09)
     static let quietFill = Color.primary.opacity(0.055)
+
+    /// ONE corner curve for the whole app. Every floating surface -- the capture panel, the
+    /// Settings boxes, the screenshot preview card, the camera tile, the recording frame --
+    /// draws `Radius.surface`; anything nested inside one derives its curve from the same
+    /// number with `Radius.inset(by:)` so the corners stay concentric instead of drifting
+    /// into a fourth and a fifth value. Nothing in the app should carry a bare literal.
+    enum Radius {
+        /// The app's corner. Every surface that floats over something else uses exactly this.
+        static let surface: CGFloat = 18
+        /// A box drawn INSIDE a surface, `inset` points in from its edge: concentric corners
+        /// share a centre, so the inner curve is the outer one minus the gap between them.
+        static func inset(by inset: CGFloat) -> CGFloat { max(5, surface - inset) }
+        /// Controls that sit on their own (chips, pills, thumbnails, meters).
+        static let control: CGFloat = 10
+    }
 }
 
 /// Shared native material used by the panel and Settings. The visual-effect view is
