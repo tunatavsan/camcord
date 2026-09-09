@@ -24,9 +24,9 @@ import CoreGraphics
 final class ScrollStitcher {
 
     // MARK: Tunables
-    private let columns = 20            // row-signature downsample width
-    private let rowStride = 3           // sample every Nth row when correlating
-    private let confidenceLimit = 24.0  // mean abs-diff above which a match is untrusted
+    private static let columns = 20            // row-signature downsample width
+    private static let rowStride = 3           // sample every Nth row when correlating
+    private static let confidenceLimit = 24.0  // mean abs-diff above which a match is untrusted
     private let bandDetectFrames = 3    // frames needed before header/footer detection
     private let maxWarmup = 7           // stop waiting for band detection after this many
     private let bandShiftMargin = 5.0   // a row is "fixed" if staying beats moving by this
@@ -35,6 +35,12 @@ final class ScrollStitcher {
     private let endStableLimit = 20.0   // a strip matching the reference's own tail = a bounce dup
     private let maxTotalHeight: Int     // px safety cap on the stitched content
     private static let previewMaxHeightPx = 1200  // live preview renders at most this tall (tail only)
+
+    private static let staticLimit = 3.0
+
+    enum Motion: Equatable {
+        case none, up(Int), down(Int, score: Double)
+    }
 
     struct Frame {
         let image: CGImage
@@ -49,7 +55,9 @@ final class ScrollStitcher {
         case baselined             // forced baseline commit with NO confirmed motion (a static
                                    // page): the composite now exists, but nothing actually moved —
                                    // callers driving the scroll must treat this as "no advance"
-        case ignored               // no confident downward move (scrolled up / too fast / static)
+        case noMotion
+        case movedUp
+        case ignored               // no confident alignment
         case atCap                 // hit the height cap; caller should finalize
     }
 
@@ -57,6 +65,7 @@ final class ScrollStitcher {
     private enum AlignResult {
         case appended
         case noMotion       // matched but the page barely moved (static / just a live timer)
+        case movedUp
         case lostAlignment  // couldn't find a confident match (a jump past the overlap window)
     }
 
@@ -68,6 +77,7 @@ final class ScrollStitcher {
 
     // MARK: Detection state
     private var warmup: [Frame] = []
+    private var warmupPredictions: [Int] = []
     private var detected = false
     private var headerH = 0
     private var footerH = 0
@@ -79,13 +89,27 @@ final class ScrollStitcher {
     private var footerImage: CGImage?
     private var strips: [CGImage] = []
     private var reference: Frame?
-    private(set) var contentPixelHeight = 0
+    private var committedHeight = 0
+    private var pending: (frame: Frame, offset: Int)?
+    private(set) var lastMotion: Motion = .none
+    private(set) var lastScore = 0.0
+    var contentPixelHeight: Int { committedHeight + (pending?.offset ?? 0) }
+    var hasPending: Bool { pending != nil }
+    var lastOffset: Int {
+        switch lastMotion {
+        case .none: return 0
+        case .up(let offset): return -offset
+        case .down(let offset, _): return offset
+        }
+    }
+    /// Baseline for the next comparison, including a move still awaiting confirmation.
+    var firstFrame: Frame? { pending?.frame ?? reference ?? warmup.last }
 
     init(maxTotalHeight: Int = 40_000) { self.maxTotalHeight = maxTotalHeight }
 
     /// Number of stitched sections so far — for the live "N bölüm" readout.
     var sectionCount: Int {
-        if detected { return (topImage != nil ? 1 : 0) + strips.count }
+        if detected { return (topImage != nil ? 1 : 0) + strips.count + (hasPending ? 1 : 0) }
         return warmup.isEmpty ? 0 : 1
     }
 
@@ -95,10 +119,14 @@ final class ScrollStitcher {
     /// last accepted frame, in the image's PIXELS (0 = unknown → full search).
     @discardableResult
     func add(_ image: CGImage, predictedOffset: Int) -> Outcome {
-        guard let f = makeFrame(image) else { return .ignored }
+        guard let f = Self.makeFrame(image) else { return .ignored }
 
         if !detected {
+            if let previous = warmup.last {
+                (lastMotion, lastScore) = Self.measureMotion(from: previous, to: f, predicted: predictedOffset)
+            }
             warmup.append(f)
+            warmupPredictions.append(predictedOffset)
             if warmup.count >= bandDetectFrames, warmupHasMovement() {
                 commitWarmup(forced: false)
                 return .appended
@@ -121,7 +149,10 @@ final class ScrollStitcher {
             return .appended
         case .noMotion:
             // Static frame (e.g. the user paused, a timer ticked) — not a miss.
-            return .ignored
+            return .noMotion
+        case .movedUp:
+            consecutiveMisses = 0
+            return .movedUp
         case .lostAlignment:
             consecutiveMisses += 1
             if consecutiveMisses >= reBaselineAfter {
@@ -142,6 +173,7 @@ final class ScrollStitcher {
     /// Full-resolution stitched image of everything so far (nil if nothing captured).
     func finalImage() -> CGImage? {
         if !detected { commitWarmup(forced: true) }
+        commitPending()
         return render(pieces(), maxWidth: nil)
     }
 
@@ -186,26 +218,34 @@ final class ScrollStitcher {
 
         topImage = crop(first.image, y: 0, height: H - footerH)
         footerImage = footerH > 0 ? crop(first.image, y: H - footerH, height: footerH) : nil
-        contentPixelHeight = H - footerH
+        committedHeight = H - footerH
         reference = first
         strips = []
 
-        for frame in warmup.dropFirst() { _ = appendLive(frame, predicted: 0) }
+        for i in 1..<warmup.count { _ = appendLive(warmup[i], predicted: warmupPredictions[i]) }
         detected = true
         warmup = []
+        warmupPredictions = []
     }
 
     /// Aligns `f` against the current reference and, on a confident downward move,
     /// appends the newly revealed content strip.
     @discardableResult
     private func appendLive(_ f: Frame, predicted: Int) -> AlignResult {
-        guard let ref = reference, f.height == ref.height else { return .lostAlignment }
-        let (offset, score) = downOffset(
-            ref.sig, f.sig, height: ref.height,
-            headerH: headerH, footerH: footerH, predicted: predicted
+        guard let ref = pending?.frame ?? reference else { return .lostAlignment }
+        (lastMotion, lastScore) = Self.measureMotion(
+            from: ref, to: f, headerH: headerH, footerH: footerH, predicted: predicted
         )
-        if score > confidenceLimit { return .lostAlignment }
-        if offset < minShift(ref.height) { return .noMotion }
+        let offset: Int
+        switch lastMotion {
+        case .none:
+            commitPending()
+            return lastScore <= Self.staticLimit ? .noMotion : .lostAlignment
+        case .up:
+            pending = nil
+            return .movedUp
+        case .down(let d, _): offset = d
+        }
 
         // End-of-page guards apply ONLY to small slivers. When the page can't scroll
         // further, an elastic over-scroll "bounce" reveals just a thin band that
@@ -215,19 +255,31 @@ final class ScrollStitcher {
         // step is NEVER dropped; only bounce slivers get bounce-checked.
         let stripTop = ref.height - footerH - offset
         let stripBottom = ref.height - footerH
-        if offset < 2 * minShift(ref.height) {
+        if offset < 2 * Self.minShift(ref.height) {
             // (a) The revealed band is blank window background (over-scroll past content).
-            if isUniformBand(f.sig, from: stripTop, to: stripBottom) { return .noMotion }
+            if isUniformBand(f.sig, from: stripTop, to: stripBottom) {
+                commitPending(); lastMotion = .none; return .noMotion
+            }
             // (b) The revealed band re-shows what the reference already had at the bottom
             //     (the bounce re-captured the tail) — a duplicate, not new content.
-            if regionMAD(ref.sig, f.sig, from: stripTop, to: stripBottom) <= endStableLimit { return .noMotion }
+            if Self.regionMAD(ref.sig, f.sig, from: stripTop, to: stripBottom) <= endStableLimit {
+                commitPending(); lastMotion = .none; return .noMotion
+            }
         }
 
-        guard let strip = cropContent(f.image, offset: offset, footerH: footerH) else { return .noMotion }
-        strips.append(strip)
-        contentPixelHeight += offset
-        reference = f
+        commitPending()
+        pending = (f, offset)
         return .appended
+    }
+
+    private func commitPending() {
+        guard let pending else { return }
+        if let strip = cropContent(pending.frame.image, offset: pending.offset, footerH: footerH) {
+            strips.append(strip)
+            committedHeight += pending.offset
+            reference = pending.frame
+        }
+        self.pending = nil
     }
 
     /// True once the buffered warm-up frames show consistent downward movement — i.e. the
@@ -236,11 +288,9 @@ final class ScrollStitcher {
         guard warmup.count >= bandDetectFrames else { return false }
         var moves = 0
         for i in 1..<warmup.count where warmup[i].height == warmup[i - 1].height {
-            let (d, s) = downOffset(
-                warmup[i - 1].sig, warmup[i].sig, height: warmup[i].height,
-                headerH: 0, footerH: 0, predicted: 0
-            )
-            if s <= confidenceLimit, d >= minShift(warmup[i].height) { moves += 1 }
+            if case .down = Self.motion(from: warmup[i - 1], to: warmup[i], predicted: warmupPredictions[i]) {
+                moves += 1
+            }
         }
         return moves >= bandDetectFrames - 1
     }
@@ -263,14 +313,14 @@ final class ScrollStitcher {
         for i in 1..<frames.count where frames[i].height == H && frames[i - 1].height == H {
             let prev = frames[i - 1].sig
             let new = frames[i].sig
-            let (g, score) = downOffset(prev, new, height: H, headerH: 0, footerH: 0, predicted: 0)
-            guard g >= minShift(H), score <= confidenceLimit else { continue }
+            let (g, score) = Self.downOffset(prev, new, height: H, headerH: 0, footerH: 0, predicted: warmupPredictions[i])
+            guard g >= Self.minShift(H), score <= Self.confidenceLimit else { continue }
             pairs += 1
             for r in 0..<H {
-                let stayed = rowMAD(new, prev, r, r)
+                let stayed = Self.rowMAD(new, prev, r, r)
                 let isFixed: Bool
                 if r + g < H {
-                    isFixed = stayed + bandShiftMargin < rowMAD(new, prev, r, r + g)
+                    isFixed = stayed + bandShiftMargin < Self.rowMAD(new, prev, r, r + g)
                 } else {
                     // Bottom rows: the "moved" hypothesis reads off-frame, so fall back to
                     // "does it still match the same position well" (fixed footers do).
@@ -291,12 +341,12 @@ final class ScrollStitcher {
         var r = H - 1
         while r >= 0, isFixedBand(r) { footer += 1; r -= 1 }
         // A page that didn't really scroll would look "all fixed" — reject that.
-        if header + footer >= H - minShift(H) { return (0, 0) }
+        if header + footer >= H - Self.minShift(H) { return (0, 0) }
         return (min(header, H / 3), min(footer, H / 3))
     }
 
     /// Mean per-pixel abs-diff between row `ra` of `a` and row `rb` of `b`.
-    private func rowMAD(_ a: [UInt8], _ b: [UInt8], _ ra: Int, _ rb: Int) -> Double {
+    private static func rowMAD(_ a: [UInt8], _ b: [UInt8], _ ra: Int, _ rb: Int) -> Double {
         let ia = ra * columns
         let ib = rb * columns
         var sum = 0
@@ -309,28 +359,28 @@ final class ScrollStitcher {
     /// band such as the window background revealed by an elastic over-scroll.
     private func isUniformBand(_ sig: [UInt8], from r0: Int, to r1: Int) -> Bool {
         let lo = max(0, r0)
-        let hi = min(sig.count / columns, r1)
+        let hi = min(sig.count / Self.columns, r1)
         guard lo < hi else { return true }
         var minV = 255
         var maxV = 0
         var r = lo
         while r < hi {
-            let base = r * columns
+            let base = r * Self.columns
             var c = 0
-            while c < columns {
+            while c < Self.columns {
                 let v = Int(sig[base + c])
                 if v < minV { minV = v }
                 if v > maxV { maxV = v }
                 c += 1
             }
-            r += rowStride
+            r += Self.rowStride
         }
         return maxV - minV <= uniformBandRange
     }
 
     /// Mean per-pixel abs-diff between rows [r0, r1) of `a` and the SAME rows of `b`
     /// (offset 0) — how different `b` is from `a` in that band.
-    private func regionMAD(_ a: [UInt8], _ b: [UInt8], from r0: Int, to r1: Int) -> Double {
+    private static func regionMAD(_ a: [UInt8], _ b: [UInt8], from r0: Int, to r1: Int) -> Double {
         let lo = max(0, r0)
         let hi = min(min(a.count, b.count) / columns, r1)
         guard lo < hi else { return .greatestFiniteMagnitude }
@@ -351,24 +401,45 @@ final class ScrollStitcher {
 
     /// The smallest offset (px) that counts as "the page actually moved" — ~8% of the
     /// viewport, so momentum jitter and sub-line wheel steps don't register as content.
-    private func minShift(_ height: Int) -> Int { max(8, height / 12) }
+    private static func minShift(_ height: Int) -> Int { max(8, height / 12) }
+
+    static func motion(
+        from a: Frame, to b: Frame, headerH: Int = 0, footerH: Int = 0, predicted: Int = 0
+    ) -> Motion {
+        measureMotion(from: a, to: b, headerH: headerH, footerH: footerH, predicted: predicted).0
+    }
+
+    // A non-confident `.none` remains an alignment miss for permissive re-baselining.
+    private static func measureMotion(
+        from a: Frame, to b: Frame, headerH: Int = 0, footerH: Int = 0, predicted: Int = 0
+    ) -> (Motion, Double) {
+        guard a.height == b.height, a.width == b.width else { return (.none, .infinity) }
+        let still = regionMAD(a.sig, b.sig, from: headerH, to: a.height - footerH)
+        if still <= staticLimit { return (.none, still) }
+        let down = downOffset(a.sig, b.sig, height: a.height, headerH: headerH, footerH: footerH, predicted: predicted)
+        let up = downOffset(b.sig, a.sig, height: a.height, headerH: headerH, footerH: footerH, predicted: 0, maximumOffset: a.height / 3)
+        if up.score < down.score, up.score <= confidenceLimit { return (.up(up.offset), up.score) }
+        if down.score <= confidenceLimit { return (.down(down.offset, score: down.score), down.score) }
+        return (.none, min(down.score, up.score))
+    }
 
     /// Best downward offset `d` (>0 ⇒ `new` == `prev` scrolled up by `d`, i.e. we
     /// scrolled DOWN) and its mean per-pixel abs-diff (lower = more confident), measured
     /// only over the moving content band [headerH, height-footerH). Seeds the search
     /// around `predicted` and falls back to a full search if that isn't confident.
-    private func downOffset(
+    private static func downOffset(
         _ prev: [UInt8], _ new: [UInt8], height: Int,
-        headerH: Int, footerH: Int, predicted: Int
+        headerH: Int, footerH: Int, predicted: Int, maximumOffset: Int? = nil
     ) -> (offset: Int, score: Double) {
         let hTop = max(0, min(headerH, height))
         let hBot = max(0, min(footerH, height))
         let contentH = height - hTop - hBot
         guard contentH > 8 else { return (0, .greatestFiniteMagnitude) }
         let minD = minShift(height)
-        let maxD = max(minD, contentH - contentH / 6)   // keep ≥1/6 overlap
+        let maxD = min(maximumOffset ?? height, max(minD, contentH - contentH / 6))   // keep ≥1/6 overlap
 
         func search(_ lo: Int, _ hi: Int) -> (Int, Double) {
+            var candidates: [(offset: Int, score: Double)] = []
             var bestOffset = 0
             var bestScore = Double.greatestFiniteMagnitude
             var d = max(minD, lo)
@@ -391,9 +462,18 @@ final class ScrollStitcher {
                 }
                 if count > 0 {
                     let score = Double(sum) / Double(count)
+                    candidates.append((d, score))
                     if score < bestScore { bestScore = score; bestOffset = d }
                 }
                 d += 1
+            }
+            let separation = max(8, height / 24)
+            let runnerUp = candidates.filter { abs($0.offset - bestOffset) >= separation }.map(\.score).min() ?? .infinity
+            if runnerUp - bestScore < 1.5 {
+                guard predicted >= minD else { return (0, .infinity) }
+                if let nearest = candidates.filter({ $0.score - bestScore < 1.5 }).min(by: {
+                    abs($0.offset - predicted) < abs($1.offset - predicted)
+                }) { return (nearest.offset, nearest.score) }
             }
             return (bestOffset, bestScore)
         }
@@ -408,12 +488,12 @@ final class ScrollStitcher {
 
     // MARK: - Pixel helpers
 
-    private func makeFrame(_ image: CGImage) -> Frame? {
+    static func makeFrame(_ image: CGImage) -> Frame? {
         guard let sig = rowSignature(image) else { return nil }
         return Frame(image: image, sig: sig, height: image.height, width: image.width)
     }
 
-    private func rowSignature(_ image: CGImage) -> [UInt8]? {
+    private static func rowSignature(_ image: CGImage) -> [UInt8]? {
         let h = image.height
         guard h > 0 else { return nil }
         let gray = CGColorSpaceCreateDeviceGray()
@@ -451,6 +531,9 @@ final class ScrollStitcher {
         var p: [CGImage] = []
         if let topImage { p.append(topImage) }
         p.append(contentsOf: strips)
+        if let pending, let strip = cropContent(pending.frame.image, offset: pending.offset, footerH: footerH) {
+            p.append(strip)
+        }
         if let footerImage { p.append(footerImage) }
         return p
     }

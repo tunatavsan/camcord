@@ -52,6 +52,7 @@ final class ScrollingCaptureSession {
     // Manual scrolling always works too; auto is a toggle on top of it.
     private var autoScroller: AutoScroller?
     private var autoScrolling = false
+    private var calibrating = false
     private var autoProgress = AutoScrollProgress()
     /// Bumped whenever an auto-scroll segment starts or stops, so a capture launched under
     /// one segment can't feed its outcome into a later segment's freshly-reset progress.
@@ -165,7 +166,7 @@ final class ScrollingCaptureSession {
     /// `.pixel` wheel event reports the same unit `NSEvent.scrollingDeltaY` does, so this
     /// mirrors handleScroll exactly). The single delta source while auto is on.
     private func autoScrollAdvance(points: CGFloat) {
-        guard !finished, !finishing, autoScrolling else { return }
+        guard !finished, !finishing, autoScrolling, !calibrating else { return }
         accumulatedDeltaPoints += points
         armSettle()
         if accumulatedDeltaPoints >= triggerPoints { pump() }
@@ -182,7 +183,10 @@ final class ScrollingCaptureSession {
             preview.flashHint("Otomatik için Erişilebilirlik izni gerekli")
             return
         }
+        guard prepared, stitcher.firstFrame != nil else { return }
         autoScrolling = true
+        calibrating = true
+        settleGeneration &+= 1
         autoGeneration &+= 1   // start of a new auto segment; stale captures won't feed it
         autoProgress = AutoScrollProgress()
         let scroller = autoScroller ?? {
@@ -191,13 +195,61 @@ final class ScrollingCaptureSession {
             autoScroller = s
             return s
         }()
-        scroller.start(at: CGPoint(x: region.midX, y: region.midY), region: region)
         preview.setAuto(running: true, reachedEnd: false)
+        let generation = autoGeneration
+        Task { @MainActor in await self.calibrate(scroller, generation: generation) }
+    }
+
+    private func calibrate(_ scroller: AutoScroller, generation: Int) async {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+        defer {
+            if calibrating, autoGeneration == generation {
+                stopAutoScroll(reachedEnd: false)
+                preview.flashHint("Sayfa kaydırılamıyor")
+            }
+        }
+        while captureInFlight, ContinuousClock.now < deadline, autoGeneration == generation {
+            try? await Task.sleep(for: .milliseconds(16))
+        }
+        for attempt in 0..<2 {
+            guard autoGeneration == generation, !captureInFlight,
+                  ContinuousClock.now.advanced(by: .milliseconds(430)) < deadline,
+                  let baseline = stitcher.firstFrame else { return }
+            let burst = region.height * 0.15
+            scroller.start(at: CGPoint(x: region.midX, y: region.midY), region: region, burstPoints: burst)
+            try? await Task.sleep(for: .milliseconds(250))
+            guard autoGeneration == generation else { return }
+            scroller.stop()
+            try? await Task.sleep(for: .milliseconds(180))
+            guard autoGeneration == generation, ContinuousClock.now < deadline else { return }
+            captureInFlight = true
+            let image = await captureAndStitch(predictedPoints: burst, timeout: ContinuousClock.now.duration(to: deadline))
+            captureInFlight = false
+            guard autoGeneration == generation, ContinuousClock.now < deadline,
+                  let image, let frame = ScrollStitcher.makeFrame(image) else { return }
+            let motion = ScrollStitcher.motion(from: baseline, to: frame, predicted: Int((burst * scale).rounded()))
+            switch motion {
+            case .down:
+                scroller.confirmDirection()
+            case .up:
+                scroller.flipDirection() // Persist only when the corrected sign measures down.
+            case .none:
+                if attempt == 0 { scroller.flipDirection(); continue }
+                return
+            }
+            _ = autoProgress.record(motion)
+            calibrating = false
+            accumulatedDeltaPoints = 0
+            pendingCapture = false
+            scroller.start(at: CGPoint(x: region.midX, y: region.midY), region: region)
+            return
+        }
     }
 
     private func stopAutoScroll(reachedEnd: Bool) {
         guard autoScrolling else { return }
         autoScrolling = false
+        calibrating = false
         autoGeneration &+= 1   // captures launched under the old segment must not feed the next
         autoScroller?.stop()
         autoProgress = AutoScrollProgress()
@@ -223,7 +275,7 @@ final class ScrollingCaptureSession {
     /// Serialises captures: only one SCScreenshotManager call in flight, with a single
     /// pending follow-up so bursts of scroll events don't pile up.
     private func pump(force: Bool = false) {
-        guard !finished, !finishing else { return }
+        guard !finished, !finishing, !calibrating else { return }
         // Scrolls can arrive before the filter is built; remember them so the baseline
         // capture (fired the instant prepare() finishes) picks them up.
         guard prepared else {
@@ -255,28 +307,30 @@ final class ScrollingCaptureSession {
         }
     }
 
-    private func captureAndStitch(predictedPoints: CGFloat) async {
+    @discardableResult
+    private func captureAndStitch(predictedPoints: CGFloat, timeout: Duration = .seconds(2)) async -> CGImage? {
         // Never attempt a capture before the filter/config exist (a very fast Done can
         // reach the flush before prepare() finished) — safe no-op instead of a crash.
-        guard let filter, let config else { return }
+        guard let filter, let config else { return nil }
         // Which auto-scroll segment launched this capture — captured before the await so a
         // slow frame that resolves after auto is toggled off/on can't feed the next segment.
         let capturedGeneration = autoGeneration
         let predictedPx = Int((predictedPoints * scale).rounded())
         let image: CGImage
         do {
-            image = try await withHardTimeout(.seconds(2), onTimeout: CaptureError.timeout) {
+            image = try await withHardTimeout(timeout, onTimeout: CaptureError.timeout) {
                 try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
             }
         } catch {
-            logger.error("scroll frame capture failed: \(String(describing: error), privacy: .public)")
+            logger.notice("scroll outcome=failed offset=0 score=nan pending=\(self.stitcher.hasPending) rebaselines=\(self.stitcher.rebaselineCount) error=\(String(describing: error), privacy: .public)")
             captureFailures += 1
-            return
+            return nil
         }
         captureFailures = 0
-        guard !finished else { return }
+        guard !finished else { return nil }
         let rebaselines = stitcher.rebaselineCount
         let outcome = stitcher.add(image, predictedOffset: predictedPx)
+        logger.notice("scroll outcome=\(String(describing: outcome), privacy: .public) offset=\(self.stitcher.lastOffset) score=\(self.stitcher.lastScore) pending=\(self.stitcher.hasPending) rebaselines=\(self.stitcher.rebaselineCount)")
         if stitcher.rebaselineCount > rebaselines { preview.flashHint("Kopukluk · yavaş kaydır") }
         // Only recompose the (O(n)) preview when the composite actually changed —
         // .appended/.baselined grows or seeds it, .buffered shows the newest warm-up frame;
@@ -284,28 +338,22 @@ final class ScrollingCaptureSession {
         switch outcome {
         case .appended, .baselined, .buffered:
             preview.update(image: stitcher.previewImage(maxWidth: 384), sections: stitcher.sectionCount)
-        case .ignored:
+        case .ignored, .noMotion, .movedUp:
             break
         case .atCap:
             finish(keep: true)
-            return
+            return nil
         }
-        // Let auto-scroll react to progress: reverse if we picked the wrong direction,
-        // stop when the page stops advancing (bottom reached). Only a real motion-driven
-        // append counts as "advanced"; a static forced baseline (.baselined) does not, so
-        // the wrong-direction flip stays reachable. Ignore outcomes from a stale segment.
-        if autoScrolling, capturedGeneration == autoGeneration {
-            let advanced = outcome == .appended
-            let warmup = outcome == .buffered || outcome == .baselined
-            // A real downward append proves the current wheel-sign scrolls this Mac's pages
-            // down — remember it so the next session starts in the right direction.
-            if advanced { autoScroller?.confirmDirection() }
-            switch autoProgress.record(advanced: advanced, warmup: warmup) {
+        if autoScrolling, !calibrating, capturedGeneration == autoGeneration {
+            let motion = stitcher.lastMotion
+            if case .down = motion { autoScroller?.confirmDirection() }
+            switch autoProgress.record(motion) {
             case .keepScrolling: break
             case .flipDirection: autoScroller?.flipDirection()
             case .reachedEnd: stopAutoScroll(reachedEnd: true)
             }
         }
+        return image
     }
 
     // MARK: - Finish
@@ -323,7 +371,7 @@ final class ScrollingCaptureSession {
             return
         }
         // Done flushes outstanding work so the last frame isn't lost: wait out any
-        // in-flight capture, then grab one final settled frame if the user scrolled since.
+        // in-flight capture, then grab one final settled frame to resolve a pending bounce.
         finishing = true
         Task { @MainActor in await self.flushAndFinalize() }
     }
@@ -335,9 +383,9 @@ final class ScrollingCaptureSession {
             try? await Task.sleep(for: .milliseconds(16))
             spins += 1
         }
-        // One last frame at the resting position if anything scrolled since the last grab
-        // (or nothing has been captured yet). captureAndStitch itself guards prepared/nil.
-        if prepared, !captureInFlight, (accumulatedDeltaPoints > 0 || stitcher.sectionCount == 0) {
+        // Always resolve the last pending strip with a frame at rest.
+        try? await Task.sleep(for: .milliseconds(180))
+        if prepared, !captureInFlight {
             accumulatedDeltaPoints = 0
             await captureAndStitch(predictedPoints: 0)
         }

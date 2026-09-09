@@ -55,6 +55,27 @@ struct ScrollStitcherTests {
         pixelImage(height: height) { x, y in pixel(x, contentOffset + y) }
     }
 
+    /// Force the stitcher through its static warm-up so outcome assertions exercise live input.
+    private func primeBaseline(_ stitcher: ScrollStitcher, contentOffset: Int, height: Int) {
+        let frame = viewport(contentOffset: contentOffset, height: height)
+        var outcome: ScrollStitcher.Outcome = .buffered
+        for _ in 0..<7 { outcome = stitcher.add(frame, predictedOffset: 0) }
+        #expect(outcome == .baselined)
+    }
+
+    private func expectPageRows(_ image: CGImage, startingAt start: Int) {
+        let rows = topDownRows(image)
+        for (index, value) in rows.enumerated() {
+            #expect(abs(value - Int(marker(start + index))) <= 3)
+        }
+    }
+
+    private func periodicViewport(contentOffset: Int, height: Int) -> CGImage {
+        pixelImage(height: height) { x, y in
+            UInt8(((contentOffset + y) % 48) * 4 + x % 4)
+        }
+    }
+
     /// Per-row value at `sampleCol`, row 0 = top.
     private func topDownRows(_ image: CGImage) -> [Int] {
         let w = image.width, h = image.height
@@ -225,26 +246,23 @@ struct ScrollStitcherTests {
         #expect(stitcher.finalImage() != nil)
     }
 
-    @Test("an over-scroll bounce that re-shows the reference's tail is not appended (no bottom duplicate)")
+    @Test("a spring-back discards its pending bounce strip")
     func bounceAtBottomIsNotDuplicated() {
-        let viewportHeight = 60
-        let step = 20
+        let viewportHeight = 384
+        let baseOffset = 500
         let stitcher = ScrollStitcher()
-        for off in stride(from: 0, through: 100, by: step) {
-            stitcher.add(viewport(contentOffset: off, height: viewportHeight), predictedOffset: step)
-        }
-        // Reference now shows content[100..160]. minShift(60) = 8, so bounce guards apply
-        // to slivers with offset < 16 (a real over-scroll bounce is a thin band).
-        let before = stitcher.finalImage()!.height
+        primeBaseline(stitcher, contentOffset: baseOffset, height: viewportHeight)
 
-        // A bounce SLIVER: top overlaps the reference (correlation finds offset 12), but
-        // its bottom 12 rows RE-SHOW content[148..160] — the reference's own tail.
-        // Appending it would duplicate that band (the reported footer-duplicate bug).
         let bounce = pixelImage(height: viewportHeight) { x, y in
-            y < 48 ? pixel(x, 112 + y) : pixel(x, 148 + (y - 48))
+            y < viewportHeight - 120 ? pixel(x, baseOffset + 120 + y) : 0
         }
-        stitcher.add(bounce, predictedOffset: 12)
-        #expect(stitcher.finalImage()!.height == before)   // duplicate rejected, no growth
+        #expect(stitcher.add(bounce, predictedOffset: 120) == .appended)
+        #expect(stitcher.hasPending)
+        #expect(stitcher.add(viewport(contentOffset: baseOffset, height: viewportHeight), predictedOffset: 120) == .movedUp)
+
+        let final = stitcher.finalImage()!
+        #expect(final.height == viewportHeight)
+        expectPageRows(final, startingAt: baseOffset)
     }
 
     @Test("a static page (no motion) reports .baselined at the forced commit, never .appended")
@@ -269,6 +287,98 @@ struct ScrollStitcherTests {
         }
         #expect(outcomes.contains(.appended))
         #expect(!outcomes.contains(.baselined))
+    }
+
+    // MARK: - Motion and pending strips
+
+    @Test("an identical frame after a real move commits without growing")
+    func identicalFrameAfterMoveCommitsWithoutGrowth() {
+        let stitcher = ScrollStitcher()
+        primeBaseline(stitcher, contentOffset: 0, height: 96)
+        let moved = viewport(contentOffset: 32, height: 96)
+
+        #expect(stitcher.add(moved, predictedOffset: 32) == .appended)
+        let heightWithPending = stitcher.contentPixelHeight
+        #expect(stitcher.add(moved, predictedOffset: 32) == .noMotion)
+        #expect(stitcher.contentPixelHeight == heightWithPending)
+
+        let final = stitcher.finalImage()!
+        #expect(final.height == 128)
+        expectPageRows(final, startingAt: 0)
+    }
+
+    @Test("manual reverse preserves every content row exactly once")
+    func manualReversePreservesEveryContentRow() {
+        let stitcher = ScrollStitcher()
+        primeBaseline(stitcher, contentOffset: 0, height: 720)
+
+        #expect(stitcher.add(viewport(contentOffset: 300, height: 720), predictedOffset: 300) == .appended)
+        #expect(stitcher.add(viewport(contentOffset: 200, height: 720), predictedOffset: 100) == .movedUp)
+        #expect(stitcher.add(viewport(contentOffset: 400, height: 720), predictedOffset: 200) == .appended)
+
+        let final = stitcher.finalImage()!
+        #expect(final.height == 1_120)
+        expectPageRows(final, startingAt: 0)
+    }
+
+    @Test("periodic stripes use prediction or rebaseline instead of false appends")
+    func periodicStripesUsePredictionOrRebaseline() {
+        let predicted = ScrollStitcher()
+        let first = periodicViewport(contentOffset: 0, height: 480)
+        for _ in 0..<7 { _ = predicted.add(first, predictedOffset: 0) }
+        for offset in [140, 280, 420] {
+            #expect(predicted.add(periodicViewport(contentOffset: offset, height: 480), predictedOffset: 140) == .appended)
+        }
+        #expect(predicted.finalImage()!.height == 900)
+
+        let unknown = ScrollStitcher()
+        for _ in 0..<7 { _ = unknown.add(first, predictedOffset: 0) }
+        let outcomes = [140, 280].map {
+            unknown.add(periodicViewport(contentOffset: $0, height: 480), predictedOffset: 0)
+        }
+        #expect(!outcomes.contains(.appended))
+        #expect(unknown.rebaselineCount == 1)
+        #expect(unknown.finalImage()!.height == 480)
+    }
+
+    @Test("upward motion leaves the comparison reference unchanged")
+    func upwardMotionLeavesReferenceUnchanged() {
+        let stitcher = ScrollStitcher()
+        primeBaseline(stitcher, contentOffset: 64, height: 96)
+
+        #expect(stitcher.add(viewport(contentOffset: 32, height: 96), predictedOffset: 32) == .movedUp)
+        #expect(stitcher.add(viewport(contentOffset: 96, height: 96), predictedOffset: 32) == .appended)
+
+        let final = stitcher.finalImage()!
+        #expect(final.height == 128)
+        expectPageRows(final, startingAt: 64)
+    }
+
+    @Test("motion classifies down, up, and none")
+    func motionClassifiesDownUpAndNone() throws {
+        let top = try #require(ScrollStitcher.makeFrame(viewport(contentOffset: 0, height: 96)))
+        let lower = try #require(ScrollStitcher.makeFrame(viewport(contentOffset: 32, height: 96)))
+
+        guard case .down(let distance, _) = ScrollStitcher.motion(from: top, to: lower, predicted: 32) else {
+            Issue.record("expected downward motion")
+            return
+        }
+        #expect(distance == 32)
+        #expect(ScrollStitcher.motion(from: lower, to: top, predicted: 32) == .up(32))
+        #expect(ScrollStitcher.motion(from: top, to: top) == .none)
+    }
+
+    @Test("finalImage commits a move that has no settling frame")
+    func finalImageCommitsPendingMove() {
+        let stitcher = ScrollStitcher()
+        primeBaseline(stitcher, contentOffset: 0, height: 96)
+
+        #expect(stitcher.add(viewport(contentOffset: 32, height: 96), predictedOffset: 32) == .appended)
+        #expect(stitcher.hasPending)
+        let final = stitcher.finalImage()!
+        #expect(final.height == 128)
+        #expect(!stitcher.hasPending)
+        expectPageRows(final, startingAt: 0)
     }
 
     /// Counts contiguous runs of "bright" (≥ threshold) rows at least `minRun` tall.

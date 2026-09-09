@@ -53,3 +53,6 @@
 
 ## Freeze 6
 - Applied Appendix B fixes for click completion, frozen selection coverage, camera/panel cleanup, backup installs, color/DPI handling, and the camera clock.
+
+## Scrolling capture v3
+- Defer scroll strips through bounce recovery, settle Done captures, and measure automatic wheel direction before persisting it.
