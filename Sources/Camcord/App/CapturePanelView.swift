@@ -24,6 +24,19 @@ final class RecordingStateModel: ObservableObject {
     @Published var isArmed = false
 }
 
+/// What a press on the recording stage landed on.
+struct StageHit: Equatable, Sendable {
+    let corner: CameraCorner?
+    let movesCamera: Bool
+}
+
+/// One still frame of the armed window, with the size the recording will composite
+/// into — enough for the panel to draw the camera rectangle before a recording exists.
+struct ArmedStageFrame: Sendable {
+    let image: CGImage
+    let frameSize: CGSize
+}
+
 /// The panel's actions, injected by AppDelegate. Each closure owns its own
 /// popover-closing/delay choreography.
 @MainActor
@@ -42,6 +55,8 @@ struct PanelActions {
     var pauseResume: () -> Void = {}
     var setStageSink: ((@Sendable (PixelBufferBox) -> Void)?) -> Void = { _ in }
     var recordingFrameSize: () -> CGSize = { .zero }
+    /// The armed window's still frame for the stage. nil when nothing is armed.
+    var armedStageFrame: () async -> ArmedStageFrame? = { nil }
     var revealRecording: (URL) -> Void = { _ in }
     var openRecording: (URL) -> Void = { _ in }
     /// Reveal the newest saved screenshot in Finder.
@@ -50,8 +65,10 @@ struct PanelActions {
     var reportError: (String) -> Void = { _ in }
 }
 
-/// The menu-bar capture palette: a stable 320-point native surface for capture,
-/// recording, live audio, and the two output libraries.
+/// The menu-bar capture palette: a stable 560-point native surface, two columns wide.
+/// The left column holds the controls (capture, record, audio, camera, quick toggles);
+/// the right one is the context column — the library at rest, the armed window's still
+/// frame while a recording waits for Başlat, and the live stage while it runs.
 struct CapturePanelView: View {
     @ObservedObject var model: RecordingStateModel
     let actions: PanelActions
@@ -81,14 +98,20 @@ struct CapturePanelView: View {
     /// One physical signature for every elastic transition in the panel.
     static let panelSpring: Animation = .spring(response: 0.22, dampingFraction: 0.84)
 
-    /// Fixed width; the height switches between the compact grid and the taller "done"
-    /// card (which carries rename + metadata). A definite size per state keeps the
-    /// popover beak anchored correctly under the status item.
-    static let panelWidth: CGFloat = 320
+    /// Fixed width; the height only ever shrinks for the two cards (finishing, done).
+    /// A definite size per state keeps the popover beak anchored correctly under the
+    /// status item. Nothing grows the panel downward any more: a running recording is
+    /// exactly as tall as an idle one and spends its extra room sideways, in the
+    /// context column.
+    static let panelWidth: CGFloat = 560
     static let panelHeight: CGFloat = 458
-    static let activeHeight: CGFloat = 648
+    static let activeHeight: CGFloat = 458
     static let finishingHeight: CGFloat = 220
     static let finishedHeight: CGFloat = 418
+
+    /// The two columns inside the 12 pt padding: 276 + 12 + 248 = 536.
+    static let controlColumnWidth: CGFloat = 276
+    static let contextColumnWidth: CGFloat = 248
 
     private var currentHeight: CGFloat {
         if model.finishedURL != nil { return Self.finishedHeight }
@@ -182,19 +205,24 @@ struct CapturePanelView: View {
     private var mainContent: some View {
         VStack(spacing: 12) {
             header
+            HStack(alignment: .top, spacing: 12) {
+                controlColumn
+                    .frame(width: Self.controlColumnWidth)
+                contextColumn
+                    .frame(width: Self.contextColumnWidth)
+            }
+            .frame(maxHeight: .infinity, alignment: .top)
+        }
+        .padding(12)
+    }
+
+    private var controlColumn: some View {
+        VStack(spacing: 12) {
             captureGrid
 
             recordRow
                 .frame(height: 84, alignment: .top)
                 .animation(reduceMotion ? nil : Self.panelSpring, value: model.state)
-
-            if model.state != .idle, !model.isArmed {
-                StageView(
-                    state: model.state,
-                    setSink: actions.setStageSink,
-                    recordingFrameSize: actions.recordingFrameSize
-                )
-            }
 
             VStack(spacing: 8) {
                     AudioControlRow(title: "Sistem", symbol: "speaker.wave.2", health: model.health?.systemAudio ?? AudioSourceHealth(enabled: recordSystemAudio),
@@ -210,9 +238,27 @@ struct CapturePanelView: View {
             cameraRow
 
             quickControls
-            libraryRow
+
+            Spacer(minLength: 0)
         }
-        .padding(12)
+    }
+
+    /// One stable column in every state, so nothing re-lays-out when a recording starts:
+    /// the stage viewport on top — empty at rest, the armed window's still frame while a
+    /// recording waits, the live composite while it runs — and the two library
+    /// destinations underneath.
+    private var contextColumn: some View {
+        VStack(spacing: 12) {
+            StageView(
+                state: model.state,
+                isArmed: model.isArmed,
+                setSink: actions.setStageSink,
+                recordingFrameSize: actions.recordingFrameSize,
+                armedStageFrame: actions.armedStageFrame
+            )
+            libraryRow
+            Spacer(minLength: 0)
+        }
     }
 
     private var header: some View {
@@ -436,8 +482,10 @@ struct CapturePanelView: View {
         }
     }
 
+    /// Stacked, not side by side: at the context column's width a two-up row clipped
+    /// "Görüntüler", and the column has the height to spare.
     private var libraryRow: some View {
-        HStack(spacing: 6) {
+        VStack(spacing: 6) {
             LibraryButton(
                 symbol: "photo",
                 title: "Görüntüler",
@@ -553,12 +601,38 @@ struct CapturePanelView: View {
     }
 }
 
-/// The in-panel view of the exact composited recording output. Its image arrives through
-/// a queue-confined sink, but rendering and all interaction state stay off that queue.
+/// The in-panel viewport onto what is being recorded: the live composite while a
+/// recording runs, the armed window's still frame while one waits for Başlat, and an
+/// empty frame at rest. The camera rectangle drawn on it is placed by dragging, and that
+/// placement is the same one the compositor writes into the file.
+///
+/// The drag lives on the STATIONARY canvas, never on the rectangle it moves. A gesture
+/// attached to a view that the same gesture repositions loses its end event — the
+/// placement then never persists and the next press starts from a stale origin, which is
+/// exactly how the stage came to feel like it "did not move".
 struct StageView: View {
     let state: RecordingController.UIState
+    let isArmed: Bool
     let setSink: ((@Sendable (PixelBufferBox) -> Void)?) -> Void
     let recordingFrameSize: () -> CGSize
+    let armedStageFrame: () async -> ArmedStageFrame?
+
+    /// What a press on the canvas started: the placement it began from, and whether it
+    /// landed on the rectangle at all (a press on the recording itself moves nothing).
+    private struct Drag {
+        let options: CameraOptions
+        let rect: CGRect
+        let frameSize: CGSize
+        let corner: CameraCorner?
+        let movesCamera: Bool
+    }
+
+    private static let space = "recording-stage"
+    /// The viewport's shape before a frame has arrived to give it one.
+    private static let restingAspect: CGFloat = 16.0 / 9.0
+    /// Retina: the composite is rendered at twice the canvas points so the stage is sharp
+    /// rather than an upscaled thumbnail — capped, because nothing here needs 4K.
+    private static let maximumRenderWidth: CGFloat = 960
 
     @State private var image: NSImage?
     @State private var thumbnailPixelSize = CGSize.zero
@@ -566,12 +640,18 @@ struct StageView: View {
     @State private var options = CameraOptions()
     @State private var rendering = false
     @State private var generation: UInt64 = 0
-    @State private var dragStart: (
-        options: CameraOptions,
-        rect: CGRect,
-        frameSize: CGSize,
-        corner: CameraCorner?
-    )?
+    @State private var canvasWidth: CGFloat = 0
+    @State private var drag: Drag?
+
+    private var isLive: Bool { !isArmed && state != .idle }
+
+    /// Re-runs the source task whenever what the stage is showing changes.
+    private var sourceKey: String { isArmed ? "armed" : "\(state)" }
+
+    private var aspect: CGFloat {
+        guard thumbnailPixelSize.width > 0, thumbnailPixelSize.height > 0 else { return Self.restingAspect }
+        return thumbnailPixelSize.width / thumbnailPixelSize.height
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -581,6 +661,7 @@ struct StageView: View {
                 Text("Konum ve boyut tüm hedeflerde ortaktır.")
                     .font(.system(size: 9))
                     .foregroundStyle(.secondary)
+                    .lineLimit(2)
                 Spacer(minLength: 0)
             }
 
@@ -595,6 +676,7 @@ struct StageView: View {
                     if let image, !thumbnail.isEmpty {
                         Image(nsImage: image)
                             .resizable()
+                            .interpolation(.high)
                             .frame(width: thumbnail.width, height: thumbnail.height)
                             .clipShape(RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous))
                             .position(x: thumbnail.midX, y: thumbnail.midY)
@@ -609,7 +691,6 @@ struct StageView: View {
                                         .foregroundStyle(.white.opacity(0.9))
                                 }
                                 .position(x: thumbnail.midX, y: thumbnail.midY)
-                                .allowsHitTesting(false)
                         }
 
                         cameraOverlay(in: thumbnail)
@@ -617,24 +698,38 @@ struct StageView: View {
                         VStack(spacing: 6) {
                             Image(systemName: "rectangle.on.rectangle")
                                 .font(.system(size: 18, weight: .light))
-                            Text("Kayıt görüntüsü bekleniyor…")
+                            Text(emptyMessage)
                                 .font(.system(size: 10))
+                                .multilineTextAlignment(.center)
                         }
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
-                .coordinateSpace(name: "recording-stage")
+                .coordinateSpace(name: Self.space)
+                // The canvas — which never moves — owns the gesture and the hit area.
+                .contentShape(Rectangle())
+                .gesture(stageDrag(thumbnail: thumbnail))
                 .clipShape(RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous))
+                .onAppear { canvasWidth = geometry.size.width }
+                .onChange(of: geometry.size.width) { _, width in canvasWidth = width }
             }
-            .frame(height: 158)
+            .aspectRatio(aspect, contentMode: .fit)
+            .frame(maxWidth: .infinity)
         }
-        .onAppear(perform: installSink)
-        .onDisappear(perform: removeSink)
+        .task(id: sourceKey) { await activateSource() }
+        .onDisappear(perform: deactivate)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Kayıt sahnesi")
     }
 
+    private var emptyMessage: String {
+        if isArmed { return "Pencere görüntüsü alınıyor…" }
+        if isLive { return "Kayıt görüntüsü bekleniyor…" }
+        return "Kayıt başlayınca burada görünür"
+    }
+
+    /// Purely drawn: the rectangle never takes the press that moves it.
     @ViewBuilder
     private func cameraOverlay(in thumbnail: CGRect) -> some View {
         let rect = options.enabled ? Self.cameraRect(options: options, frameSize: frameSize, thumbnail: thumbnail) : .zero
@@ -652,41 +747,62 @@ struct StageView: View {
                 }
             }
             .frame(width: rect.width, height: rect.height)
-            .contentShape(Rectangle())
             .position(x: rect.midX, y: rect.midY)
-            .gesture(stageDrag(thumbnail: thumbnail))
+            .allowsHitTesting(false)
             .accessibilityLabel("Kamera konumu")
             .accessibilityHint("Taşımak için sürükle; köşelerden sürükleyerek boyutlandır")
         }
     }
 
+    // MARK: - Drag
+
     private func stageDrag(thumbnail: CGRect) -> some Gesture {
-        DragGesture(minimumDistance: 0, coordinateSpace: .named("recording-stage"))
+        DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.space))
             .onChanged { value in
-                if dragStart == nil {
-                    let rect = options.rect(in: frameSize)
-                    let scaledRect = Self.yUpThumbnailRect(rect, frameSize: frameSize, thumbnail: thumbnail)
-                    let point = CGPoint(
-                        x: value.startLocation.x - thumbnail.minX,
-                        y: thumbnail.height - (value.startLocation.y - thumbnail.minY)
-                    )
-                    dragStart = (
-                        options,
-                        rect,
-                        frameSize,
-                        CameraResizeGeometry.corner(at: point, in: scaledRect)
-                    )
-                }
-                updatePlacement(translation: value.translation, thumbnail: thumbnail, persists: false)
+                let started = drag ?? beginDrag(at: value.startLocation, thumbnail: thumbnail)
+                drag = started
+                guard started.movesCamera else { return }
+                updatePlacement(started, translation: value.translation, thumbnail: thumbnail, persists: false)
             }
             .onEnded { value in
-                updatePlacement(translation: value.translation, thumbnail: thumbnail, persists: true)
-                dragStart = nil
+                let started = drag ?? beginDrag(at: value.startLocation, thumbnail: thumbnail)
+                if started.movesCamera {
+                    updatePlacement(started, translation: value.translation, thumbnail: thumbnail, persists: true)
+                }
+                drag = nil
             }
     }
 
-    private func updatePlacement(translation: CGSize, thumbnail: CGRect, persists: Bool) {
-        guard let start = dragStart, start.frameSize.width > 0, start.frameSize.height > 0 else { return }
+    private func beginDrag(at start: CGPoint, thumbnail: CGRect) -> Drag {
+        let hit = Self.hit(at: start, options: options, frameSize: frameSize, thumbnail: thumbnail)
+        return Drag(
+            options: options,
+            rect: options.rect(in: frameSize),
+            frameSize: frameSize,
+            corner: hit.corner,
+            movesCamera: hit.movesCamera
+        )
+    }
+
+    /// Where a press on the stage landed, in the recording's own terms: which resize
+    /// corner it caught, and whether it touched the camera rectangle at all. Pure, so the
+    /// rule that a press on the recording itself moves nothing is testable without a
+    /// window.
+    static func hit(at start: CGPoint, options: CameraOptions, frameSize: CGSize, thumbnail: CGRect) -> StageHit {
+        guard options.enabled, frameSize.width > 0, frameSize.height > 0, !thumbnail.isEmpty else {
+            return StageHit(corner: nil, movesCamera: false)
+        }
+        let scaled = yUpThumbnailRect(options.rect(in: frameSize), frameSize: frameSize, thumbnail: thumbnail)
+        let point = CGPoint(
+            x: start.x - thumbnail.minX,
+            y: thumbnail.height - (start.y - thumbnail.minY)
+        )
+        let corner = CameraResizeGeometry.corner(at: point, in: scaled)
+        return StageHit(corner: corner, movesCamera: corner != nil || scaled.contains(point))
+    }
+
+    private func updatePlacement(_ start: Drag, translation: CGSize, thumbnail: CGRect, persists: Bool) {
+        guard start.frameSize.width > 0, start.frameSize.height > 0 else { return }
         let delta = Self.recordingTranslation(
             translation,
             frameSize: start.frameSize,
@@ -713,10 +829,31 @@ struct StageView: View {
         CameraOverlayController.shared.applyPlacement(options, source: .stage, persists: persists)
     }
 
-    private func installSink() {
+    // MARK: - Source
+
+    private func activateSource() async {
         generation &+= 1
         let token = generation
+        setSink(nil)
+        rendering = false
+        drag = nil
+        image = nil
+        thumbnailPixelSize = .zero
+        frameSize = .zero
         options = RecordingSettings.load(from: .standard).camera.resolved()
+
+        if isArmed {
+            guard let armed = await armedStageFrame(), token == generation else { return }
+            let pixelSize = CGSize(width: armed.image.width, height: armed.image.height)
+            image = NSImage(cgImage: armed.image, size: pixelSize)
+            thumbnailPixelSize = pixelSize
+            frameSize = armed.frameSize
+        } else if isLive {
+            installSink(token: token)
+        }
+    }
+
+    private func installSink(token: UInt64) {
         setSink { box in
             Task { @MainActor in
                 guard token == generation, !rendering else { return }
@@ -724,29 +861,35 @@ struct StageView: View {
                 guard points.width > 0, points.height > 0 else { return }
                 rendering = true
                 defer { rendering = false }
-                let rendered = await CameraPreviewMonitor.shared.renderer.render(box.value, maximumWidth: 360)
+                let width = min(Self.maximumRenderWidth, max(320, canvasWidth * 2))
+                let rendered = await CameraPreviewMonitor.shared.renderer.render(box.value, maximumWidth: width)
                 guard token == generation, let rendered else { return }
                 image = NSImage(cgImage: rendered.image, size: rendered.size)
                 thumbnailPixelSize = box.pixelSize
                 frameSize = points
-                if dragStart == nil {
+                if drag == nil {
                     options = RecordingSettings.load(from: .standard).camera.resolved()
                 }
             }
         }
     }
 
-    private func removeSink() {
+    private func deactivate() {
+        // A drag interrupted by the panel closing still meant it: persist what it reached
+        // rather than losing the placement to a missing end event.
+        if drag?.movesCamera == true {
+            CameraOverlayController.shared.applyPlacement(options, source: .stage, persists: true)
+        }
         generation &+= 1
         setSink(nil)
         rendering = false
-        dragStart = nil
+        drag = nil
         image = nil
         thumbnailPixelSize = .zero
         frameSize = .zero
     }
 
-    /// Aspect-fits the actual recording pixels into the fixed panel canvas.
+    /// Aspect-fits the actual recording pixels into the panel canvas.
     static func thumbnailRect(for pixelSize: CGSize, in bounds: CGRect) -> CGRect {
         guard pixelSize.width > 0, pixelSize.height > 0, bounds.width > 0, bounds.height > 0 else { return .zero }
         let scale = min(bounds.width / pixelSize.width, bounds.height / pixelSize.height)
@@ -774,7 +917,7 @@ struct StageView: View {
         return CGPoint(x: translation.width / scale, y: -translation.height / scale)
     }
 
-    private static func yUpThumbnailRect(_ rect: CGRect, frameSize: CGSize, thumbnail: CGRect) -> CGRect {
+    static func yUpThumbnailRect(_ rect: CGRect, frameSize: CGSize, thumbnail: CGRect) -> CGRect {
         guard frameSize.width > 0 else { return .zero }
         let scale = thumbnail.width / frameSize.width
         return CGRect(x: rect.minX * scale, y: rect.minY * scale,
@@ -787,6 +930,7 @@ struct StageView: View {
         return CGPoint(x: right ? rect.maxX : rect.minX, y: top ? rect.minY : rect.maxY)
     }
 }
+
 
 private struct PanelShortcuts {
     var region: String?

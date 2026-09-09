@@ -58,6 +58,13 @@ final class RecordingController: NSObject {
     private var armedEscapeMonitor: Any?
     private var armedEscapeLocalMonitor: Any?
     var isArmed: Bool { armed != nil }
+
+    /// The armed window and the size its recording will composite into — what the panel's
+    /// stage needs to show the target and its camera rectangle before a frame exists.
+    var armedWindow: (window: SCWindow, frameSize: CGSize)? {
+        guard case .window(let window) = armed else { return nil }
+        return (window, window.frame.size)
+    }
     var onArmedChange: ((Bool) -> Void)?
     var onStartingChange: ((Bool) -> Void)?
     private var isStarting = false { didSet { onStartingChange?(isStarting) } }

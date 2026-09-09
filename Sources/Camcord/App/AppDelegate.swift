@@ -240,6 +240,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         actions.cancelArmed = { [weak recordingController] in recordingController?.cancelArmed() }
         actions.setStageSink = { [weak recordingController] sink in recordingController?.setStageSink(sink) }
         actions.recordingFrameSize = { [weak recordingController] in recordingController?.recordingFrameSize ?? .zero }
+        actions.armedStageFrame = { [weak recordingController] in
+            guard let target = recordingController?.armedWindow,
+                  let image = try? await ScreenshotService.captureWindowThumbnail(target.window, maxWidth: 480)
+            else { return nil }
+            return ArmedStageFrame(image: image, frameSize: target.frameSize)
+        }
         actions.pauseResume = { [weak recordingController] in
             recordingController?.pauseResume()
         }
