@@ -135,7 +135,8 @@ struct FrozenDesktopSnapshot: @unchecked Sendable {
             height: outputHeight,
             bitsPerComponent: 8,
             bytesPerRow: outputWidth * 4,
-            space: display.image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!,
+            space: (display.image.colorSpace?.model == .rgb ? display.image.colorSpace : nil)
+                ?? CGColorSpace(name: CGColorSpace.sRGB)!,
             bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue
                 | CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return nil }

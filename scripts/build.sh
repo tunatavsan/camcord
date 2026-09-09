@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 
 swift build -c release
 
-if [[ -e dist/Camcord.app ]]; then rm -r dist/Camcord.app; fi
+rm -rf dist/Camcord.app
 mkdir -p dist/Camcord.app/Contents/MacOS dist/Camcord.app/Contents/Resources
 cp .build/release/Camcord dist/Camcord.app/Contents/MacOS/Camcord
 cp Resources/Info.plist dist/Camcord.app/Contents/Info.plist
@@ -32,8 +32,9 @@ codesign -dvv dist/Camcord.app 2>&1 | grep '^Authority='
 # --install: copy the freshly built+signed bundle into /Applications and relaunch
 # from there (the stable location the login item should point at).
 if [[ "${1:-}" == "--install" ]]; then
-    if [[ -e /Applications/Camcord.app.new ]]; then rm -r /Applications/Camcord.app.new; fi
+    rm -rf /Applications/Camcord.app.new
     ditto dist/Camcord.app /Applications/Camcord.app.new
+    trap 'rm -rf /Applications/Camcord.app.new' EXIT
     codesign --verify --deep --strict /Applications/Camcord.app.new
     if pgrep -xq Camcord; then
         # Quit via Apple event so applicationShouldTerminate runs — a raw pkill
@@ -51,19 +52,24 @@ if [[ "${1:-}" == "--install" ]]; then
             exit 1
         fi
     fi
-    if [[ -e /Applications/Camcord.app ]]; then rm -r /Applications/Camcord.app; fi
+    if [[ -e /Applications/Camcord.app ]]; then
+        backup_dir="dist/install-backups/$(date +%Y%m%d-%H%M%S)"
+        mkdir -p dist/install-backups
+        mkdir "$backup_dir"
+        mv /Applications/Camcord.app "$backup_dir/Camcord.app"
+    fi
     mv /Applications/Camcord.app.new /Applications/Camcord.app
     codesign --verify --deep --strict /Applications/Camcord.app
     open /Applications/Camcord.app
     echo "Installed and launched /Applications/Camcord.app"
-fi
 
-# Retain the newest dated rollback bundle; release staging bundles are disposable.
-shopt -s nullglob
-backups=(dist/install-backups/*)
-for ((i = 0; i + 1 < ${#backups[@]}; i++)); do
-    rm -r "${backups[$i]}"
-done
-for release_stage in dist/release-*; do
-    rm -r "$release_stage"
-done
+    # Retain the newest dated rollback bundle; release staging bundles are disposable.
+    shopt -s nullglob
+    backups=(dist/install-backups/*)
+    for ((i = 0; i + 1 < ${#backups[@]}; i++)); do
+        rm -r "${backups[$i]}"
+    done
+    for release_stage in dist/release-*; do
+        rm -r "$release_stage"
+    done
+fi

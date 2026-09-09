@@ -133,6 +133,7 @@ struct CameraCompositorTests {
         let options = CameraOptions(enabled: true)
 
         let first = try compositor.composite(screen: screen, camera: camera, options: options)
+        let second = try compositor.composite(screen: screen, camera: camera, options: options)
         let outputBuffer = try #require(CMSampleBufferGetImageBuffer(first))
 
         #expect(CMSampleBufferGetPresentationTimeStamp(first) == pts)
@@ -145,6 +146,7 @@ struct CameraCompositorTests {
             == kCVImageBufferColorPrimaries_ITU_R_2020 as String)
         #expect(CVBufferCopyAttachment(outputBuffer, kCVImageBufferTransferFunctionKey, nil) as? String
             == kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ as String)
+        #expect(CMSampleBufferGetImageBuffer(second) != nil)
     }
 }
 

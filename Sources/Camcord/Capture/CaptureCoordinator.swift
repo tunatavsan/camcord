@@ -221,7 +221,7 @@ final class CaptureCoordinator {
         // The stitched image is taller than the viewport; derive its point size from the
         // captured pixel scale so DPI-aware pastes stay correct.
         let scale = clampedRegion.width > 0 ? CGFloat(image.width) / clampedRegion.width : 2
-        let pointSize = CGSize(width: clampedRegion.width, height: CGFloat(image.height) / max(scale, 0.01))
+        var pointSize = CGSize(width: clampedRegion.width, height: CGFloat(image.height) / max(scale, 0.01))
         let resolutionScale = ScreenshotSettings.load(from: .standard).resolutionScale
         let outputImage: CGImage
         if resolutionScale == .native {
@@ -234,6 +234,7 @@ final class CaptureCoordinator {
                 width: max(1, floor(pointSize.width * capScale)),
                 height: max(1, floor(pointSize.height * capScale))
             )
+            if capScale < 1 { pointSize = cappedSize }
             let scaled = await Task.detached(priority: .userInitiated) {
                 FrozenDesktopSnapshot.scaledImage(image, pointSize: cappedSize, resolutionScale: .oneX)
             }.value

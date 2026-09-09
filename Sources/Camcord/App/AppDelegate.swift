@@ -68,6 +68,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if starting {
                 recordingStateModel?.finishedURL = nil
                 self?.panelController?.keepOpenForRecording()
+            } else if recordingStateModel?.state == .idle {
+                self?.panelController?.releaseRecordingHold()
             }
             statusItemController?.setPreparing(starting)
         }

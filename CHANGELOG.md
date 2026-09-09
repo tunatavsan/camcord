@@ -50,3 +50,6 @@
 
 ## Freeze 5
 - Removed app QA commands and compositor instrumentation, staged and verified installation, pruned release bundles, and retained the three core documents under the minimum-freeze scope.
+
+## Freeze 6
+- Applied Appendix B fixes for click completion, frozen selection coverage, camera/panel cleanup, backup installs, color/DPI handling, and the camera clock.

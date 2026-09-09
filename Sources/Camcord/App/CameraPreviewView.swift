@@ -66,6 +66,13 @@ final class CameraPreviewMonitor: ObservableObject {
             try await capture.start(deviceID: deviceID, fps: fps)
             try await capture.waitForFirstFrame()
             guard generation == token, !recordingLocked, ownedCapture === capture else {
+                if ownedCapture === capture {
+                    ownedCapture = nil
+                    ownedCaptureID = nil
+                    ownedDeviceID = nil
+                    isStarting = false
+                    isRunning = false
+                }
                 await capture.stop()
                 return
             }

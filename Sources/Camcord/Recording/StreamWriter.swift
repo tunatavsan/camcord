@@ -251,7 +251,8 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     /// SCK can emit only idle frames for a static desktop. Once the stream has been
     /// quiet for 1.5 frame intervals, reuse its latest complete screen so a talking
     /// head keeps moving. Live SCK frames always own their native cadence.
-    func cameraTick(at hostTime: CMTime = CMClockGetTime(CMClockGetHostTimeClock())) {
+    func cameraTick(at hostTime: CMTime? = nil) {
+        let hostTime = hostTime ?? hostTimeProvider()
         guard !isFinished, cameraOptions.enabled,
               let sample = latestScreenSample, let anchor = sourceClockAnchor else { return }
         let pts = CMTimeAdd(anchor.source, CMTimeSubtract(hostTime, anchor.host))

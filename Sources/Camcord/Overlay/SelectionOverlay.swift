@@ -83,6 +83,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     /// otherwise write a stale `highlightedWindow` into the wrong session — a click
     /// could then silently pick a window that was never visibly highlighted.
     private var snapGeneration = 0
+    private var clickGeneration = 0
     private var screenChangeObserver: NSObjectProtocol?
     /// Balances NSCursor push/pop: the zero-screens early-out finishes without ever
     /// pushing, and an unmatched pop would corrupt the cursor stack.
@@ -346,6 +347,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     private func teardown() {
         // Orphan any in-flight window-snap lookup so it can't write into the next session.
         snapGeneration &+= 1
+        clickGeneration &+= 1
         if let screenChangeObserver {
             NotificationCenter.default.removeObserver(screenChangeObserver)
             self.screenChangeObserver = nil
@@ -393,11 +395,15 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     // MARK: - SelectionViewDelegate
 
     func selectionViewMouseDown(at globalPoint: CGPoint, isRight: Bool) {
+        if let constrainedCGFrame, let primaryHeight = NSScreen.screens.first?.frame.height,
+            !Geometry.cgToAppKit(constrainedCGFrame, primaryScreenHeight: primaryHeight).contains(globalPoint)
+        { return }
         let globalPoint = clampedAppKitPoint(globalPoint)
         // A new gesture orphans any still-pending click resolution from a previous
         // click (see selectionViewMouseUp) — without this, a slow lookup could commit
         // its window mid-way through THIS gesture.
         snapGeneration &+= 1
+        clickGeneration &+= 1
         // Don't switch to selection-drag rendering yet -- stay in window-snap
         // highlight mode until mouseDragged confirms an actual drag past the
         // click-movement threshold. Avoids the highlight flickering off on a
@@ -452,11 +458,14 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
                     finish(nil)
                     return
                 }
-                let generation = snapGeneration
+                let generation = clickGeneration
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     let resolved = await self.resolveFrozenWindow(id: frozenWindow.id)
-                    guard generation == self.snapGeneration, self.isPresenting else { return }
+                    guard generation == self.clickGeneration, self.isPresenting else {
+                        self.finish(nil)
+                        return
+                    }
                     guard let resolved else {
                         self.finish(nil)
                         return
@@ -476,11 +485,14 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
             // slow lookup can never commit into a later session or a newer gesture
             // (isPresenting alone is not session-scoped — it is true again for the next
             // session).
-            let generation = snapGeneration
+            let generation = clickGeneration
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let resolved = await self.resolveClickedWindow(atAppKitPoint: globalPoint) ?? fallback
-                guard generation == self.snapGeneration, self.isPresenting else { return }
+                guard generation == self.clickGeneration, self.isPresenting else {
+                    self.finish(nil)
+                    return
+                }
                 if let resolved {
                     // Tactile commit tick — a no-op on non-Force-Touch input devices.
                     NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
@@ -507,6 +519,9 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
 
     func selectionViewMouseMoved(to globalPoint: CGPoint) {
         guard !isDragging else { return }
+        if let constrainedCGFrame, let primaryHeight = NSScreen.screens.first?.frame.height,
+            !Geometry.cgToAppKit(constrainedCGFrame, primaryScreenHeight: primaryHeight).contains(globalPoint)
+        { return }
         let globalPoint = clampedAppKitPoint(globalPoint)
         // Newest-wins: bumping per spawn also drops a slower, older lookup that
         // would otherwise overwrite a fresher highlight out of order.
@@ -624,6 +639,17 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         }()
 
         for (screen, view) in zip(presentedScreens, views) {
+            if let constrainedCGFrame,
+                !Self.framesMatch(
+                    Geometry.appKitToCG(screen.frame, primaryScreenHeight: primaryHeight),
+                    constrainedCGFrame
+                )
+            {
+                view.selectionRect = nil
+                view.highlightRect = nil
+                view.badge = nil
+                continue
+            }
             // OCR mode from either a right-button drag (activeIsRight) or a .text hold/chord —
             // but NOT while recording, where the right button means "whole screen", not OCR.
             view.selectionIsText = (activeIsRight || holdIsText) && !rightClickWholeScreen
@@ -673,10 +699,11 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
 
     private func screensForCurrentSession(primaryScreenHeight: CGFloat) -> [NSScreen] {
         guard let constrainedCGFrame else { return NSScreen.screens }
-        return NSScreen.screens.filter { screen in
+        guard NSScreen.screens.contains(where: { screen in
             let frame = Geometry.appKitToCG(screen.frame, primaryScreenHeight: primaryScreenHeight)
             return Self.framesMatch(frame, constrainedCGFrame)
-        }
+        }) else { return [] }
+        return NSScreen.screens
     }
 
     private func snapshotMatchesCurrentDisplays(_ snapshot: FrozenDesktopSnapshot) -> Bool {

@@ -16,8 +16,8 @@ enum ScreenshotService {
     private static let fetchTimeout: Duration = .seconds(2)
     private static let fetchTimeoutNanoseconds: UInt64 = 2_000_000_000
 
-    /// Captures only the display under the trigger pointer. Camcord is excluded at the application
-    /// level so an immediately-visible dim/selection overlay cannot bleed into the frozen pixels.
+    /// Captures only the display under the trigger pointer, excluding selection panels while
+    /// retaining the other Camcord windows visible on that display.
     @MainActor
     static func captureFrozenDesktop(
         resolutionScale: ResolutionScale,
@@ -60,13 +60,15 @@ enum ScreenshotService {
                 guard let display = content.displays.first(where: { $0.displayID == descriptor.0 }) else {
                     throw CaptureError.displayConfigurationChanged
                 }
-                let ownApplications = content.applications.filter {
-                    $0.processID == ownPID || $0.bundleIdentifier == Bundle.main.bundleIdentifier
+                let selectionWindowIDs = await MainActor.run {
+                    Set(NSApplication.shared.windows.compactMap { window -> CGWindowID? in
+                        guard window is SelectionPanel, window.windowNumber > 0 else { return nil }
+                        return CGWindowID(window.windowNumber)
+                    })
                 }
                 let filter = SCContentFilter(
                     display: display,
-                    excludingApplications: ownApplications,
-                    exceptingWindows: []
+                    excludingWindows: content.windows.filter { selectionWindowIDs.contains($0.windowID) }
                 )
                 let configuration = SCStreamConfiguration()
                 configuration.showsCursor = false
