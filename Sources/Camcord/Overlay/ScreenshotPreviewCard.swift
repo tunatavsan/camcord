@@ -15,9 +15,10 @@ import QuartzCore
 /// One instance is owned by `AppDelegate`; showing again replaces the current card.
 @MainActor
 final class ScreenshotPreviewCard {
-    /// The card's own curve. It used to borrow the camera's, which has since flattened to
-    /// what a floating video tile wants; a screenshot card stays a card.
-    static func cardCornerRadius(for size: CGSize) -> CGFloat { min(size.width, size.height) * 0.16 }
+    /// The card's curve: the app's one corner, not a fraction of the thumbnail. A card that
+    /// scaled its corner with its size read as a different shape for every screenshot.
+    /// `size` is kept so callers stay unchanged if the curve ever depends on it again.
+    static func cardCornerRadius(for size: CGSize) -> CGFloat { CamcordStyle.Radius.surface }
     /// Transparent padding baked into the panel around the card: room for the drop shadow
     /// AND for the card to slide in/out without the window clipping it.
     static func shadowInset(for size: CGSize) -> CGFloat {

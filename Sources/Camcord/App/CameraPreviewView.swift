@@ -304,7 +304,7 @@ struct CameraPreviewView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             ZStack {
-                RoundedRectangle(cornerRadius: 10)
+                RoundedRectangle(cornerRadius: CamcordStyle.Radius.control)
                     .fill(Color.black.opacity(0.16))
                 if let image = monitor.image {
                     Image(nsImage: image)
@@ -324,7 +324,7 @@ struct CameraPreviewView: View {
             }
             .frame(maxWidth: .infinity)
             .frame(height: 150)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .clipShape(RoundedRectangle(cornerRadius: CamcordStyle.Radius.control))
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Kamera önizlemesi")
             .accessibilityValue(accessibilityPreviewValue)

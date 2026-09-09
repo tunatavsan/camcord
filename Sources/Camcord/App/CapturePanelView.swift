@@ -131,11 +131,11 @@ struct CapturePanelView: View {
                 .overlay(Color(nsColor: .windowBackgroundColor).opacity(0.18))
         }
         .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: CamcordStyle.Radius.surface, style: .continuous)
                 .strokeBorder(CamcordStyle.innerBorder, lineWidth: 1)
                 .allowsHitTesting(false)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: CamcordStyle.Radius.surface, style: .continuous))
         .animation(reduceMotion ? nil : Self.panelSpring, value: model.finishedURL)
         .animation(reduceMotion ? nil : Self.panelSpring, value: model.isFinishing)
         .onAppear(perform: reloadPersistedState)
@@ -273,7 +273,7 @@ struct CapturePanelView: View {
                     .padding(.horizontal, 10)
                     .frame(height: 44)
                     .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous)
                             .fill(CamcordStyle.recording.opacity(hovering ? 1 : 0.92))
                     )
                 }
@@ -324,10 +324,10 @@ struct CapturePanelView: View {
             .padding(.horizontal, 12)
             .frame(height: 48)
             .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous)
                     .fill((model.state == .paused ? Color.orange : CamcordStyle.recording).opacity(0.12))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous)
                             .strokeBorder(
                                 (model.state == .paused ? Color.orange : CamcordStyle.recording).opacity(0.24),
                                 lineWidth: 1
@@ -368,7 +368,7 @@ struct CapturePanelView: View {
                 .padding(.horizontal, 8)
                 .frame(height: 22)
                 .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous)
                         .fill(Color.primary.opacity(previewVisible ? (hovering ? 0.16 : 0.12) : (hovering ? 0.10 : 0.06)))
                 )
             }
@@ -394,7 +394,7 @@ struct CapturePanelView: View {
         }
         .padding(.horizontal, 10)
         .frame(height: 34)
-        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 9))
+        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: CamcordStyle.Radius.control))
     }
 
     private var quickControls: some View {
@@ -589,18 +589,18 @@ struct StageView: View {
                 let thumbnail = Self.thumbnailRect(for: thumbnailPixelSize, in: bounds)
 
                 ZStack(alignment: .topLeading) {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous)
                         .fill(.black.opacity(0.28))
 
                     if let image, !thumbnail.isEmpty {
                         Image(nsImage: image)
                             .resizable()
                             .frame(width: thumbnail.width, height: thumbnail.height)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .clipShape(RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous))
                             .position(x: thumbnail.midX, y: thumbnail.midY)
 
                         if state == .paused {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous)
                                 .fill(.black.opacity(0.46))
                                 .frame(width: thumbnail.width, height: thumbnail.height)
                                 .overlay {
@@ -625,7 +625,7 @@ struct StageView: View {
                     }
                 }
                 .coordinateSpace(name: "recording-stage")
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous))
             }
             .frame(height: 158)
         }
@@ -883,13 +883,13 @@ private struct FinishedCard: View {
             }
 
             ZStack {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous)
                     .fill(CamcordStyle.quietFill)
                 if let thumbnail = presentation?.thumbnail {
                     Image(nsImage: thumbnail)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous))
                         .padding(4)
                 } else if presentation == nil {
                     ProgressView().controlSize(.small).accessibilityLabel("Kayıt önizlemesi yükleniyor")
@@ -1159,7 +1159,7 @@ private struct CardButton: View {
             .frame(maxWidth: .infinity)
             .frame(height: 36)
             .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous)
                     .fill(prominent
                         ? AnyShapeStyle(CamcordStyle.accent.opacity(hovering ? 1 : 0.92))
                         : AnyShapeStyle(Color.primary.opacity(hovering ? 0.10 : 0.06)))
@@ -1199,7 +1199,7 @@ private struct CaptureTile: View {
             .frame(maxWidth: .infinity)
             .frame(height: 64)
             .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous)
                     .fill(Color.primary.opacity(hovering ? 0.10 : 0.055))
             )
         }
@@ -1267,7 +1267,7 @@ private struct RecordTargetButton: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: 34)
                 .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous)
                         .fill(Color.primary.opacity(hovering ? 0.09 : 0.05))
                 )
         }
@@ -1310,7 +1310,7 @@ private struct ToggleChip: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: 34)
                 .background(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous)
                         .fill(Color.primary.opacity(isOn ? (hovering ? 0.11 : 0.07) : 0.025))
                 )
         }
@@ -1350,7 +1350,7 @@ private struct LibraryButton: View {
             .frame(maxWidth: .infinity)
             .frame(height: 40)
             .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous)
                     .fill(Color.primary.opacity(hovering ? 0.09 : 0.05))
             )
         }
@@ -1386,7 +1386,7 @@ private struct ShortcutBadge: View {
             .monospaced()
             .padding(.horizontal, 6)
             .frame(height: 20)
-            .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.16)))
+            .background(RoundedRectangle(cornerRadius: CamcordStyle.Radius.control).fill(Color.white.opacity(0.16)))
             .accessibilityHidden(true)
     }
 }
@@ -1411,7 +1411,7 @@ private struct HoverScaleButton<Content: View>: View {
     var body: some View {
         Button(action: action) {
             content(hovering)
-                .contentShape(RoundedRectangle(cornerRadius: 10))
+                .contentShape(RoundedRectangle(cornerRadius: CamcordStyle.Radius.control))
         }
         .buttonStyle(PressScaleStyle(reduceMotion: reduceMotion))
         .onHover { isHovering in

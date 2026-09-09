@@ -128,7 +128,7 @@ private final class ToastView: NSVisualEffectView {
         blendingMode = .behindWindow
         state = .active
         wantsLayer = true
-        layer?.cornerRadius = 12
+        layer?.cornerRadius = CamcordStyle.Radius.surface
         layer?.masksToBounds = true
 
         let iconView = NSImageView()
@@ -138,7 +138,7 @@ private final class ToastView: NSVisualEffectView {
             iconView.image = thumbnail
             iconView.imageScaling = .scaleProportionallyUpOrDown
             iconView.wantsLayer = true
-            iconView.layer?.cornerRadius = 5
+            iconView.layer?.cornerRadius = CamcordStyle.Radius.control
             iconView.layer?.masksToBounds = true
         } else {
             let config = NSImage.SymbolConfiguration(pointSize: 17, weight: .semibold)
