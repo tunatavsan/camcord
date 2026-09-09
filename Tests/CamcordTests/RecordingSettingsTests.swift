@@ -21,12 +21,14 @@ struct RecordingSettingsTests {
         #expect(merged.microphoneGainDB == 9)
     }
 
-    @Test("legacy settings retain unity audio gain and gain controls round-trip independently")
+    @Test("legacy settings use the balanced system gain while explicit gains round-trip independently")
     func audioGainCompatibility() throws {
         let legacy = try JSONDecoder().decode(RecordingSettings.self, from: Data("{\"microphone\":true,\"mixAudioTracks\":false}".utf8))
         #expect(legacy.resolvedMicrophoneGainDB == 0)
-        #expect(legacy.resolvedSystemAudioGainDB == 0)
+        #expect(legacy.resolvedSystemAudioGainDB == -6)
         #expect(!legacy.mixAudioTracks)
+        let explicitUnity = try JSONDecoder().decode(RecordingSettings.self, from: Data("{\"systemAudioGainDB\":0}".utf8))
+        #expect(explicitUnity.resolvedSystemAudioGainDB == 0)
         var adjusted = legacy
         adjusted.microphoneGainDB = 9
         adjusted.systemAudioGainDB = -12

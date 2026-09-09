@@ -26,11 +26,11 @@ final class RecordingEngine: NSObject {
     private let sampleQueue = DispatchQueue(label: "dev.tavsan.camcord.recording.samples", qos: .userInitiated)
 
     private var stream: SCStream?
-    private var streamWriter: StreamWriter?
+    var streamWriter: StreamWriter?
     private var delegateRelay: StreamDelegateRelay?
     /// Each installed stream owns exactly one error callback. Retired streams may
     /// still deliver callbacks after stop/restart; they must never touch a new writer.
-    private var streamToken: UUID?
+    var streamToken: UUID?
     private var writerToken: UUID?
     private var pendingStart: StreamStartAttempt?
     private var startCancelled = false
@@ -290,7 +290,7 @@ final class RecordingEngine: NSObject {
             let box = StreamBox(stream)
             // Mark before awaiting stop: a late successful start cannot append past it.
             await withCheckedContinuation { continuation in
-                sampleQueue.async { writer.markFinished(); continuation.resume() }
+                sampleQueue.async { writer.markFinished(atHostTime: nil); continuation.resume() }
             }
             Task.detached { try? await box.stream.stopCapture() }
             do {
@@ -519,7 +519,7 @@ final class RecordingEngine: NSObject {
         }
     }
 
-    private func handleUnexpectedStop(_ error: Error, token: UUID) async {
+    func handleUnexpectedStop(_ error: Error, token: UUID) async {
         guard streamToken == token, let writer = streamWriter else { return }
         streamToken = nil // duplicate delivery from this stream is now inert
         logger.error("Stream stopped unexpectedly: \(String(describing: error), privacy: .public)")
@@ -556,6 +556,8 @@ final class RecordingEngine: NSObject {
             let salvaged = try await finalize(writer)
             await waitForPendingMixes()
             onUnexpectedStop?(salvaged, error)
+        } catch RecordingError.incompleteRecording(let url, let underlying) {
+            onUnexpectedStop?(url, underlying ?? error)
         } catch {
             onUnexpectedStop?(nil, error)
         }
@@ -664,7 +666,15 @@ final class RecordingEngine: NSObject {
             }
             // Movie fragments may contain the only surviving copy of a long session.
             // Preserve it even when AVFoundation cannot finalize the trailing fragment.
-            onUnexpectedStop?(nil, RecordingError.incompleteRecording(writer.outputURL, nil))
+            do {
+                let url = try await finalize(writer)
+                await waitForPendingMixes()
+                onUnexpectedStop?(url, RecordingError.incompleteRecording(url, nil))
+            } catch RecordingError.incompleteRecording(let url, let underlying) {
+                onUnexpectedStop?(url, underlying ?? RecordingError.incompleteRecording(url, nil))
+            } catch {
+                onUnexpectedStop?(nil, error)
+            }
         }
     }
 
@@ -676,15 +686,13 @@ final class RecordingEngine: NSObject {
         if let existing = finalizations[id] { return try await existing.value }
         let shouldMix = pendingAudioMix
         let fileType = outputFileType
-        // Unexpected-stop/start-failure salvage has no user Stop boundary; freeze its
-        // best available boundary now. The per-writer task map makes the first one final.
-        let finalHostTime = endHostTime ?? Self.currentHostTime()
+        // Salvage has no user Stop boundary: nil ends at the last accepted media.
         let task = Task { @MainActor in
             // Snapshot the output policy before suspending: late stop/recovery callers
             // must never apply a future recording's settings to this file.
             await withCheckedContinuation { continuation in
                 sampleQueue.async {
-                    writer.markFinished(atHostTime: finalHostTime)
+                    writer.markFinished(atHostTime: endHostTime)
                     continuation.resume()
                 }
             }

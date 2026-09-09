@@ -20,6 +20,7 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     private let systemAudioInput: AVAssetWriterInput?
     private let microphoneInput: AVAssetWriterInput?
     private let hostTimeProvider: @Sendable () -> CMTime
+    private let frameDuration: CMTime
 
     private var pauseClock: PauseClock
     private var sessionStarted = false
@@ -37,6 +38,8 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     private var cameraCompositor: CameraCompositor?
     private var cameraCompositingFailed = false
     private var latestScreenSample: CMSampleBuffer?
+    private let cameraIdleThreshold: CMTime
+    private var lastScreenHostTime: CMTime = .invalid
     /// Maps command-time host boundaries onto the SCK source timeline. The first
     /// complete screen sample establishes the epoch; elapsed time comes from the same
     /// monotonic host clock used for camera cadence.
@@ -47,6 +50,7 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     private var initialGateFrame: CMSampleBuffer?
     private var isAwaitingInitialRelease: Bool
     private var lastCameraPTS: CMTime = .invalid
+    private var lastAppendedMediaEnd: CMTime = .invalid
     var onCameraFailure: (@Sendable () -> Void)?
 
     func updateCameraOptions(_ options: CameraOptions) {
@@ -87,7 +91,7 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         includeSystemAudio: Bool,
         includeMicrophone: Bool,
         initiallyPaused: Bool = false,
-        systemAudioGainDB: Double = 0,
+        systemAudioGainDB: Double = -6,
         microphoneGainDB: Double = 0,
         cameraSource: (any CameraFrameSource)? = nil,
         cameraOptions: CameraOptions = CameraOptions(),
@@ -102,6 +106,7 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         self.cameraSource = cameraOptions.enabled ? cameraSource : nil
         self.cameraOptions = cameraOptions.resolved()
         self.hostTimeProvider = hostTimeProvider
+        self.frameDuration = frameDuration
         systemGainDB = systemAudioGainDB.isFinite ? min(12, max(-60, systemAudioGainDB)) : 0
         self.microphoneGainDB = microphoneGainDB.isFinite ? min(24, max(-24, microphoneGainDB)) : 0
         health = RecordingHealth(
@@ -112,6 +117,7 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         if initiallyPaused { initialClock.pause() }
         pauseClock = initialClock
         isAwaitingInitialRelease = initiallyPaused
+        cameraIdleThreshold = CMTimeMultiplyByRatio(frameDuration, multiplier: 3, divisor: 2)
 
         writer = try AVAssetWriter(outputURL: outputURL, fileType: container.fileType)
         // Crash resilience: periodically flush a movie fragment (moof) to disk so a
@@ -223,8 +229,10 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         }
 
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        let receivedAtHostTime = hostTimeProvider()
+        lastScreenHostTime = receivedAtHostTime
         if sourceClockAnchor == nil, pts.isNumeric {
-            sourceClockAnchor = (pts, hostTimeProvider())
+            sourceClockAnchor = (pts, receivedAtHostTime)
         }
 
         if isAwaitingInitialRelease {
@@ -236,28 +244,32 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
             return
         }
 
-        if cameraSource != nil {
-            latestScreenSample = sampleBuffer
-            return // The fixed-cadence camera clock owns all video appends in this mode.
-        }
+        if cameraSource != nil { latestScreenSample = sampleBuffer }
         appendVideoFrame(sampleBuffer)
     }
 
-    /// SCK can emit only idle frames for a static desktop. A separate cadence reuses
-    /// the latest complete screen and composites the newest camera frame, keeping a
-    /// talking head moving while a slide or editor stays still.
+    /// SCK can emit only idle frames for a static desktop. Once the stream has been
+    /// quiet for 1.5 frame intervals, reuse its latest complete screen so a talking
+    /// head keeps moving. Live SCK frames always own their native cadence.
     func cameraTick(at hostTime: CMTime = CMClockGetTime(CMClockGetHostTimeClock())) {
-        guard !isFinished, let sample = latestScreenSample, let anchor = sourceClockAnchor else { return }
+        guard !isFinished, cameraOptions.enabled,
+              let sample = latestScreenSample, let anchor = sourceClockAnchor else { return }
         let pts = CMTimeAdd(anchor.source, CMTimeSubtract(hostTime, anchor.host))
+        guard !lastScreenHostTime.isNumeric
+                || CMTimeSubtract(hostTime, lastScreenHostTime) > cameraIdleThreshold else { return }
         guard !lastCameraPTS.isValid || pts > lastCameraPTS else { return }
         guard let timed = retimed(sample, to: pts) else { return }
-        lastCameraPTS = pts
         appendVideoFrame(timed)
     }
 
-    private func appendVideoFrame(_ sampleBuffer: CMSampleBuffer) {
+    @discardableResult
+    private func appendVideoFrame(_ sampleBuffer: CMSampleBuffer) -> Bool {
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        guard let retimedPTS = pauseClock.shouldAppend(pts: pts, isVideo: true, duration: CMSampleBufferGetDuration(sampleBuffer)) else { return }
+        // An idle duplicate can race a delayed real SCK callback. Keep the newest
+        // screen for future repeats, but never append source time behind the frame
+        // already accepted into the camera-enabled video track.
+        if cameraSource != nil, lastCameraPTS.isValid, pts <= lastCameraPTS { return false }
+        guard let retimedPTS = pauseClock.shouldAppend(pts: pts, isVideo: true, duration: CMSampleBufferGetDuration(sampleBuffer)) else { return false }
 
         if !sessionStarted {
             // Video is the clock master: the session is anchored to the first video
@@ -269,10 +281,10 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         health.video.delivered += 1
         guard videoInput.isReadyForMoreMediaData else {
             health.video.dropped += 1
-            return
+            return false
         }
         var output = sampleBuffer
-        if !cameraCompositingFailed, let camera = cameraSource?.latestFrame() {
+        if cameraOptions.enabled, !cameraCompositingFailed, let camera = cameraSource?.latestFrame() {
             do {
                 if cameraCompositor == nil { cameraCompositor = CameraCompositor() }
                 output = try cameraCompositor!.composite(screen: sampleBuffer, camera: camera, options: cameraOptions)
@@ -280,7 +292,7 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
                 // Encoder backpressure is temporary. Skip this video frame instead
                 // of permanently disabling the camera or flashing a camera-less frame.
                 health.video.dropped += 1
-                return
+                return false
             } catch {
                 cameraCompositingFailed = true
                 logger.error("Camera composition failed; screen capture continues: \(String(describing: error), privacy: .public)")
@@ -289,8 +301,11 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         }
         if append(output, retimedTo: retimedPTS, originalPTS: pts, input: videoInput) {
             health.video.appended += 1
+            if cameraSource != nil { lastCameraPTS = pts }
+            return true
         } else {
             health.video.dropped += 1
+            return false
         }
     }
 
@@ -334,6 +349,18 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         let buffer = retimedPTS == originalPTS ? sampleBuffer : retimed(sampleBuffer, to: retimedPTS)
         guard let buffer else { return false }
         let accepted = input.append(buffer)
+        if accepted {
+            let sampleDuration = CMSampleBufferGetDuration(buffer)
+            let acceptedDuration = sampleDuration.isNumeric && sampleDuration > .zero
+                ? sampleDuration
+                : (input === videoInput ? frameDuration : .zero)
+            let end = acceptedDuration > .zero
+                ? CMTimeAdd(retimedPTS, acceptedDuration)
+                : retimedPTS
+            if !lastAppendedMediaEnd.isValid || end > lastAppendedMediaEnd {
+                lastAppendedMediaEnd = end
+            }
+        }
         if !accepted { reportWriterFailureIfNeeded() }
         return accepted
     }
@@ -406,6 +433,9 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     }
 
     func resume(atHostTime hostTime: CMTime) {
+        let resumeUptime = ProcessInfo.processInfo.systemUptime
+        if health.systemAudio.enabled { health.systemAudio.lastSampleUptime = resumeUptime }
+        if health.microphone.enabled { health.microphone.lastSampleUptime = resumeUptime }
         guard let sourceTime = sourceTime(atHostTime: hostTime) else {
             pauseClock.resume()
             isAwaitingInitialRelease = false
@@ -431,16 +461,21 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         markFinished(atHostTime: hostTimeProvider())
     }
 
-    func markFinished(atHostTime hostTime: CMTime) {
+    func markFinished(atHostTime hostTime: CMTime?) {
         guard !isFinished else { return }
         isFinished = true
         latestScreenSample = nil
         initialGateFrame = nil
         guard writer.status == .writing else { return }
-        if sessionStarted,
-            let sourceTime = sourceTime(atHostTime: hostTime),
-            let endTime = pauseClock.endTime(atSourceTime: sourceTime)
-        {
+        let endTime: CMTime? = if let hostTime,
+                                  let sourceTime = sourceTime(atHostTime: hostTime) {
+            pauseClock.endTime(atSourceTime: sourceTime)
+        } else if lastAppendedMediaEnd.isValid {
+            lastAppendedMediaEnd
+        } else {
+            nil
+        }
+        if sessionStarted, let endTime {
             // finishWriting alone truncates the movie at the latest appended sample.
             // An explicit end retains elapsed static-screen time without encoding copies.
             writer.endSession(atSourceTime: endTime)

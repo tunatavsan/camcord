@@ -32,6 +32,25 @@ func retryStaysInsideOneBudget() async {
     #expect(state.withLock { $0.now } == deadline)
 }
 
+@MainActor
+@Test("salvaged recording is delivered once without a failure callback")
+func salvageDeliversOnce() {
+    let controller = RecordingController(coordinator: CaptureCoordinator())
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("salvage-test.mov")
+    var delivered: [URL] = []
+    var warnings: [String] = []
+    var failures = 0
+    controller.onRecordingFinished = { delivered.append($0) }
+    controller.onToast = { warnings.append($0.text) }
+    controller.onFailure = { failures += 1 }
+
+    controller.handleUnexpectedStop(salvagedURL: url, error: RecordingError.incompleteRecording(url, nil))
+
+    #expect(delivered == [url])
+    #expect(warnings == ["Kayıt kesildi · kaydedilen kısım korundu"])
+    #expect(failures == 0)
+}
+
 @Suite("FormatElapsed")
 struct FormatElapsedTests {
     @MainActor
@@ -44,6 +63,18 @@ struct FormatElapsedTests {
         #expect(RecordingController.formatElapsed(3599) == "59:59")
         #expect(RecordingController.formatElapsed(3600) == "60:00")
         #expect(RecordingController.formatElapsed(3661.4) == "61:01")
+    }
+
+    @MainActor
+    @Test("microphone silence waits for the post-resume grace period")
+    func microphoneResumeGrace() {
+        var microphone = AudioSourceHealth(enabled: true)
+
+        #expect(!RecordingController.isMicrophoneMissing(microphone, at: 101, graceUntil: 102))
+        #expect(RecordingController.isMicrophoneMissing(microphone, at: 102, graceUntil: 102))
+
+        microphone.lastSampleUptime = 101
+        #expect(!RecordingController.isMicrophoneMissing(microphone, at: 102, graceUntil: 102))
     }
 }
 

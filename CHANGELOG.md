@@ -1,5 +1,8 @@
 # Changelog
 
+## Freeze 4
+- Deliver salvaged recordings at the last accepted media end, append camera video on screen callbacks with an idle fallback, lower default system audio gain, and allow microphone recovery after resume.
+
 ## Freeze 3
 - Limit frozen capture to the cursor display, capture clicked windows independently, show hold selection promptly, bound retries, and preserve OCR identifiers and block indentation.
 

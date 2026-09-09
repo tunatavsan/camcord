@@ -29,6 +29,7 @@ final class RecordingController: NSObject {
     private var didWarnAudio = false
     private var didWarnDroppedSamples = false
     private var audioMixFailed = false
+    private var microphoneHealthGraceUntilUptime: TimeInterval = 0
 
     /// Wired by AppDelegate to the status item's failure flash (same as the
     /// coordinator's) — pairs every failure beep with a visual cue.
@@ -298,6 +299,7 @@ final class RecordingController: NSObject {
         pendingResumeCue = nil
         guard !Task.isCancelled, !isTerminating, uiState == .paused, engine.isRecording else { return }
         engine.resume()
+        microphoneHealthGraceUntilUptime = ProcessInfo.processInfo.systemUptime + 2
         segmentStart = Date()
         startElapsedTimer()
         uiState = .recording
@@ -461,6 +463,7 @@ final class RecordingController: NSObject {
             didWarnAudio = false
             didWarnDroppedSamples = false
             audioMixFailed = false
+            microphoneHealthGraceUntilUptime = 0
             segmentStart = Date()
             // Auto-stop guards + best-effort Do Not Disturb, captured for this recording.
             let codec = settings.resolvedCodec
@@ -606,7 +609,7 @@ final class RecordingController: NSObject {
         stopTask = nil
     }
 
-    private func handleUnexpectedStop(salvagedURL: URL?, error: Error) {
+    func handleUnexpectedStop(salvagedURL: URL?, error: Error) {
         startCueTask?.cancel()
         startCueTask = nil
         cancelPendingResumeCue()
@@ -623,11 +626,9 @@ final class RecordingController: NSObject {
         pushUI()
         onFinishing?(false)
         if let salvagedURL {
-            // The engine salvaged the partial file -- surface it in the panel (no clipboard;
-            // recordings are never copied) instead of leaving it silently on disk.
-            onRecordingFinished?(salvagedURL)
-            if audioMixFailed { showFinishedToast() }
+            reportPreservedPartial(salvagedURL)
             logger.notice("Salvaged partial recording: \(salvagedURL.lastPathComponent, privacy: .public)")
+            return
         }
         if case RecordingError.incompleteRecording(let url, _) = error {
             reportPreservedPartial(url)
@@ -638,9 +639,8 @@ final class RecordingController: NSObject {
 
     private func reportPreservedPartial(_ url: URL) {
         logger.error("Incomplete recording retained for recovery: \(url.path, privacy: .public)")
-        onToast?(ToastRequest(text: "Kayıt kesildi — kısmi dosya kayıt klasöründe korundu", systemSymbol: "externaldrive.badge.exclamationmark", tint: .systemOrange, important: true))
-        FeedbackSound.error.play()
-        onFailure?()
+        onRecordingFinished?(url)
+        onToast?(ToastRequest(text: "Kayıt kesildi · kaydedilen kısım korundu", systemSymbol: "externaldrive.badge.exclamationmark", tint: .systemOrange, important: true))
     }
 
     // MARK: - Do Not Disturb
@@ -721,7 +721,11 @@ final class RecordingController: NSObject {
     private func checkAudioHealth(_ health: RecordingHealth) {
         guard currentElapsed > 5 else { return }
         let now = ProcessInfo.processInfo.systemUptime
-        let missingMicrophone = health.microphone.enabled && !health.microphone.isReceiving(at: now)
+        let missingMicrophone = Self.isMicrophoneMissing(
+            health.microphone,
+            at: now,
+            graceUntil: microphoneHealthGraceUntilUptime
+        )
         let processingFailed = health.microphone.processingFailed || health.systemAudio.processingFailed
         if !didWarnAudio, missingMicrophone || processingFailed {
             didWarnAudio = true
@@ -758,6 +762,16 @@ final class RecordingController: NSObject {
     static func formatElapsed(_ interval: TimeInterval) -> String {
         let total = Int(interval.rounded(.down))
         return String(format: "%d:%02d", total / 60, total % 60)
+    }
+
+    static func isMicrophoneMissing(
+        _ microphone: AudioSourceHealth,
+        at uptime: TimeInterval,
+        graceUntil: TimeInterval
+    ) -> Bool {
+        microphone.enabled
+            && uptime >= graceUntil
+            && !microphone.isReceiving(at: uptime)
     }
 
     private func fail(_ message: String) {

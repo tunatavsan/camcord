@@ -49,10 +49,12 @@ struct StreamWriterCameraTests {
 
         let source = FakeCameraFrameSource(try pixelBuffer(width: 80, height: 60, color: .red))
         let options = CameraOptions(enabled: true, corner: .bottomRight, widthFraction: 0.30, mirrored: false)
-        let writer = try makeWriter(url: url, source: source, options: options)
+        let hostAnchor = CMTime(seconds: 100, preferredTimescale: 600)
+        let writer = try makeWriter(
+            url: url, source: source, options: options, hostTimeProvider: { hostAnchor }
+        )
         writer.consume(try screenSample(pts: CMTime(value: 100, timescale: 30)), of: .screen)
 
-        let hostAnchor = CMClockGetTime(CMClockGetHostTimeClock())
         for tick in 0..<24 {
             if tick == 12 {
                 source.update(try pixelBuffer(width: 80, height: 60, color: .green))
@@ -65,7 +67,7 @@ struct StreamWriterCameraTests {
         _ = try await writer.finishWriting()
 
         let frames = try await decodedFrames(at: url)
-        #expect(frames.count == 24)
+        #expect(frames.count == 23)
         let first = try #require(frames.first)
         let last = try #require(frames.last)
         let cameraPoint = CGPoint(x: 260, y: 48)
@@ -76,8 +78,59 @@ struct StreamWriterCameraTests {
         #expect(last.color(atCI: screenPoint).isMostlyBlue)
 
         let gaps = zip(frames, frames.dropFirst()).map { CMTimeSubtract($1.pts, $0.pts).seconds }
-        #expect(gaps.allSatisfy { abs($0 - 1.0 / 30.0) < 0.002 })
+        #expect(abs(try #require(gaps.first) - 2.0 / 30.0) < 0.002)
+        #expect(gaps.dropFirst().allSatisfy { abs($0 - 1.0 / 30.0) < 0.002 })
         #expect(CMTimeSubtract(last.pts, first.pts).seconds > 0.74)
+    }
+
+    @Test("live screen callbacks append immediately and the timer waits for an idle interval")
+    func liveScreenOwnsCadenceUntilIdle() async throws {
+        let url = temporaryMovieURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let source = FakeCameraFrameSource(try pixelBuffer(width: 80, height: 60, color: .red))
+        let options = CameraOptions(enabled: true, corner: .bottomRight, widthFraction: 0.30, mirrored: false)
+        let hostAnchor = CMTime(seconds: 100, preferredTimescale: 600)
+        let writer = try makeWriter(
+            url: url, source: source, options: options, hostTimeProvider: { hostAnchor }
+        )
+
+        writer.consume(try screenSample(pts: CMTime(value: 100, timescale: 30)), of: .screen)
+        #expect(writer.healthSnapshot().video.appended == 1)
+        writer.cameraTick(at: CMTimeAdd(hostAnchor, CMTime(value: 1, timescale: 30)))
+        #expect(writer.healthSnapshot().video.appended == 1)
+        writer.cameraTick(at: CMTimeAdd(hostAnchor, CMTime(value: 2, timescale: 30)))
+        #expect(writer.healthSnapshot().video.appended == 2)
+        // A real callback delivered after that idle repeat may carry an older PTS.
+        // It refreshes the cached screen but must not regress the encoded timeline.
+        writer.consume(try screenSample(pts: CMTime(value: 101, timescale: 30)), of: .screen)
+        #expect(writer.healthSnapshot().video.appended == 2)
+        writer.cameraTick(at: CMTimeAdd(hostAnchor, CMTime(value: 3, timescale: 30)))
+        #expect(writer.healthSnapshot().video.appended == 3)
+
+        writer.markFinished(atHostTime: nil)
+        _ = try await writer.finishWriting()
+    }
+
+    @Test("disabling camera stops compositing on subsequent live screen frames")
+    func disablingCameraStopsBurnIn() async throws {
+        let url = temporaryMovieURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let source = FakeCameraFrameSource(try pixelBuffer(width: 80, height: 60, color: .red))
+        var options = CameraOptions(enabled: true, corner: .bottomRight, widthFraction: 0.30, mirrored: false)
+        let writer = try makeWriter(url: url, source: source, options: options)
+
+        writer.consume(try screenSample(pts: CMTime(value: 100, timescale: 30)), of: .screen)
+        options.enabled = false
+        writer.updateCameraOptions(options)
+        writer.consume(try screenSample(pts: CMTime(value: 101, timescale: 30)), of: .screen)
+        writer.markFinished(atHostTime: nil)
+        _ = try await writer.finishWriting()
+
+        let frames = try await decodedFrames(at: url)
+        #expect(frames.count == 2)
+        let cameraPoint = CGPoint(x: 260, y: 48)
+        #expect(try #require(frames.first).color(atCI: cameraPoint).isMostlyRed)
+        #expect(try #require(frames.last).color(atCI: cameraPoint).isMostlyBlue)
     }
 
     @Test("moving and resizing the live camera changes already-running video frames")
@@ -137,19 +190,20 @@ struct StreamWriterCameraTests {
         }
 
         let health = writer.healthSnapshot()
-        #expect(health.video.delivered == 12)
-        #expect(health.video.appended == 12)
+        #expect(health.video.delivered == 11)
+        #expect(health.video.appended == 11)
         writer.markFinished()
         _ = try await writer.finishWriting()
 
         let frames = try await decodedFrames(at: url)
-        #expect(frames.count == 12)
+        #expect(frames.count == 11)
         let first = try #require(frames.first)
         let last = try #require(frames.last)
         #expect(first.color(atCI: CGPoint(x: 60, y: 48)).isMostlyRed)
         #expect(last.color(atCI: CGPoint(x: 60, y: 48)).isMostlyGreen)
         let gaps = zip(frames, frames.dropFirst()).map { CMTimeSubtract($1.pts, $0.pts).seconds }
-        #expect(gaps.allSatisfy { $0 > 0 && $0 < 0.05 })
+        #expect(abs(try #require(gaps.first) - 2.0 / 30.0) < 0.002)
+        #expect(gaps.dropFirst().allSatisfy { $0 > 0 && $0 < 0.05 })
         #expect(CMTimeSubtract(last.pts, first.pts).seconds < 0.39)
     }
 
@@ -160,10 +214,13 @@ struct StreamWriterCameraTests {
 
         let source = FakeCameraFrameSource(try pixelBuffer(width: 80, height: 60, color: .red))
         let options = CameraOptions(enabled: true, corner: .bottomRight, widthFraction: 0.30, mirrored: false)
-        let writer = try makeWriter(url: url, source: source, options: options, includeSystemAudio: true)
+        let hostAnchor = CMTime(seconds: 100, preferredTimescale: 600)
+        let writer = try makeWriter(
+            url: url, source: source, options: options, includeSystemAudio: true,
+            hostTimeProvider: { hostAnchor }
+        )
         let screenPTS = CMTime(value: 100, timescale: 30)
         writer.consume(try screenSample(pts: screenPTS), of: .screen)
-        let hostAnchor = CMClockGetTime(CMClockGetHostTimeClock())
         let audioFramesPerTick = 1_600
 
         for tick in 0..<15 {
@@ -184,7 +241,7 @@ struct StreamWriterCameraTests {
         }
 
         let health = writer.healthSnapshot()
-        #expect(health.video.appended == 15)
+        #expect(health.video.appended == 14)
         #expect(health.systemAudio.samples.appended == 15)
         writer.markFinished()
         _ = try await writer.finishWriting()

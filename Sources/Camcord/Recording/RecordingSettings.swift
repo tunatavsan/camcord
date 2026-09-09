@@ -115,7 +115,7 @@ struct RecordingSettings: Codable, Equatable {
         microphone: Bool = true,
         microphoneDeviceID: String? = nil,
         mixAudioTracks: Bool = true,
-        systemAudioGainDB: Double = 0,
+        systemAudioGainDB: Double = -6,
         microphoneGainDB: Double = 0,
         camera: CameraOptions = CameraOptions(),
         maxDurationMinutes: Int = 0,

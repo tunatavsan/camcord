@@ -277,7 +277,61 @@ struct StreamWriterTests {
         #expect(reader.status == .completed)
     }
 
-    private func videoFrame(index: Int) throws -> CMSampleBuffer {
+    @Test("resume grants enabled audio sources a fresh health interval")
+    func resumeRefreshesAudioHealth() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("camcord-resume-health-\(UUID().uuidString).mov")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let writer = try StreamWriter(
+            outputURL: url, container: .mov, codec: .h264, bitrateMbps: 1,
+            pixelWidth: 64, pixelHeight: 48, frameDuration: CMTime(value: 1, timescale: 30),
+            dynamicRange: .sdr, includeSystemAudio: true, includeMicrophone: true
+        )
+        writer.consume(try videoFrame(index: 0), of: .screen)
+        writer.pause()
+        writer.resume()
+
+        let health = writer.healthSnapshot()
+        let uptime = ProcessInfo.processInfo.systemUptime
+        #expect(health.systemAudio.isReceiving(at: uptime))
+        #expect(health.microphone.isReceiving(at: uptime))
+        writer.markFinished(atHostTime: nil)
+        _ = try await writer.finishWriting()
+    }
+
+    @MainActor
+    @Test("unexpected stream stop salvages through the last accepted media frame")
+    func unexpectedStopSalvagesLastAcceptedDuration() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("camcord-unexpected-stop-\(UUID().uuidString).mov")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let writer = try StreamWriter(
+            outputURL: url, container: .mov, codec: .h264, bitrateMbps: 1,
+            pixelWidth: 64, pixelHeight: 48, frameDuration: CMTime(value: 1, timescale: 30),
+            dynamicRange: .sdr, includeSystemAudio: false, includeMicrophone: false
+        )
+        writer.consume(try videoFrame(index: 0), of: .screen)
+        writer.consume(try videoFrame(index: 15, duration: .invalid), of: .screen)
+
+        let engine = RecordingEngine()
+        let token = UUID()
+        engine.streamWriter = writer
+        engine.streamToken = token
+        var handedOverURL: URL?
+        engine.onUnexpectedStop = { url, _ in handedOverURL = url }
+        let error = NSError(
+            domain: SCStreamErrorDomain,
+            code: SCStreamError.Code.systemStoppedStream.rawValue
+        )
+        await engine.handleUnexpectedStop(error, token: token)
+
+        #expect(handedOverURL == url)
+        let duration = try await AVURLAsset(url: url).load(.duration).seconds
+        #expect(abs(duration - (0.5 + 1.0 / 30.0)) < 0.02)
+    }
+
+    private func videoFrame(
+        index: Int,
+        duration: CMTime = CMTime(value: 1, timescale: 30)
+    ) throws -> CMSampleBuffer {
         var optionalPixel: CVPixelBuffer?
         #expect(CVPixelBufferCreate(kCFAllocatorDefault, 64, 48, kCVPixelFormatType_32BGRA,
                                    nil, &optionalPixel) == kCVReturnSuccess)
@@ -291,7 +345,7 @@ struct StreamWriterTests {
         #expect(CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault,
                     imageBuffer: pixel, formatDescriptionOut: &optionalFormat) == noErr)
         let format = try #require(optionalFormat)
-        var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 30),
+        var timing = CMSampleTimingInfo(duration: duration,
                     presentationTimeStamp: CMTime(value: Int64(index), timescale: 30), decodeTimeStamp: .invalid)
         var optionalSample: CMSampleBuffer?
         #expect(CMSampleBufferCreateReadyWithImageBuffer(allocator: kCFAllocatorDefault,
