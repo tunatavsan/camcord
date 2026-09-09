@@ -108,6 +108,20 @@ struct SelectionViewTests {
         return bitmap
     }
 
+    @Test("A covered overlay is blind; a visible one and a hold session are not")
+    func blindPresentationDecision() {
+        // Fullscreen game: panels ordered, nothing on screen.
+        #expect(SelectionOverlayController.presentationIsBlind(ordered: 1, visible: 0, isHoldSession: false))
+        #expect(SelectionOverlayController.presentationIsBlind(ordered: 2, visible: 0, isHoldSession: false))
+        // Normal desktop: at least one panel made it.
+        #expect(!SelectionOverlayController.presentationIsBlind(ordered: 2, visible: 1, isHoldSession: false))
+        #expect(!SelectionOverlayController.presentationIsBlind(ordered: 1, visible: 1, isHoldSession: false))
+        // A hold session shows nothing until the drag threshold — never a fallback.
+        #expect(!SelectionOverlayController.presentationIsBlind(ordered: 1, visible: 0, isHoldSession: true))
+        // Nothing was ordered (no screens): the existing early-out already finished.
+        #expect(!SelectionOverlayController.presentationIsBlind(ordered: 0, visible: 0, isHoldSession: false))
+    }
+
     private func selectionPanel() -> SelectionPanel {
         SelectionPanel(
             contentRect: CGRect(x: 0, y: 0, width: 320, height: 220),

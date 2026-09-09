@@ -127,7 +127,15 @@ final class CaptureCoordinator {
                 resolutionScale: settings.resolutionScale,
                 atCGPoint: cursorPoint
             )
-            guard let (selection, mode) = await overlay.selectFrozen(snapshot: snapshot) else { return }
+            guard let (selection, mode) = await overlay.selectFrozen(snapshot: snapshot) else {
+                // G.3 adaptive: the overlay never reached the screen (a fullscreen game is
+                // above it), so the trigger would otherwise do nothing. The frozen display
+                // in hand is exactly what the owner wanted a shot of.
+                if overlay.consumeBlindPresentation() {
+                    await performFrozenScreenshot(snapshot, cgRect: snapshot.desktopBounds, sound: .fullScreenShot)
+                }
+                return
+            }
             switch mode {
             case .screenshot:
                 switch selection {
@@ -624,7 +632,8 @@ final class CaptureCoordinator {
 
     private func performFrozenScreenshot(
         _ snapshot: FrozenDesktopSnapshot,
-        cgRect: CGRect
+        cgRect: CGRect,
+        sound: FeedbackSound = .regionShot
     ) async {
         let acceptedToken = clipboardRequests.begin()
         let cropped = await Task.detached(priority: .userInitiated) { snapshot.crop(cgRect: cgRect) }.value
@@ -637,7 +646,7 @@ final class CaptureCoordinator {
             fail("Frozen region capture: clipboard write failed")
             return
         }
-        succeeded(.regionShot, preview: (crop.image, nil))
+        succeeded(sound, preview: (crop.image, nil))
     }
 
     private func performFrozenText(_ snapshot: FrozenDesktopSnapshot, cgRect: CGRect) {

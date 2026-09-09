@@ -61,6 +61,11 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     /// This exists before a hold snapshot arrives, so dragging can be clamped immediately.
     private var constrainedCGFrame: CGRect?
     private var isPresenting = false
+    /// Phase R (G.3 adaptive): set when the 50 ms visibility probe found the ordered
+    /// panels covered — a fullscreen game sits above `.screenSaver`, so the gesture can
+    /// never be drawn. The caller reads it once with `consumeBlindPresentation()` to tell
+    /// this apart from a user cancel and capture without UI instead.
+    private var presentationWasBlind = false
 
     // Global = AppKit screen space (bottom-left origin, Y up).
     private var dragAnchor: CGPoint?
@@ -233,6 +238,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     // MARK: - Presentation
 
     private func presentPanels(seedWindowSnap: Bool = true) {
+        presentationWasBlind = false
         // No screens (all displays asleep/detached): without this guard no panel is
         // ever created, so no event could resume the continuation -- selectRegion()
         // would hang forever with isPresenting stuck.
@@ -328,10 +334,19 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         // above .screenSaver. Report whether the panels actually made it on screen.
         TriggerLog.overlay("ordered=\(panels.count)")
         let ordered = panels
+        let isHoldSession = holdEndHandler != nil
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(50))
             let visible = ordered.filter { $0.occlusionState.contains(.visible) }.count
             TriggerLog.overlay("visible=\(visible)/\(ordered.count)")
+            // The probe outlives its session (a pick or Esc can land inside the 50 ms), so
+            // only the presentation it was started for may be abandoned.
+            guard self.isPresenting, self.panels.first === ordered.first,
+                Self.presentationIsBlind(ordered: ordered.count, visible: visible, isHoldSession: isHoldSession)
+            else { return }
+            TriggerLog.overlay("blind=1 falling back to a UI-less capture")
+            self.presentationWasBlind = true
+            self.finish(nil)
         }
 
         // Seed window-snap for the cursor's RESTING position: tracking areas emit no
@@ -383,6 +398,19 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         accent = .screenshot   // next session defaults to the screenshot (blue) accent
         holdIsText = false
         activeIsRight = false   // never let a prior right-drag leak into the next session's mode/visual
+    }
+
+    /// Pure decision behind the G.3 adaptive fallback: panels were ordered front, none of
+    /// them is on screen 50 ms later, and this is not a hold session (whose panels appear
+    /// only once the drag crosses the movement threshold, so "not visible" is normal).
+    static func presentationIsBlind(ordered: Int, visible: Int, isHoldSession: Bool) -> Bool {
+        ordered > 0 && visible == 0 && !isHoldSession
+    }
+
+    /// True once per blind presentation: the caller falls back to a UI-less capture.
+    func consumeBlindPresentation() -> Bool {
+        defer { presentationWasBlind = false }
+        return presentationWasBlind
     }
 
     private func finish(_ result: SelectionResult?, mode: HoldCaptureMode = .screenshot) {
