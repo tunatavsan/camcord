@@ -115,6 +115,10 @@ struct RecordingSettings: Codable, Equatable {
     /// only; never full-screen). Not captured in the recording.
     var windowGlowEnabled: Bool
 
+    /// Where the recording hub rests on the display. Persisted so it comes back where the
+    /// owner last threw it, instead of guessing from the target's geometry.
+    var hubDock: RecordingHubDock
+
     init(
         systemAudio: Bool = true,
         microphone: Bool = true,
@@ -140,7 +144,8 @@ struct RecordingSettings: Codable, Equatable {
         countdownEnabled: Bool = false,
         outputDirectoryPath: String? = nil,
         filenamePrefix: String = "camcord",
-        windowGlowEnabled: Bool = true
+        windowGlowEnabled: Bool = true,
+        hubDock: RecordingHubDock = .topCenter
     ) {
         self.systemAudio = systemAudio
         self.microphone = microphone
@@ -167,6 +172,7 @@ struct RecordingSettings: Codable, Equatable {
         self.outputDirectoryPath = outputDirectoryPath
         self.filenamePrefix = filenamePrefix
         self.windowGlowEnabled = windowGlowEnabled
+        self.hubDock = hubDock
     }
 
     /// True when a recording will produce two separate audio tracks that should be
@@ -234,6 +240,7 @@ struct RecordingSettings: Codable, Equatable {
         outputDirectoryPath = try c.decodeIfPresent(String.self, forKey: .outputDirectoryPath)
         filenamePrefix = try c.decodeIfPresent(String.self, forKey: .filenamePrefix) ?? d.filenamePrefix
         windowGlowEnabled = try c.decodeIfPresent(Bool.self, forKey: .windowGlowEnabled) ?? d.windowGlowEnabled
+        hubDock = (try? c.decodeIfPresent(RecordingHubDock.self, forKey: .hubDock)) ?? d.hubDock
     }
 
     /// Applies onto `base` only the fields where `self` differs from `old` — so a whole-
@@ -267,6 +274,7 @@ struct RecordingSettings: Codable, Equatable {
         if outputDirectoryPath != old.outputDirectoryPath { r.outputDirectoryPath = outputDirectoryPath }
         if filenamePrefix != old.filenamePrefix { r.filenamePrefix = filenamePrefix }
         if windowGlowEnabled != old.windowGlowEnabled { r.windowGlowEnabled = windowGlowEnabled }
+        if hubDock != old.hubDock { r.hubDock = hubDock }
         return r
     }
 

@@ -218,7 +218,7 @@ final class RecordingController: NSObject {
         }
         // The frame is the placement frame, not the window glow, so it is always drawn.
         indicator.showRecordingWindow(window.windowID, initialCGRect: window.frame, showsBorder: true,
-                                      title: "Başlat", glyph: .play, color: .systemRed,
+                                      mode: .armed, color: .systemRed,
                                       onCancel: { [weak self] in self?.cancelArmed() }) { [weak self] in
             Task { await self?.startArmed() }
         }
@@ -634,20 +634,28 @@ final class RecordingController: NSObject {
             switch target {
             case .window(let window):
                 indicator.showRecordingWindow(
-                    window.windowID, initialCGRect: window.frame, showsBorder: settings.windowGlowEnabled
+                    window.windowID, initialCGRect: window.frame, showsBorder: settings.windowGlowEnabled,
+                    onPauseResume: { [weak self] in self?.pauseResume() },
+                    onTogglePreview: { CameraOverlayController.shared.togglePreview() }
                 ) { [weak self] in
                     Task { await self?.toggleRecording() }
                 }
             case .display(let display, _, _):
-                indicator.showStopPillOnly(cgRect: display.frame, color: .systemRed) { [weak self] in
-                    Task { await self?.toggleRecording() }
-                }
+                indicator.showHubOnly(
+                    cgRect: display.frame, color: .systemRed,
+                    onStop: { [weak self] in Task { await self?.toggleRecording() } },
+                    onPauseResume: { [weak self] in self?.pauseResume() },
+                    onTogglePreview: { CameraOverlayController.shared.togglePreview() }
+                )
             case .region(let clamp, _, _):
-                indicator.show(cgRect: clamp.clampedRegion, color: .systemRed, label: nil) { [weak self] in
-                    Task { await self?.toggleRecording() }
-                }
+                indicator.show(
+                    cgRect: clamp.clampedRegion, color: .systemRed, label: nil,
+                    onStop: { [weak self] in Task { await self?.toggleRecording() } },
+                    onPauseResume: { [weak self] in self?.pauseResume() },
+                    onTogglePreview: { CameraOverlayController.shared.togglePreview() }
+                )
             }
-            indicator.updateStopPillElapsed(Self.formatElapsed(0))
+            indicator.updateHub(elapsed: Self.formatElapsed(0))
             onToast?(ToastRequest(text: "Kayıt başladı", systemSymbol: "record.circle.fill", tint: .systemRed, important: true))
         } catch RecordingError.incompleteRecording(let url, _) {
             reportPreservedPartial(url)
@@ -861,6 +869,7 @@ final class RecordingController: NSObject {
                     let health = await self.engine.healthSnapshot()
                     guard self.healthGeneration == generation, self.uiState == .recording else { return }
                     self.onHealthChange?(health)
+                    self.indicator.updateHubMicLevel(health?.microphone.levels?.rmsDBFS)
                     if let health { self.checkAudioHealth(health) }
                 }
             }
@@ -907,7 +916,7 @@ final class RecordingController: NSObject {
     private func pushUI() {
         let elapsedText: String? = uiState == .idle ? nil : Self.formatElapsed(currentElapsed)
         onUIChange?(uiState, elapsedText)
-        indicator.updateStopPillElapsed(elapsedText)
+        indicator.updateHub(elapsed: elapsedText, paused: uiState == .paused)
     }
 
     static func formatElapsed(_ interval: TimeInterval) -> String {

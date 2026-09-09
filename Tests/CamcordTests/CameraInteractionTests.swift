@@ -545,10 +545,12 @@ struct CameraInteractionTests {
             overlay.setPreviewVisibleForTesting(savedPreview)
         }
 
-        var announcements = 0
+        // The observer is delivered on `.main`, i.e. inside this test's own isolation —
+        // a main-actor counter states that instead of smuggling a captured `var` across.
+        let announcements = MainActorCounter()
         let token = NotificationCenter.default.addObserver(
             forName: CameraOverlayController.previewVisibilityDidChange, object: nil, queue: .main
-        ) { _ in announcements += 1 }
+        ) { _ in MainActor.assumeIsolated { announcements.value += 1 } }
         defer { NotificationCenter.default.removeObserver(token) }
 
         overlay.setPreviewVisibleForTesting(true)
@@ -556,10 +558,10 @@ struct CameraInteractionTests {
         // the closing one is safe to drive from a unit test.)
         overlay.closeFromTile()
         #expect(!overlay.previewVisible)
-        #expect(announcements == 1)
+        #expect(announcements.value == 1)
         // Idempotent: a second close is not a state change and must not announce one.
         overlay.closeFromTile()
-        #expect(announcements == 1)
+        #expect(announcements.value == 1)
     }
 
     @Test("the camera-recording shortcut flips the persisted flag and reports the new state")
@@ -644,7 +646,6 @@ struct CameraInteractionTests {
     func zonesContainTheirBadges() throws {
         for size in Self.reachableTiles {
             let bounds = CGRect(origin: .zero, size: size)
-            let radius = CameraOptions.cornerRadius(for: size)
             let line = CameraResizeGeometry.badgeLineWidth(in: bounds)
 
             for corner in CameraCorner.allCases {
@@ -994,4 +995,9 @@ struct CameraInteractionTests {
         #expect(abs(translation.y - 100) < 0.0001)
         #expect(options.rect(in: frameSize).minY > start.minY)
     }
+}
+
+/// A main-actor counter for notification observers delivered on `.main`.
+@MainActor private final class MainActorCounter {
+    var value = 0
 }
