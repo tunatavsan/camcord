@@ -78,17 +78,37 @@ final class CameraCompositor {
 
         let transparent = CIImage(color: .clear).cropped(to: screenExtent)
         let outerMask = try roundedMask(rect: cameraRect, radius: radius).cropped(to: screenExtent)
-        let shadowMask = outerMask.transformed(by: CGAffineTransform(translationX: 0, y: -radius * 0.4))
-            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius * 0.8])
+        // The shadow is sized off the TILE, not off the corner: the tile carries a light
+        // Apple-ish curve now, and a shadow derived from it would have shrunk with it —
+        // the separation from the desktop behind is exactly what has to grow.
+        let short = min(cameraRect.width, cameraRect.height)
+        let shadowMask = outerMask.transformed(by: CGAffineTransform(translationX: 0, y: -short * 0.06))
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: short * 0.16])
             .cropped(to: screenExtent)
 
         let shadow = try masked(
-            CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0.55)).cropped(to: screenExtent),
+            CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0.62)).cropped(to: screenExtent),
             mask: shadowMask,
             background: transparent
         )
+        // A hairline of light along the edge. On a dark frame the shadow alone leaves the
+        // tile bleeding into the background; this draws the boundary without a "border".
+        let hairline = CameraOptions.edgeHighlightWidth(for: cameraRect.size)
+        let innerMask = try roundedMask(
+            rect: cameraRect.insetBy(dx: hairline, dy: hairline),
+            radius: max(0, radius - hairline)
+        ).cropped(to: screenExtent)
+        let ringMask = outerMask.applyingFilter("CISourceOutCompositing", parameters: [
+            kCIInputBackgroundImageKey: innerMask
+        ]).cropped(to: screenExtent)
+        let ring = try masked(
+            CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: 0.28)).cropped(to: screenExtent),
+            mask: ringMask,
+            background: transparent
+        )
         let clippedCamera = try masked(cameraImage, mask: outerMask, background: transparent)
-        let composed = clippedCamera.composited(over: shadow.composited(over: screenImage))
+        let composed = ring
+            .composited(over: clippedCamera.composited(over: shadow.composited(over: screenImage)))
             .cropped(to: screenExtent)
 
         context.render(

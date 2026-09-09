@@ -534,6 +534,39 @@ struct CameraInteractionTests {
         #expect(!monitor.isRunning && !monitor.isStarting)
     }
 
+    @Test("a preview opened before the first frame is invisible and click-through until it arrives")
+    @MainActor func previewWaitsForItsFirstFrame() throws {
+        _ = NSApplication.shared
+        let overlay = CameraOverlayController.shared
+        let savedPreview = overlay.previewVisible
+        defer {
+            overlay.setPreviewVisibleForTesting(false)
+            overlay.recordingEnded()
+            overlay.setPreviewVisibleForTesting(savedPreview)
+            overlay.hide()
+        }
+
+        overlay.setPreviewVisibleForTesting(false)
+        overlay.hide()
+        overlay.setPreviewVisibleForTesting(true)
+        overlay.prepareRecording(cgRect: CGRect(x: -10_000, y: -10_000, width: 1280, height: 720),
+                                 options: CameraOptions(enabled: true))
+
+        // Up, laid out and confined — but showing nothing, because a camera that has not
+        // produced a frame yet would otherwise flash a black tile at the owner. It also
+        // must not eat the click of whatever it is floating over meanwhile.
+        let panel = try #require(NSApp.windows.first { $0.contentView is FloatingCameraView })
+        #expect(overlay.isVisible)
+        #expect(panel.alphaValue == 0)
+        #expect(panel.ignoresMouseEvents)
+
+        // Closing while it waits leaves nothing armed behind.
+        overlay.setPreviewVisibleForTesting(false)
+        overlay.hide()
+        #expect(!panel.ignoresMouseEvents)
+        #expect(!overlay.isVisible)
+    }
+
     @Test("only the chip and the menu item change the preview's visibility")
     @MainActor func previewVisibilityHasExactlyTwoWriters() {
         _ = NSApplication.shared

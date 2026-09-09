@@ -94,6 +94,23 @@ final class CaptureCoordinator {
 
     var contentCache: ShareableContentCache { cache }
 
+    /// The first `SCShareableContent` query of a process pays for the window enumeration AND
+    /// the capture-server handshake, and today it lands on the critical path of the FIRST
+    /// trigger — which is exactly the "it hangs once, then never again" the owner sees.
+    /// Doing it at launch moves that cost off the gesture. No pixels are captured.
+    func prewarm() {
+        Task.detached(priority: .utility) { [cache] in
+            let started = ContinuousClock.now
+            let ok = (try? await cache.content()) != nil
+            DiagnosticsLog.append("prewarm shareable-content ok=\(ok) ms=\(Self.elapsedMs(since: started))")
+        }
+    }
+
+    nonisolated static func elapsedMs(since start: ContinuousClock.Instant) -> Int {
+        let elapsed = (ContinuousClock.now - start).components
+        return Int(elapsed.seconds * 1000 + elapsed.attoseconds / 1_000_000_000_000_000)
+    }
+
     /// Presents the same selection overlay the screenshot flow uses and returns the
     /// user's pick, for RECORDING. The overlay tears its panels down before returning on
     /// every path. Left button = region drag / window click; right button = the whole
@@ -123,10 +140,14 @@ final class CaptureCoordinator {
                 fail("Frozen region capture: no display under the pointer")
                 return
             }
+            // Timed because the first one of these in a process is a suspect for the
+            // one-off stall; the file says whether the wait was here or in the overlay.
+            let snapshotStart = ContinuousClock.now
             let snapshot = try await ScreenshotService.captureFrozenDesktop(
                 resolutionScale: settings.resolutionScale,
                 atCGPoint: cursorPoint
             )
+            DiagnosticsLog.append("region frozen-snapshot ms=\(Self.elapsedMs(since: snapshotStart))")
             guard let (selection, mode) = await overlay.selectFrozen(snapshot: snapshot) else {
                 // G.3 adaptive: the overlay never reached the screen (a fullscreen game is
                 // above it), so the trigger would otherwise do nothing. The frozen display

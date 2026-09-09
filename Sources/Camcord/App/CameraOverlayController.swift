@@ -28,6 +28,10 @@ final class CameraOverlayController: NSObject {
     private var previewBounds: CGRect = .zero
     private var dragStart: (frame: CGRect, point: CGPoint, corner: CameraCorner?)?
     private var restartTask: Task<Void, Never>?
+    /// True while the panels are laid out but deliberately off screen, waiting for the
+    /// camera's first frame so the preview never flashes an empty black tile.
+    private var pendingReveal = false
+    private var revealTimeout: Task<Void, Never>?
     private var motion: CameraDragMotion?
     private var motionTimestamp: CFTimeInterval?
     private var motionLink: CADisplayLink?
@@ -67,6 +71,7 @@ final class CameraOverlayController: NSObject {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.cameraView.image = image
+                if image != nil, self.pendingReveal { self.reveal(appearing: true) }
             }
         }.store(in: &observations)
         monitor.$message.sink { [weak self] message in
@@ -170,6 +175,37 @@ final class CameraOverlayController: NSObject {
         visibilityToken &+= 1
         let appearing = !panel.isVisible
         layout()
+        // Opening onto a black rectangle while the device warms up is the ugliest second of
+        // the whole flow. The panel goes up (so confinement, layout and every caller's
+        // notion of "shown" are unchanged) but stays fully transparent and click-through
+        // until the first frame arrives — or until the grace period expires, after which
+        // the placeholder appears and says what is happening.
+        if appearing, cameraView.image == nil {
+            pendingReveal = true
+            panel.ignoresMouseEvents = true
+            panel.alphaValue = 0
+            shadowPanel.alphaValue = 0
+            shadowPanel.orderFrontRegardless()
+            panel.orderFrontRegardless()
+            revealTimeout?.cancel()
+            let token = visibilityToken
+            revealTimeout = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(1_200))
+                guard let self, !Task.isCancelled, self.visibilityToken == token, self.pendingReveal else { return }
+                self.reveal(appearing: true)
+            }
+            return
+        }
+        reveal(appearing: appearing)
+    }
+
+    /// Puts the panels on screen. Split out of `show()` so the first frame (or the timeout)
+    /// can drive it instead of the caller.
+    private func reveal(appearing: Bool) {
+        pendingReveal = false
+        revealTimeout?.cancel()
+        revealTimeout = nil
+        panel.ignoresMouseEvents = false
         panel.alphaValue = 1
         shadowPanel.alphaValue = 1
         shadowPanel.orderFrontRegardless()
@@ -194,6 +230,12 @@ final class CameraOverlayController: NSObject {
     func hide(animated: Bool = false) {
         stopMotion()
         restartTask?.cancel()
+        // A preview waiting for its first frame is cancelled here too, or it would fade in
+        // onto a screen the owner has already closed it on.
+        pendingReveal = false
+        revealTimeout?.cancel()
+        revealTimeout = nil
+        panel.ignoresMouseEvents = false
         visibilityToken &+= 1
         guard animated, panel.isVisible, !Self.reducesMotion else {
             releaseDevice()
@@ -268,7 +310,8 @@ final class CameraOverlayController: NSObject {
         let resized = panel.frame.size != frame.size
         if resized { panel.setFrame(frame, display: true) }
         else { panel.setFrameOrigin(frame.origin) }
-        let padding = CameraOptions.cornerRadius(for: local.size) * 3
+        // Room for the blur plus its drop, or the halo is clipped by its own panel.
+        let padding = ceil(min(local.width, local.height) * 0.30)
         shadowView.padding = padding
         let shadowFrame = frame.insetBy(dx: -padding, dy: -padding)
         if shadowPanel.frame.size != shadowFrame.size {
@@ -527,8 +570,18 @@ final class FloatingCameraView: NSView {
         let shape = NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius)
         NSGraphicsContext.saveGraphicsState()
         shape.addClip()
-        NSColor.black.withAlphaComponent(0.92).setFill()
-        bounds.fill()
+        if image == nil {
+            // The warming-up state. A flat black rectangle read as a broken window; this is
+            // a quiet graphite tile with the camera glyph, and it is only ever seen when the
+            // device is slow enough that `show()` gave up waiting for the first frame.
+            NSGradient(
+                starting: NSColor(calibratedRed: 0.17, green: 0.17, blue: 0.19, alpha: 0.95),
+                ending: NSColor(calibratedRed: 0.09, green: 0.09, blue: 0.11, alpha: 0.95)
+            )?.draw(in: bounds, angle: -90)
+        } else {
+            NSColor.black.withAlphaComponent(0.92).setFill()
+            bounds.fill()
+        }
         if let image {
             if mirrored {
                 let flip = AffineTransform(m11: -1, m12: 0, m21: 0, m22: 1, tX: bounds.width, tY: 0)
@@ -540,10 +593,38 @@ final class FloatingCameraView: NSView {
                               width: cropWidth, height: cropHeight)
             image.draw(in: bounds, from: crop, operation: .copy, fraction: 1)
         } else {
-            let text = NSAttributedString(string: message, attributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.white.withAlphaComponent(0.8)])
-            text.draw(in: bounds.insetBy(dx: 14, dy: max(10, bounds.height / 2 - 20)))
+            let text = NSAttributedString(string: message, attributes: [
+                .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+                .foregroundColor: NSColor.white.withAlphaComponent(0.72),
+            ])
+            let textSize = text.size()
+            let glyphPoint = min(30, bounds.height * 0.24)
+            let configuration = NSImage.SymbolConfiguration(pointSize: glyphPoint, weight: .regular)
+                .applying(NSImage.SymbolConfiguration(paletteColors: [NSColor.white.withAlphaComponent(0.42)]))
+            let glyph = NSImage(systemSymbolName: "video.fill", accessibilityDescription: nil)?
+                .withSymbolConfiguration(configuration)
+            let gap: CGFloat = glyph == nil ? 0 : 9
+            let stack = (glyph?.size.height ?? 0) + gap + textSize.height
+            var y = bounds.midY + stack / 2
+            if let glyph {
+                y -= glyph.size.height
+                glyph.draw(in: CGRect(x: bounds.midX - glyph.size.width / 2, y: y,
+                                      width: glyph.size.width, height: glyph.size.height))
+                y -= gap
+            }
+            text.draw(at: CGPoint(x: bounds.midX - textSize.width / 2, y: y - textSize.height))
         }
         NSGraphicsContext.restoreGraphicsState()
+
+        // The same hairline the compositor draws into the file.
+        let hairline = CameraOptions.edgeHighlightWidth(for: bounds.size)
+        let edge = NSBezierPath(
+            roundedRect: bounds.insetBy(dx: hairline / 2, dy: hairline / 2),
+            xRadius: max(0, radius - hairline / 2), yRadius: max(0, radius - hairline / 2)
+        )
+        edge.lineWidth = hairline
+        NSColor.white.withAlphaComponent(0.28).setStroke()
+        edge.stroke()
 
     }
 }
@@ -555,10 +636,14 @@ private final class CameraShadowView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let rect = bounds.insetBy(dx: padding, dy: padding)
         let radius = CameraOptions.cornerRadius(for: rect.size)
+        // Sized off the tile, not off the corner — the curve is light now, the separation
+        // from the desktop behind is not. Matches the compositor's shadow, so what the owner
+        // places on screen is what the file shows.
+        let short = min(rect.width, rect.height)
         let shadow = NSShadow()
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.55)
-        shadow.shadowBlurRadius = radius * 1.6
-        shadow.shadowOffset = NSSize(width: 0, height: -radius * 0.4)
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.62)
+        shadow.shadowBlurRadius = short * 0.16
+        shadow.shadowOffset = NSSize(width: 0, height: -short * 0.06)
         NSGraphicsContext.saveGraphicsState()
         shadow.set()
         NSColor.black.setFill()

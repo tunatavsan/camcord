@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let coordinator = CaptureCoordinator()
         captureCoordinator = coordinator
+        coordinator.prewarm()
 
         let recordingController = RecordingController(coordinator: coordinator)
         self.recordingController = recordingController

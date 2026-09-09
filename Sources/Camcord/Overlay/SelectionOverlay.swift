@@ -239,6 +239,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
 
     private func presentPanels(seedWindowSnap: Bool = true) {
         presentationWasBlind = false
+        let started = ContinuousClock.now
         // No screens (all displays asleep/detached): without this guard no panel is
         // ever created, so no event could resume the continuation -- selectRegion()
         // would hang forever with isPresenting stuck.
@@ -336,7 +337,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
 
         // Phase G.1: a trigger can arrive and still draw nothing — a fullscreen game sits
         // above .screenSaver. Report whether the panels actually made it on screen.
-        TriggerLog.overlay("ordered=\(panels.count)")
+        TriggerLog.overlay("ordered=\(panels.count) buildMs=\(CaptureCoordinator.elapsedMs(since: started))")
         let ordered = panels
         let isHoldSession = holdEndHandler != nil
         Task { @MainActor in
