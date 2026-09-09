@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import KeyboardShortcuts
 import Testing
 
 @testable import Camcord
@@ -147,5 +148,37 @@ struct HoldGestureDetectorTests {
         d.registerRelease(button: 4, dragged: false, at: 0.1)
         // ...then hold button 5 within the window → still a screenshot, not OCR.
         #expect(d.modeForPress(button: 5, at: 0.3) == .screenshot)
+    }
+
+    @Test("a shortcut already held by another action is a conflict, and only that")
+    func shortcutConflictRule() {
+        let taken = KeyboardShortcuts.Shortcut(.five, modifiers: [.command, .shift])
+        let free = KeyboardShortcuts.Shortcut(.six, modifiers: [.command, .shift])
+        let assignments: [KeyboardShortcuts.Name: KeyboardShortcuts.Shortcut] = [
+            .captureRegion: taken,
+            .toggleRecording: free,
+        ]
+
+        // Another action holds it → the owner is asked before anything moves.
+        #expect(ShortcutCatalogue.conflict(assigning: taken, to: .toggleCameraPreview, in: assignments) == .captureRegion)
+        // Re-recording the SAME combination onto the action that already has it is not a
+        // conflict with itself — that would make a shortcut impossible to re-confirm.
+        #expect(ShortcutCatalogue.conflict(assigning: taken, to: .captureRegion, in: assignments) == nil)
+        // An unused combination is free.
+        #expect(ShortcutCatalogue.conflict(assigning: KeyboardShortcuts.Shortcut(.seven, modifiers: [.command]),
+                                           to: .toggleCameraPreview, in: assignments) == nil)
+    }
+
+    @Test("every shortcut Settings offers has a label and appears exactly once")
+    func shortcutCatalogueIsComplete() {
+        let names = ShortcutCatalogue.all.map(\.name)
+        #expect(Set(names).count == names.count)
+        for entry in ShortcutCatalogue.all {
+            #expect(!entry.label.isEmpty)
+            #expect(ShortcutCatalogue.label(for: entry.name) == entry.label)
+        }
+        // The two camera shortcuts the owner asked for are in the list the recorders draw.
+        #expect(names.contains(.toggleCameraPreview))
+        #expect(names.contains(.toggleCameraRecording))
     }
 }

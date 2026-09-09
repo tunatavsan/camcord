@@ -769,6 +769,20 @@ struct InputSettingsView: View {
 
     @State private var bindings: TapBindings
     @State private var isAccessibilityTrusted: Bool
+    @State private var conflict: ShortcutConflict?
+    /// Last accepted assignment per action, so a rejected duplicate can be put back.
+    @State private var accepted: [KeyboardShortcuts.Name: KeyboardShortcuts.Shortcut] = [:]
+
+    /// A shortcut the owner just recorded onto an action that another one already holds.
+    /// It is reverted the moment it is detected — nothing is taken over silently — and this
+    /// carries what the sheet needs to offer the swap.
+    struct ShortcutConflict: Identifiable {
+        let id = UUID()
+        let name: KeyboardShortcuts.Name
+        let other: KeyboardShortcuts.Name
+        let shortcut: KeyboardShortcuts.Shortcut
+        let previous: KeyboardShortcuts.Shortcut?
+    }
 
     init(eventTapEngine: EventTapEngine, defaultsSuite: UserDefaults) {
         self.eventTapEngine = eventTapEngine
@@ -804,18 +818,16 @@ struct InputSettingsView: View {
                 Text("İstediğin tuş birleşimini kaydet; mevcut atamalarını buradan değiştirebilirsin.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                KeyboardShortcuts.Recorder("Bölge çek", name: .captureRegion)
-                KeyboardShortcuts.Recorder("Aktif pencere çek", name: .captureActiveWindow)
-                KeyboardShortcuts.Recorder("Tüm ekranı çek", name: .captureFullScreen)
-                KeyboardShortcuts.Recorder("Metni çek (OCR)", name: .captureTextRegion)
-                KeyboardShortcuts.Recorder("Kaydırmalı çekim", name: .captureScrolling)
-                KeyboardShortcuts.Recorder("Kayıt başlat / bitir", name: .toggleRecording)
-                KeyboardShortcuts.Recorder("Kaydı duraklat / sürdür", name: .pauseRecording)
-                KeyboardShortcuts.Recorder("Kamera önizlemesi aç / kapat", name: .toggleCameraPreview)
-                KeyboardShortcuts.Recorder("Kamerayı kayda göm aç / kapat", name: .toggleCameraRecording)
+                ForEach(ShortcutCatalogue.all, id: \.name) { entry in
+                    KeyboardShortcuts.Recorder(entry.label, name: entry.name) { shortcut in
+                        shortcutChanged(entry.name, to: shortcut)
+                    }
+                }
             }
         }
         .formStyle(.grouped)
+        .onAppear { accepted = ShortcutCatalogue.assignments() }
+        .sheet(item: $conflict) { conflictSheet($0) }
         .onChange(of: bindings) { _, newValue in
             newValue.save(to: defaultsSuite)
             eventTapEngine.apply(newValue)
@@ -844,6 +856,87 @@ struct InputSettingsView: View {
         }
         Text("Yapıştır").tag(TapAction?.some(.paste))
         Text("Kayıt başlat / durdur").tag(TapAction?.some(.toggleRecording))
+    }
+
+    /// A duplicate is never taken silently: the recording is put back the moment it is seen,
+    /// and the sheet asks whether the owner meant to move it off the other action.
+    private func shortcutChanged(_ name: KeyboardShortcuts.Name, to shortcut: KeyboardShortcuts.Shortcut?) {
+        guard let shortcut else {
+            accepted[name] = nil
+            return
+        }
+        guard let other = ShortcutCatalogue.conflict(
+            assigning: shortcut, to: name, in: ShortcutCatalogue.assignments()
+        ) else {
+            accepted[name] = shortcut
+            return
+        }
+        let previous = accepted[name]
+        KeyboardShortcuts.setShortcut(previous, for: name)
+        conflict = ShortcutConflict(name: name, other: other, shortcut: shortcut, previous: previous)
+    }
+
+    private func takeOver(_ conflict: ShortcutConflict) {
+        KeyboardShortcuts.setShortcut(nil, for: conflict.other)
+        KeyboardShortcuts.setShortcut(conflict.shortcut, for: conflict.name)
+        accepted[conflict.other] = nil
+        accepted[conflict.name] = conflict.shortcut
+    }
+
+    private func conflictSheet(_ conflict: ShortcutConflict) -> some View {
+        VStack(spacing: 0) {
+            ZStack {
+                Circle().fill(CamcordStyle.accent.opacity(0.15))
+                Image(systemName: "command")
+                    .font(.system(size: 21, weight: .semibold))
+                    .foregroundStyle(CamcordStyle.accent)
+            }
+            .frame(width: 52, height: 52)
+            .padding(.top, 24)
+
+            Text("Bu kısayol dolu")
+                .font(.system(size: 15, weight: .semibold))
+                .padding(.top, 13)
+
+            Text(conflict.shortcut.description)
+                .font(.system(size: 14, weight: .medium))
+                .padding(.horizontal, 11)
+                .padding(.vertical, 5)
+                .background(
+                    CamcordStyle.quietFill,
+                    in: RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous)
+                        .strokeBorder(CamcordStyle.innerBorder)
+                )
+                .padding(.top, 12)
+
+            Text("şu an “\(ShortcutCatalogue.label(for: conflict.other))” için atanmış. Yerine geçerse o eylem kısayolsuz kalır.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 26)
+                .padding(.top, 10)
+
+            HStack(spacing: 10) {
+                Button("Vazgeç") { self.conflict = nil }
+                    .keyboardShortcut(.cancelAction)
+                Button("Yerine geç") {
+                    takeOver(conflict)
+                    self.conflict = nil
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+            }
+            .controlSize(.large)
+            .padding(.top, 20)
+            .padding(.bottom, 22)
+        }
+        .frame(width: 334)
+        .background(CamcordMaterial(material: .popover))
+        .clipShape(RoundedRectangle(cornerRadius: CamcordStyle.Radius.surface, style: .continuous))
     }
 
     @ViewBuilder

@@ -23,6 +23,46 @@ extension KeyboardShortcuts.Name {
     static let toggleCameraRecording = Self("toggleCameraRecording")
 }
 
+/// Every shortcut the app offers, in the order Settings lists them, with the label the owner
+/// reads. One list so the recorders and the conflict check can never drift apart.
+enum ShortcutCatalogue {
+    static let all: [(name: KeyboardShortcuts.Name, label: String)] = [
+        (.captureRegion, "Bölge çek"),
+        (.captureActiveWindow, "Aktif pencere çek"),
+        (.captureFullScreen, "Tüm ekranı çek"),
+        (.captureTextRegion, "Metni çek (OCR)"),
+        (.captureScrolling, "Kaydırmalı çekim"),
+        (.toggleRecording, "Kayıt başlat / bitir"),
+        (.pauseRecording, "Kaydı duraklat / sürdür"),
+        (.toggleCameraPreview, "Kamera önizlemesi aç / kapat"),
+        (.toggleCameraRecording, "Kamerayı kayda göm aç / kapat"),
+    ]
+
+    static func label(for name: KeyboardShortcuts.Name) -> String {
+        all.first { $0.name == name }?.label ?? name.rawValue
+    }
+
+    /// The OTHER action already holding `shortcut`, if any. Pure so the rule can be tested
+    /// without touching the real defaults; `assignments` is what is currently stored.
+    static func conflict(
+        assigning shortcut: KeyboardShortcuts.Shortcut,
+        to name: KeyboardShortcuts.Name,
+        in assignments: [KeyboardShortcuts.Name: KeyboardShortcuts.Shortcut]
+    ) -> KeyboardShortcuts.Name? {
+        assignments.first { $0.key != name && $0.value == shortcut }?.key
+    }
+
+    /// What Settings currently has stored, in catalogue order.
+    @MainActor
+    static func assignments() -> [KeyboardShortcuts.Name: KeyboardShortcuts.Shortcut] {
+        var result: [KeyboardShortcuts.Name: KeyboardShortcuts.Shortcut] = [:]
+        for entry in all {
+            if let shortcut = KeyboardShortcuts.getShortcut(for: entry.name) { result[entry.name] = shortcut }
+        }
+        return result
+    }
+}
+
 @MainActor
 final class HotkeyCenter {
     private let coordinator: CaptureCoordinator

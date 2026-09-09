@@ -157,23 +157,51 @@ enum CameraResizeGeometry {
 
     // MARK: - Badge geometry (the resize grip and the close button)
 
-    /// The grip badge scales with the tile instead of sitting at a fixed 28 pt, which on a
-    /// small preview was most of the corner.
-    static func handleSize(in bounds: CGRect) -> CGFloat {
-        min(max(min(bounds.width, bounds.height) * 0.16, 22), 30)
+    /// The gap between the tile's own corner curve and the grip drawn inside it. Everything
+    /// about the grip is derived from the tile's radius, so the two curves are concentric —
+    /// the grip reads as the corner itself, one hair in.
+    static func gripGap(in bounds: CGRect) -> CGFloat {
+        max(3, CameraOptions.cornerRadius(for: bounds.size) * 0.32)
     }
 
-    /// Where the grip badge sits. Pushed in far enough that the whole badge stays INSIDE
-    /// the tile's rounded corner — the view's layer does not clip its sublayers, so a badge
-    /// placed by edge distance alone spills past the curve and reads as broken.
-    static func handleFrame(_ corner: CameraCorner, in bounds: CGRect) -> CGRect {
-        let size = handleSize(in: bounds)
-        let inset = size / 2 + max(3, CameraOptions.cornerRadius(for: bounds.size) * 0.42)
+    /// Radius of the quarter circle the grip draws: the tile's radius minus that gap, and
+    /// never less than half of it — on a tiny tile a fixed gap would eat the whole arc.
+    static func gripArcRadius(in bounds: CGRect) -> CGFloat {
+        let radius = CameraOptions.cornerRadius(for: bounds.size)
+        return max(radius * 0.5, radius - gripGap(in: bounds))
+    }
+
+    /// Centre of the tile's corner curve — and therefore of the grip's arc.
+    static func cornerArcCenter(_ corner: CameraCorner, in bounds: CGRect) -> CGPoint {
+        let radius = CameraOptions.cornerRadius(for: bounds.size)
         let right = corner == .topRight || corner == .bottomRight
         let top = corner == .topLeft || corner == .topRight
-        let center = CGPoint(x: right ? bounds.maxX - inset : bounds.minX + inset,
-                             y: top ? bounds.maxY - inset : bounds.minY + inset)
-        return CGRect(x: center.x - size / 2, y: center.y - size / 2, width: size, height: size)
+        return CGPoint(x: right ? bounds.maxX - radius : bounds.minX + radius,
+                       y: top ? bounds.maxY - radius : bounds.minY + radius)
+    }
+
+    /// The square the grip's layer occupies, centred on the arc so the reveal animation
+    /// scales out of the corner instead of sliding.
+    static func handleFrame(_ corner: CameraCorner, in bounds: CGRect) -> CGRect {
+        let arc = gripArcRadius(in: bounds)
+        let center = cornerArcCenter(corner, in: bounds)
+        return CGRect(x: center.x - arc, y: center.y - arc, width: arc * 2, height: arc * 2)
+    }
+
+    /// Angles (radians, y-up) of the quarter the grip draws for each corner.
+    static func gripArcAngles(_ corner: CameraCorner) -> (start: CGFloat, end: CGFloat) {
+        switch corner {
+        case .bottomLeft: return (.pi, 1.5 * .pi)
+        case .bottomRight: return (1.5 * .pi, 2 * .pi)
+        case .topRight: return (0, 0.5 * .pi)
+        case .topLeft: return (0.5 * .pi, .pi)
+        }
+    }
+
+    /// Stroke weight shared by the grip and the close button: a hairline that still reads
+    /// on a bright frame, scaled so a large tile does not get a thread.
+    static func badgeLineWidth(in bounds: CGRect) -> CGFloat {
+        min(max(min(bounds.width, bounds.height) * 0.012, 1.5), 3)
     }
 
     /// The close button's circle, centred on the tile's top edge. `nil` when the tile is too

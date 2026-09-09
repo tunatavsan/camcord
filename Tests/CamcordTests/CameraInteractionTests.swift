@@ -587,22 +587,40 @@ struct CameraInteractionTests {
         #expect(off.systemSymbol == "video.slash.fill")
     }
 
-    @Test("the resize grip always sits inside the tile's rounded corner")
-    func gripBadgeStaysInsideTheTile() {
-        // The view's layer does not clip its sublayers, so a badge placed by edge distance
-        // alone spills past the corner curve — which is exactly what it used to do.
+    @Test("the resize grip is a quarter circle concentric with the tile's own corner")
+    func gripArcHugsTheCorner() {
         for size in [CGSize(width: 320, height: 180), CGSize(width: 160, height: 90),
                      CGSize(width: 96, height: 54), CGSize(width: 960, height: 540)] {
             let bounds = CGRect(origin: .zero, size: size)
             let radius = CameraOptions.cornerRadius(for: size)
+            let arc = CameraResizeGeometry.gripArcRadius(in: bounds)
+            let line = CameraResizeGeometry.badgeLineWidth(in: bounds)
             let tile = CGPath(roundedRect: bounds, cornerWidth: radius, cornerHeight: radius, transform: nil)
+            // Strictly inside the tile's own curve, stroke included — the badge used to be a
+            // square placed by edge distance, which hung over the corner.
+            #expect(arc > 0)
+            #expect(arc + line / 2 < radius, "grip stroke reaches the tile edge at \(size)")
+
             for corner in CameraCorner.allCases {
+                let center = CameraResizeGeometry.cornerArcCenter(corner, in: bounds)
                 let frame = CameraResizeGeometry.handleFrame(corner, in: bounds)
-                #expect(frame.width == CameraResizeGeometry.handleSize(in: bounds))
-                for point in [CGPoint(x: frame.minX, y: frame.minY), CGPoint(x: frame.maxX, y: frame.minY),
-                              CGPoint(x: frame.minX, y: frame.maxY), CGPoint(x: frame.maxX, y: frame.maxY)] {
-                    #expect(tile.contains(point), "\(corner) badge leaves the tile at \(size)")
-                }
+                let right = corner == .topRight || corner == .bottomRight
+                let top = corner == .topLeft || corner == .topRight
+                // Concentric: the arc's centre IS the tile corner curve's centre.
+                #expect(abs(center.x - (right ? bounds.maxX - radius : bounds.minX + radius)) < 0.001)
+                #expect(abs(center.y - (top ? bounds.maxY - radius : bounds.minY + radius)) < 0.001)
+                #expect(abs(frame.midX - center.x) < 0.001)
+                #expect(abs(frame.midY - center.y) < 0.001)
+                #expect(abs(frame.width - arc * 2) < 0.001)
+
+                // The quarter drawn is the one facing its corner, and it lands inside the tile.
+                let angles = CameraResizeGeometry.gripArcAngles(corner)
+                #expect(abs((angles.end - angles.start) - .pi / 2) < 0.001)
+                let mid = (angles.start + angles.end) / 2
+                let onArc = CGPoint(x: center.x + cos(mid) * arc, y: center.y + sin(mid) * arc)
+                #expect((onArc.x < bounds.midX) == !right)
+                #expect((onArc.y < bounds.midY) == !top)
+                #expect(tile.contains(onArc))
             }
         }
     }

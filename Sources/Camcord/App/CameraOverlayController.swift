@@ -178,13 +178,6 @@ final class CameraOverlayController: NSObject {
 
     private func show() {
         cameraView.mirrored = options.mirrored
-        // A show() landing inside the 150 ms fade-out has to cancel it through the same
-        // animator: a plain assignment loses the race and leaves the panel at alpha 0.
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0
-            panel.animator().alphaValue = 1
-            shadowPanel.animator().alphaValue = 1
-        }
         CameraPreviewMonitor.shared.setVisible(true, owner: "floating")
         visibilityToken &+= 1
         let appearing = !panel.isVisible
@@ -194,7 +187,17 @@ final class CameraOverlayController: NSObject {
         // notion of "shown" are unchanged) but stays fully transparent and click-through
         // until the first frame arrives — or until the grace period expires, after which
         // the placeholder appears and says what is happening.
-        if appearing, cameraView.image == nil {
+        let waiting = appearing && cameraView.image == nil
+        // A show() landing inside the 150 ms fade-out has to cancel it through the same
+        // animator: a plain assignment loses the race and leaves the panel at alpha 0. The
+        // target is the alpha we actually want — animating to 1 and then assigning 0 let a
+        // fully opaque placeholder tile flash for a frame before it disappeared again.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            panel.animator().alphaValue = waiting ? 0 : 1
+            shadowPanel.animator().alphaValue = waiting ? 0 : 1
+        }
+        if waiting {
             pendingReveal = true
             panel.ignoresMouseEvents = true
             panel.alphaValue = 0
@@ -220,15 +223,22 @@ final class CameraOverlayController: NSObject {
         revealTimeout?.cancel()
         revealTimeout = nil
         panel.ignoresMouseEvents = false
-        panel.alphaValue = 1
-        shadowPanel.alphaValue = 1
+        let animate = appearing && !Self.reducesMotion
+        let final = panel.frame
+        // Every pixel of the opening state is set BEFORE the panel is ordered front.
+        // Ordering a window in makes the server composite it at its current alpha, so the
+        // old "order front at 1, then set 0 and animate up" showed one opaque frame first.
+        if animate {
+            panel.setFrame(final.insetBy(dx: final.width * 0.04, dy: final.height * 0.04), display: false)
+            panel.alphaValue = 0
+            shadowPanel.alphaValue = 0
+        } else {
+            panel.alphaValue = 1
+            shadowPanel.alphaValue = 1
+        }
         shadowPanel.orderFrontRegardless()
         panel.orderFrontRegardless()
-        guard appearing, !Self.reducesMotion else { return }
-        let final = panel.frame
-        panel.setFrame(final.insetBy(dx: final.width * 0.04, dy: final.height * 0.04), display: false)
-        panel.alphaValue = 0
-        shadowPanel.alphaValue = 0
+        guard animate else { return }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.2
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -458,33 +468,28 @@ final class FloatingCameraView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        handle.bounds = CGRect(x: 0, y: 0, width: 28, height: 28)
-        handle.cornerRadius = 9
-        handle.backgroundColor = NSColor.black.withAlphaComponent(0.36).cgColor
+        // Both badges are drawn, not filled: a hairline of white that carries its own soft
+        // shadow, so they separate from bright video without putting a slab over it.
         handle.opacity = 0
-        handle.shadowColor = NSColor.black.cgColor
-        handle.shadowOpacity = 0.35
-        handle.shadowRadius = 4
-        handle.shadowOffset = CGSize(width: 0, height: -1)
-        grip.fillColor = nil
-        grip.strokeColor = NSColor.white.withAlphaComponent(0.95).cgColor
-        grip.lineWidth = 2.3
-        grip.lineCap = .round
-        grip.lineJoin = .round
+        Self.style(grip)
         handle.addSublayer(grip)
         layer?.addSublayer(handle)
 
-        closeBadge.backgroundColor = NSColor.black.withAlphaComponent(0.42).cgColor
         closeBadge.opacity = 0
-        closeBadge.shadowColor = NSColor.black.cgColor
-        closeBadge.shadowOpacity = 0.35
-        closeBadge.shadowRadius = 4
-        closeBadge.shadowOffset = CGSize(width: 0, height: -1)
-        closeGlyph.fillColor = nil
-        closeGlyph.strokeColor = NSColor.white.withAlphaComponent(0.95).cgColor
-        closeGlyph.lineCap = .round
+        Self.style(closeGlyph)
         closeBadge.addSublayer(closeGlyph)
         layer?.addSublayer(closeBadge)
+    }
+
+    private static func style(_ shape: CAShapeLayer) {
+        shape.fillColor = nil
+        shape.strokeColor = NSColor.white.withAlphaComponent(0.95).cgColor
+        shape.lineCap = .round
+        shape.lineJoin = .round
+        shape.shadowColor = NSColor.black.cgColor
+        shape.shadowOpacity = 0.55
+        shape.shadowRadius = 3
+        shape.shadowOffset = CGSize(width: 0, height: -1)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -597,24 +602,17 @@ final class FloatingCameraView: NSView {
     private func positionHandle() {
         guard let corner = indicated?.corner else { return }
         let frame = CameraResizeGeometry.handleFrame(corner, in: bounds)
-        let side = frame.width
-        let right = corner == .topRight || corner == .bottomRight
-        let top = corner == .topLeft || corner == .topRight
-        // The grip is drawn in the badge's own square, so every measure scales with it.
+        let arc = CameraResizeGeometry.gripArcRadius(in: bounds)
+        let angles = CameraResizeGeometry.gripArcAngles(corner)
+        // A quarter circle sharing the tile corner's centre: the same curve, one gap in.
         let path = CGMutablePath()
-        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
-            CGPoint(x: right ? side - x * side : x * side, y: top ? side - y * side : y * side)
-        }
-        path.move(to: point(0.71, 0.29))
-        path.addLine(to: point(0.46, 0.29))
-        path.addQuadCurve(to: point(0.29, 0.46), control: point(0.29, 0.29))
-        path.addLine(to: point(0.29, 0.71))
+        path.addArc(center: CGPoint(x: arc, y: arc), radius: arc,
+                    startAngle: angles.start, endAngle: angles.end, clockwise: false)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        handle.bounds = CGRect(x: 0, y: 0, width: side, height: side)
-        handle.cornerRadius = side * 0.32
+        handle.bounds = CGRect(x: 0, y: 0, width: frame.width, height: frame.height)
         handle.position = CGPoint(x: frame.midX, y: frame.midY)
-        grip.lineWidth = max(1.6, side * 0.085)
+        grip.lineWidth = CameraResizeGeometry.badgeLineWidth(in: bounds)
         grip.path = path
         CATransaction.commit()
     }
@@ -625,8 +623,12 @@ final class FloatingCameraView: NSView {
             return
         }
         let side = frame.width
-        let arm = side * 0.27
+        let line = CameraResizeGeometry.badgeLineWidth(in: bounds)
+        let arm = side * 0.22
+        // The same language as the grip: a drawn ring, not a filled disc, with the × inside.
         let path = CGMutablePath()
+        path.addEllipse(in: CGRect(x: line / 2, y: line / 2,
+                                   width: side - line, height: side - line))
         path.move(to: CGPoint(x: side / 2 - arm, y: side / 2 - arm))
         path.addLine(to: CGPoint(x: side / 2 + arm, y: side / 2 + arm))
         path.move(to: CGPoint(x: side / 2 - arm, y: side / 2 + arm))
@@ -634,9 +636,8 @@ final class FloatingCameraView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         closeBadge.bounds = CGRect(x: 0, y: 0, width: side, height: side)
-        closeBadge.cornerRadius = side / 2
         closeBadge.position = CGPoint(x: frame.midX, y: frame.midY)
-        closeGlyph.lineWidth = max(1.6, side * 0.09)
+        closeGlyph.lineWidth = line
         closeGlyph.path = path
         CATransaction.commit()
     }
