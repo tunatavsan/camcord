@@ -687,8 +687,11 @@ private struct RecentRecordingRow: View {
                 }
             }
             .frame(width: 56, height: 34)
-            .clipShape(RoundedRectangle(cornerRadius: 5))
-            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.separator))
+            .clipShape(RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous)
+                    .strokeBorder(.separator)
+            )
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.name).lineLimit(1)
