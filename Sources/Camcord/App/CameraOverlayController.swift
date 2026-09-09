@@ -564,6 +564,11 @@ final class FloatingCameraView: NSView {
         window?.invalidateCursorRects(for: self)
     }
 
+    #if DEBUG
+    /// Test seam: drives the hover state without synthesising an NSEvent.
+    func indicateForTesting(_ hotspot: CameraHotspot?) { indicate(hotspot) }
+    #endif
+
     private func indicate(_ hotspot: CameraHotspot?) {
         guard hotspot != indicated else { return }
         let previousHotspot = indicated
