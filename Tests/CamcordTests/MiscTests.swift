@@ -178,6 +178,49 @@ struct FullscreenContextTests {
         #expect(!context(front: nil, covers: true).isGameLike)
     }
 
+    private func window(pid: pid_t, x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat,
+                        layer: Int = 0, alpha: Double = 1, owner: String = "League of Legends") -> [String: Any] {
+        [
+            kCGWindowOwnerPID as String: pid,
+            kCGWindowOwnerName as String: owner,
+            kCGWindowAlpha as String: alpha,
+            kCGWindowLayer as String: layer,
+            kCGWindowBounds as String: ["X": x, "Y": y, "Width": w, "Height": h],
+        ]
+    }
+
+    @Test("only the frontmost app's opaque covering window counts as cover")
+    func coveringWindowFiltering() {
+        let display = CGRect(x: 0, y: 0, width: 1800, height: 1169)
+        let game: pid_t = 501
+
+        // A fullscreen game window at the shielding level.
+        #expect(FullscreenContext.coveringLayer(
+            in: [window(pid: game, x: 0, y: 0, w: 1800, h: 1169, layer: 2_147_483_631)],
+            pid: game, displayBounds: display) == 2_147_483_631)
+        // A window of another process never counts, however large.
+        #expect(FullscreenContext.coveringLayer(
+            in: [window(pid: 777, x: 0, y: 0, w: 1800, h: 1169)],
+            pid: game, displayBounds: display) == nil)
+        // Fully transparent windows are not cover.
+        #expect(FullscreenContext.coveringLayer(
+            in: [window(pid: game, x: 0, y: 0, w: 1800, h: 1169, alpha: 0)],
+            pid: game, displayBounds: display) == nil)
+        // Finder's desktop spans the display but leaves room for our overlays.
+        #expect(FullscreenContext.coveringLayer(
+            in: [window(pid: game, x: 0, y: 0, w: 1800, h: 1169, owner: "Finder")],
+            pid: game, displayBounds: display) == nil)
+        // A merely large window that does not contain the display is not cover.
+        #expect(FullscreenContext.coveringLayer(
+            in: [window(pid: game, x: 100, y: 0, w: 1700, h: 1169)],
+            pid: game, displayBounds: display) == nil)
+        // The first covering window wins, and a normal-level one reports layer 0.
+        #expect(FullscreenContext.coveringLayer(
+            in: [window(pid: game, x: 0, y: 40, w: 800, h: 600),
+                 window(pid: game, x: 0, y: 0, w: 1800, h: 1169)],
+            pid: game, displayBounds: display) == 0)
+    }
+
     @Test("the log line carries both failure classes")
     func logLineShape() {
         let line = context(front: "com.x.y", covers: true, layer: 25, captured: true).logLine

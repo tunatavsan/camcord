@@ -342,12 +342,14 @@ struct CapturePanelView: View {
                     Text("Önizleme")
                 }
                 .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(previewVisible ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
+                // `.secondary` off, not `.tertiary`: this is an available control, not a
+                // disabled one — reading as disabled is how the old text button was missed.
+                .foregroundStyle(previewVisible ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                 .padding(.horizontal, 8)
                 .frame(height: 22)
                 .background(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(Color.primary.opacity(previewVisible ? (hovering ? 0.15 : 0.11) : (hovering ? 0.08 : 0.035)))
+                        .fill(Color.primary.opacity(previewVisible ? (hovering ? 0.16 : 0.12) : (hovering ? 0.10 : 0.06)))
                 )
             }
             .help("Kamera önizleme penceresini açar veya gizler — kayda kamera gömmekten bağımsızdır")

@@ -40,7 +40,11 @@ struct FullscreenContext: Equatable {
         let displayID = screen?.cgDirectDisplayID ?? CGMainDisplayID()
         let frontmost = NSWorkspace.shared.frontmostApplication
         let displayBounds = CGDisplayBounds(displayID)
-        let covering = frontmost.flatMap { coveringWindow(pid: $0.processIdentifier, displayBounds: displayBounds) }
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+            as? [[String: Any]] ?? []
+        let covering = frontmost.flatMap {
+            coveringLayer(in: windows, pid: $0.processIdentifier, displayBounds: displayBounds)
+        }
         return FullscreenContext(
             displayID: displayID,
             frontmostBundleID: frontmost?.bundleIdentifier,
@@ -54,10 +58,8 @@ struct FullscreenContext: Equatable {
 
     /// `kCGWindowLayer` of the frontmost app's first on-screen window that contains the
     /// display's bounds. Fully transparent windows and Finder's desktop are not cover.
-    @MainActor
-    private static func coveringWindow(pid: pid_t, displayBounds: CGRect) -> Int? {
-        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
-                as? [[String: Any]] else { return nil }
+    /// Pure over the window list so the filtering itself is testable with fake dictionaries.
+    static func coveringLayer(in list: [[String: Any]], pid: pid_t, displayBounds: CGRect) -> Int? {
         for window in list {
             guard window[kCGWindowOwnerPID as String] as? pid_t == pid else { continue }
             if let owner = window[kCGWindowOwnerName as String] as? String, owner == "Finder" { continue }
