@@ -17,6 +17,10 @@ extension KeyboardShortcuts.Name {
     /// right-click = whole screen), and finishes the active one otherwise.
     static let toggleRecording = Self("toggleRecording")
     static let pauseRecording = Self("pauseRecording")
+    /// Opens or closes the floating camera preview. Independent of whether the camera is
+    /// composited into the file — that is `toggleCameraRecording`.
+    static let toggleCameraPreview = Self("toggleCameraPreview")
+    static let toggleCameraRecording = Self("toggleCameraRecording")
 }
 
 @MainActor
@@ -40,6 +44,32 @@ final class HotkeyCenter {
             }
         }
         Self.onKeyDown(.pauseRecording, "pauseRecording") { [recordingController] _ in recordingController.pauseResume() }
+        Self.onKeyDown(.toggleCameraPreview, "toggleCameraPreview") { _ in
+            CameraOverlayController.shared.togglePreview()
+        }
+        // The panel/menu chips write the same state, so nothing else has to be told.
+        Self.onKeyDown(.toggleCameraRecording, "toggleCameraRecording") { [weak self] _ in
+            guard let self else { return }
+            self.onToast?(Self.toggleCameraRecording())
+        }
+    }
+
+    /// The panel may well be closed when this fires, so the shortcuts say what they did.
+    var onToast: ((ToastRequest) -> Void)?
+
+    /// Flips "Kamerayı kaydet" through the same field the panel toggle writes. The
+    /// compositor reads the flag live, so this needs no idle gate.
+    @discardableResult
+    static func toggleCameraRecording() -> ToastRequest {
+        var settings = RecordingSettings.load(from: .standard)
+        settings.camera.enabled.toggle()
+        settings.save(to: .standard)
+        return ToastRequest(
+            text: settings.camera.enabled ? "Kamera kayda gömülecek" : "Kamera kayda gömülmeyecek",
+            systemSymbol: settings.camera.enabled ? "video.fill" : "video.slash.fill",
+            tint: .systemBlue,
+            important: true
+        )
     }
 
     /// What the record hotkey does (Phase G.6 lite). A game confines the cursor and sits

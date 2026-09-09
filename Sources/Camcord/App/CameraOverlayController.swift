@@ -11,12 +11,17 @@ final class CameraOverlayController: NSObject {
 
     var onPlacementChange: ((CameraOptions) -> Void)?
     var isVisible: Bool { panel.isVisible }
-    /// Only the chip and the status-menu item change `previewVisible`: the preview belongs
-    /// to the owner. Arming and recording may CONFINE it (`prepareRecording`), never open
-    /// it -- a placement made with it closed lands in the file just the same. `private(set)`
-    /// is what enforces that: no arming, recording or panel-visible path can even compile a
-    /// write to it, which is the regression this whole phase exists to bury.
+    /// Only the owner's own surfaces change `previewVisible` -- the panel chip, the
+    /// status-menu item, the tile's own close button and the shortcut, all through
+    /// `setPreviewVisible`. Arming and recording may CONFINE the preview
+    /// (`prepareRecording`), never open it: a placement made with it closed lands in the
+    /// file just the same. `private(set)` is what enforces that -- no arming, recording or
+    /// panel-visible path can even compile a write to it.
     private(set) var previewVisible = false
+
+    /// Posted whenever `previewVisible` changes, so a chip drawn elsewhere (the panel) does
+    /// not go stale when the shortcut or the tile's × flips it.
+    static let previewVisibilityDidChange = Notification.Name("dev.tavsan.camcord.previewVisibilityDidChange")
 
     private let panel: NSPanel
     private let cameraView = FloatingCameraView()
@@ -66,6 +71,7 @@ final class CameraOverlayController: NSObject {
         panel.contentView = cameraView
         panel.animationBehavior = .none
         cameraView.onDrag = { [weak self] phase, point, corner in self?.drag(phase, point: point, corner: corner) }
+        cameraView.onClose = { [weak self] in self?.setPreviewVisible(false) }
         let monitor = CameraPreviewMonitor.shared
         monitor.$image.sink { [weak self] image in
             MainActor.assumeIsolated {
@@ -107,15 +113,23 @@ final class CameraOverlayController: NSObject {
     }
 
     #if DEBUG
-    /// Test seam: places the owner's switch without `togglePreview()`'s device side effects
-    /// (opening it asks for camera permission, which a unit test must never do).
+    /// Test seam: places the owner's switch without `setPreviewVisible`'s device side
+    /// effects (opening it asks for camera permission, which a unit test must never do).
     func setPreviewVisibleForTesting(_ value: Bool) { previewVisible = value }
     #endif
 
-    /// One of the two writers of `previewVisible`; the status-menu item is the other.
+    /// The single writer behind every owner surface: chip, status menu, the tile's × and
+    /// the shortcut. Opening asks for permission only when the owner asked for it directly.
+    func setPreviewVisible(_ visible: Bool, requestPermission: Bool = false) {
+        guard previewVisible != visible else { return }
+        previewVisible = visible
+        if visible { showPreview(requestPermission: requestPermission) } else { hide(animated: true) }
+        NotificationCenter.default.post(name: Self.previewVisibilityDidChange, object: nil)
+    }
+
+    /// The chip and the status-menu item both land here.
     func togglePreview() {
-        previewVisible.toggle()
-        if previewVisible { showPreview(requestPermission: true) } else { hide(animated: true) }
+        setPreviewVisible(!previewVisible, requestPermission: true)
     }
 
     /// Drops the confinement rect an arming or a recording put up. The owner's choice is
@@ -426,15 +440,20 @@ final class CameraOverlayController: NSObject {
 final class FloatingCameraView: NSView {
     enum DragPhase { case began, changed, ended }
     var onDrag: ((DragPhase, CGPoint, CameraCorner?) -> Void)?
+    /// The owner dismissing the preview from the tile itself.
+    var onClose: (() -> Void)?
     var image: NSImage? { didSet { needsDisplay = true } }
     var mirrored = true { didSet { needsDisplay = true } }
     var message = "Kamera açılıyor…" { didSet { needsDisplay = true } }
     private var resizeCorner: CameraCorner?
-    private(set) var indicatedCorner: CameraCorner?
+    private(set) var indicated: CameraHotspot?
+    var indicatedCorner: CameraCorner? { indicated?.corner }
     private var dragging = false
     private var tracking: NSTrackingArea?
     private let handle = CALayer()
     private let grip = CAShapeLayer()
+    private let closeBadge = CALayer()
+    private let closeGlyph = CAShapeLayer()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -454,6 +473,18 @@ final class FloatingCameraView: NSView {
         grip.lineJoin = .round
         handle.addSublayer(grip)
         layer?.addSublayer(handle)
+
+        closeBadge.backgroundColor = NSColor.black.withAlphaComponent(0.42).cgColor
+        closeBadge.opacity = 0
+        closeBadge.shadowColor = NSColor.black.cgColor
+        closeBadge.shadowOpacity = 0.35
+        closeBadge.shadowRadius = 4
+        closeBadge.shadowOffset = CGSize(width: 0, height: -1)
+        closeGlyph.fillColor = nil
+        closeGlyph.strokeColor = NSColor.white.withAlphaComponent(0.95).cgColor
+        closeGlyph.lineCap = .round
+        closeBadge.addSublayer(closeGlyph)
+        layer?.addSublayer(closeBadge)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -463,6 +494,7 @@ final class FloatingCameraView: NSView {
     override func layout() {
         super.layout()
         positionHandle()
+        positionCloseBadge()
     }
 
     override func updateTrackingAreas() {
@@ -487,6 +519,9 @@ final class FloatingCameraView: NSView {
     override func resetCursorRects() {
         super.resetCursorRects()
         addCursorRect(bounds, cursor: .openHand)
+        if let close = CameraResizeGeometry.closeHitRect(in: bounds) {
+            addCursorRect(close, cursor: .arrow)
+        }
         for corner in CameraCorner.allCases {
             addCursorRect(CameraResizeGeometry.hitRect(corner, in: bounds), cursor: cursor(for: corner))
         }
@@ -494,16 +529,24 @@ final class FloatingCameraView: NSView {
 
     private func track(_ event: NSEvent) {
         guard !dragging else { return }
-        indicate(CameraResizeGeometry.corner(at: convert(event.locationInWindow, from: nil), in: bounds))
+        indicate(CameraResizeGeometry.hotspot(at: convert(event.locationInWindow, from: nil), in: bounds))
     }
 
     override func mouseEntered(with event: NSEvent) { track(event) }
     override func mouseMoved(with event: NSEvent) { track(event) }
     override func mouseExited(with event: NSEvent) { if !dragging { indicate(nil) } }
     override func mouseDown(with event: NSEvent) {
-        resizeCorner = CameraResizeGeometry.corner(at: convert(event.locationInWindow, from: nil), in: bounds)
+        let hotspot = CameraResizeGeometry.hotspot(at: convert(event.locationInWindow, from: nil), in: bounds)
+        // The × is a button: it closes on mouse-DOWN and starts no drag, so the tile can
+        // never be dragged out from under the click that was meant to dismiss it.
+        if hotspot == .close {
+            indicate(nil)
+            onClose?()
+            return
+        }
+        resizeCorner = hotspot?.corner
         dragging = true
-        indicate(resizeCorner)
+        indicate(hotspot)
         (resizeCorner.map { cursor(for: $0) } ?? .closedHand).set()
         onDrag?(.began, NSEvent.mouseLocation, resizeCorner)
     }
@@ -516,52 +559,85 @@ final class FloatingCameraView: NSView {
         window?.invalidateCursorRects(for: self)
     }
 
-    private func indicate(_ corner: CameraCorner?) {
-        guard corner != indicatedCorner else { return }
-        let wasHidden = indicatedCorner == nil
-        indicatedCorner = corner
-        if corner != nil { positionHandle() }
-        let previous = handle.presentation()?.opacity ?? handle.opacity
+    private func indicate(_ hotspot: CameraHotspot?) {
+        guard hotspot != indicated else { return }
+        let previousHotspot = indicated
+        indicated = hotspot
+        if hotspot?.corner != nil { positionHandle() }
+        if hotspot == .close { positionCloseBadge() }
+        reveal(handle, shown: hotspot?.corner != nil, wasShown: previousHotspot?.corner != nil)
+        reveal(closeBadge, shown: hotspot == .close, wasShown: previousHotspot == .close)
+    }
+
+    /// One fade (plus a spring on the way in) for whichever badge is appearing or leaving.
+    private func reveal(_ badge: CALayer, shown: Bool, wasShown: Bool) {
+        guard shown != wasShown else { return }
+        let previous = badge.presentation()?.opacity ?? badge.opacity
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        handle.opacity = corner == nil ? 0 : 1
+        badge.opacity = shown ? 1 : 0
         CATransaction.commit()
         guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
         let fade = CABasicAnimation(keyPath: "opacity")
         fade.fromValue = previous
-        fade.toValue = handle.opacity
-        fade.duration = corner == nil ? 0.12 : 0.16
-        handle.add(fade, forKey: "reveal")
-        if corner != nil, wasHidden {
-            let spring = CASpringAnimation(keyPath: "transform.scale")
-            spring.fromValue = 0.72
-            spring.toValue = 1
-            spring.mass = 1
-            spring.stiffness = 520
-            spring.damping = 32
-            spring.duration = 0.28
-            handle.add(spring, forKey: "lift")
-        }
+        fade.toValue = badge.opacity
+        fade.duration = shown ? 0.16 : 0.12
+        badge.add(fade, forKey: "reveal")
+        guard shown else { return }
+        let spring = CASpringAnimation(keyPath: "transform.scale")
+        spring.fromValue = 0.72
+        spring.toValue = 1
+        spring.mass = 1
+        spring.stiffness = 520
+        spring.damping = 32
+        spring.duration = 0.28
+        badge.add(spring, forKey: "lift")
     }
 
     private func positionHandle() {
-        guard let corner = indicatedCorner else { return }
+        guard let corner = indicated?.corner else { return }
+        let frame = CameraResizeGeometry.handleFrame(corner, in: bounds)
+        let side = frame.width
         let right = corner == .topRight || corner == .bottomRight
         let top = corner == .topLeft || corner == .topRight
-        let inset = max(17, CameraOptions.cornerRadius(for: bounds.size) * 0.48)
+        // The grip is drawn in the badge's own square, so every measure scales with it.
         let path = CGMutablePath()
         func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
-            CGPoint(x: right ? 28 - x : x, y: top ? 28 - y : y)
+            CGPoint(x: right ? side - x * side : x * side, y: top ? side - y * side : y * side)
         }
-        path.move(to: point(20, 8))
-        path.addLine(to: point(13, 8))
-        path.addQuadCurve(to: point(8, 13), control: point(8, 8))
-        path.addLine(to: point(8, 20))
+        path.move(to: point(0.71, 0.29))
+        path.addLine(to: point(0.46, 0.29))
+        path.addQuadCurve(to: point(0.29, 0.46), control: point(0.29, 0.29))
+        path.addLine(to: point(0.29, 0.71))
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        handle.position = CGPoint(x: right ? bounds.maxX - inset : bounds.minX + inset,
-                                  y: top ? bounds.maxY - inset : bounds.minY + inset)
+        handle.bounds = CGRect(x: 0, y: 0, width: side, height: side)
+        handle.cornerRadius = side * 0.32
+        handle.position = CGPoint(x: frame.midX, y: frame.midY)
+        grip.lineWidth = max(1.6, side * 0.085)
         grip.path = path
+        CATransaction.commit()
+    }
+
+    private func positionCloseBadge() {
+        guard let frame = CameraResizeGeometry.closeFrame(in: bounds) else {
+            closeBadge.opacity = 0
+            return
+        }
+        let side = frame.width
+        let arm = side * 0.27
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: side / 2 - arm, y: side / 2 - arm))
+        path.addLine(to: CGPoint(x: side / 2 + arm, y: side / 2 + arm))
+        path.move(to: CGPoint(x: side / 2 - arm, y: side / 2 + arm))
+        path.addLine(to: CGPoint(x: side / 2 + arm, y: side / 2 - arm))
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        closeBadge.bounds = CGRect(x: 0, y: 0, width: side, height: side)
+        closeBadge.cornerRadius = side / 2
+        closeBadge.position = CGPoint(x: frame.midX, y: frame.midY)
+        closeGlyph.lineWidth = max(1.6, side * 0.09)
+        closeGlyph.path = path
         CATransaction.commit()
     }
 

@@ -534,6 +534,119 @@ struct CameraInteractionTests {
         #expect(!monitor.isRunning && !monitor.isStarting)
     }
 
+    @Test("the tile's close button is a legitimate writer of the owner's switch, and says so")
+    @MainActor func closingFromTheTileAnnouncesItself() {
+        _ = NSApplication.shared
+        let overlay = CameraOverlayController.shared
+        let savedPreview = overlay.previewVisible
+        defer {
+            overlay.setPreviewVisibleForTesting(false)
+            overlay.hide()
+            overlay.setPreviewVisibleForTesting(savedPreview)
+        }
+
+        var announcements = 0
+        let token = NotificationCenter.default.addObserver(
+            forName: CameraOverlayController.previewVisibilityDidChange, object: nil, queue: .main
+        ) { _ in announcements += 1 }
+        defer { NotificationCenter.default.removeObserver(token) }
+
+        overlay.setPreviewVisibleForTesting(true)
+        // What the × does. (The opening direction asks the device for permission, so only
+        // the closing one is safe to drive from a unit test.)
+        overlay.setPreviewVisible(false)
+        #expect(!overlay.previewVisible)
+        #expect(announcements == 1)
+        // Idempotent: a second close is not a state change and must not announce one.
+        overlay.setPreviewVisible(false)
+        #expect(announcements == 1)
+    }
+
+    @Test("the camera-recording shortcut flips the persisted flag and reports the new state")
+    @MainActor func cameraRecordingShortcutTogglesSettings() {
+        let defaults = UserDefaults.standard
+        let key = RecordingSettings.defaultsKey
+        let saved = defaults.data(forKey: key)
+        defer {
+            if let saved { defaults.set(saved, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+
+        var settings = RecordingSettings.load(from: defaults)
+        settings.camera.enabled = false
+        settings.save(to: defaults)
+
+        let on = HotkeyCenter.toggleCameraRecording()
+        #expect(RecordingSettings.load(from: defaults).camera.enabled)
+        #expect(on.systemSymbol == "video.fill")
+        // Important, or the owner's own toast preference would silence the only feedback a
+        // shortcut has when the panel is closed.
+        #expect(on.important)
+
+        let off = HotkeyCenter.toggleCameraRecording()
+        #expect(!RecordingSettings.load(from: defaults).camera.enabled)
+        #expect(off.systemSymbol == "video.slash.fill")
+    }
+
+    @Test("the resize grip always sits inside the tile's rounded corner")
+    func gripBadgeStaysInsideTheTile() {
+        // The view's layer does not clip its sublayers, so a badge placed by edge distance
+        // alone spills past the corner curve — which is exactly what it used to do.
+        for size in [CGSize(width: 320, height: 180), CGSize(width: 160, height: 90),
+                     CGSize(width: 96, height: 54), CGSize(width: 960, height: 540)] {
+            let bounds = CGRect(origin: .zero, size: size)
+            let radius = CameraOptions.cornerRadius(for: size)
+            let tile = CGPath(roundedRect: bounds, cornerWidth: radius, cornerHeight: radius, transform: nil)
+            for corner in CameraCorner.allCases {
+                let frame = CameraResizeGeometry.handleFrame(corner, in: bounds)
+                #expect(frame.width == CameraResizeGeometry.handleSize(in: bounds))
+                for point in [CGPoint(x: frame.minX, y: frame.minY), CGPoint(x: frame.maxX, y: frame.minY),
+                              CGPoint(x: frame.minX, y: frame.maxY), CGPoint(x: frame.maxX, y: frame.maxY)] {
+                    #expect(tile.contains(point), "\(corner) badge leaves the tile at \(size)")
+                }
+            }
+        }
+    }
+
+    @Test("the close button sits on the top edge and never overlaps a resize corner")
+    func closeBadgeGeometry() {
+        let bounds = CGRect(x: 0, y: 0, width: 320, height: 180)
+        let circle = CameraResizeGeometry.closeFrame(in: bounds)
+        let zone = CameraResizeGeometry.closeHitRect(in: bounds)
+        #expect(circle != nil)
+        #expect(zone != nil)
+        guard let circle, let zone else { return }
+        #expect(abs(circle.midX - bounds.midX) < 0.001)
+        #expect(circle.maxY < bounds.maxY)                       // inside, not flush to the edge
+        #expect(zone.contains(circle))
+        for corner in CameraCorner.allCases {
+            #expect(!zone.intersects(CameraResizeGeometry.hitRect(corner, in: bounds)))
+        }
+        // A tile too small to host a × without crowding it gets none at all.
+        #expect(CameraResizeGeometry.closeFrame(in: CGRect(x: 0, y: 0, width: 70, height: 40)) == nil)
+        #expect(CameraResizeGeometry.closeHitRect(in: CGRect(x: 0, y: 0, width: 70, height: 40)) == nil)
+        #expect(CameraResizeGeometry.closeFrame(in: CGRect(x: 0, y: 0, width: 96, height: 54)) == nil)
+        // The smallest tile that does get one still keeps the × clear of both corners.
+        let small = CGRect(x: 0, y: 0, width: 160, height: 90)
+        let smallZone = CameraResizeGeometry.closeHitRect(in: small)
+        #expect(smallZone != nil)
+        for corner in CameraCorner.allCases {
+            #expect(!(smallZone ?? .zero).intersects(CameraResizeGeometry.hitRect(corner, in: small)))
+        }
+    }
+
+    @Test("the pointer resolves to resize at the corners, close at the top middle, nothing in between")
+    func hotspotRouting() {
+        let bounds = CGRect(x: 0, y: 0, width: 320, height: 180)
+        let zone = CameraResizeGeometry.closeHitRect(in: bounds)!
+        #expect(CameraResizeGeometry.hotspot(at: CGPoint(x: 4, y: 4), in: bounds) == .resize(.bottomLeft))
+        #expect(CameraResizeGeometry.hotspot(at: CGPoint(x: 316, y: 176), in: bounds) == .resize(.topRight))
+        #expect(CameraResizeGeometry.hotspot(at: CGPoint(x: zone.midX, y: zone.midY), in: bounds) == .close)
+        #expect(CameraResizeGeometry.hotspot(at: CGPoint(x: bounds.midX, y: bounds.midY), in: bounds) == nil)
+        // A corner claim wins wherever the two could ever meet.
+        let corner = CameraResizeGeometry.hitRect(.topLeft, in: bounds)
+        #expect(CameraResizeGeometry.hotspot(at: CGPoint(x: corner.midX, y: corner.midY), in: bounds) == .resize(.topLeft))
+    }
+
     @Test("a preview opened before the first frame is invisible and click-through until it arrives")
     @MainActor func previewWaitsForItsFirstFrame() throws {
         _ = NSApplication.shared

@@ -811,6 +811,8 @@ struct InputSettingsView: View {
                 KeyboardShortcuts.Recorder("Kaydırmalı çekim", name: .captureScrolling)
                 KeyboardShortcuts.Recorder("Kayıt başlat / bitir", name: .toggleRecording)
                 KeyboardShortcuts.Recorder("Kaydı duraklat / sürdür", name: .pauseRecording)
+                KeyboardShortcuts.Recorder("Kamera önizlemesi aç / kapat", name: .toggleCameraPreview)
+                KeyboardShortcuts.Recorder("Kamerayı kayda göm aç / kapat", name: .toggleCameraRecording)
             }
         }
         .formStyle(.grouped)

@@ -157,6 +157,15 @@ struct CapturePanelView: View {
             cameraRunning = running
             previewVisible = CameraOverlayController.shared.previewVisible
         }
+        // The shortcut and the tile's own × write the same state this chip draws.
+        .onReceive(NotificationCenter.default.publisher(for: CameraOverlayController.previewVisibilityDidChange)) { _ in
+            guard !designPreview else { return }
+            previewVisible = CameraOverlayController.shared.previewVisible
+        }
+        .onReceive(NotificationCenter.default.publisher(for: RecordingSettings.didChangeNotification)) { _ in
+            guard !designPreview else { return }
+            cameraEnabled = RecordingSettings.load(from: .standard).camera.enabled
+        }
         // The hosting controller is retained across opens, so key this task to the explicit
         // open token. SwiftUI cancels the previous scan; the generation/path guards below
         // also reject a synchronous directory read that finished after cancellation.

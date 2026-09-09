@@ -126,6 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         coordinator.onToast = showToast
         recordingController.onToast = showToast
+        hotkeyCenter.onToast = showToast
 
         // Screenshots land as a framed preview at the bottom-left (their own "copied"
         // confirmation), instead of the center toast — clickable to edit, draggable to lift.

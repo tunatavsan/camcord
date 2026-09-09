@@ -129,6 +129,17 @@ struct CameraDragMotion {
     }
 }
 
+/// What the pointer is over on the floating camera: a resize corner, or the close button.
+enum CameraHotspot: Equatable {
+    case resize(CameraCorner)
+    case close
+
+    var corner: CameraCorner? {
+        if case .resize(let corner) = self { return corner }
+        return nil
+    }
+}
+
 enum CameraResizeGeometry {
     /// The indicator, cursor and mouse-down all share these generous corner zones.
     static func hitRect(_ corner: CameraCorner, in bounds: CGRect) -> CGRect {
@@ -142,6 +153,60 @@ enum CameraResizeGeometry {
 
     static func corner(at point: CGPoint, in bounds: CGRect) -> CameraCorner? {
         CameraCorner.allCases.first { hitRect($0, in: bounds).contains(point) }
+    }
+
+    // MARK: - Badge geometry (the resize grip and the close button)
+
+    /// The grip badge scales with the tile instead of sitting at a fixed 28 pt, which on a
+    /// small preview was most of the corner.
+    static func handleSize(in bounds: CGRect) -> CGFloat {
+        min(max(min(bounds.width, bounds.height) * 0.16, 22), 30)
+    }
+
+    /// Where the grip badge sits. Pushed in far enough that the whole badge stays INSIDE
+    /// the tile's rounded corner — the view's layer does not clip its sublayers, so a badge
+    /// placed by edge distance alone spills past the curve and reads as broken.
+    static func handleFrame(_ corner: CameraCorner, in bounds: CGRect) -> CGRect {
+        let size = handleSize(in: bounds)
+        let inset = size / 2 + max(3, CameraOptions.cornerRadius(for: bounds.size) * 0.42)
+        let right = corner == .topRight || corner == .bottomRight
+        let top = corner == .topLeft || corner == .topRight
+        let center = CGPoint(x: right ? bounds.maxX - inset : bounds.minX + inset,
+                             y: top ? bounds.maxY - inset : bounds.minY + inset)
+        return CGRect(x: center.x - size / 2, y: center.y - size / 2, width: size, height: size)
+    }
+
+    /// The close button's circle, centred on the tile's top edge. `nil` when the tile is too
+    /// small to host one without colliding with the resize corners — a cramped × that
+    /// overlaps a resize zone is worse than no ×.
+    static func closeFrame(in bounds: CGRect) -> CGRect? {
+        let diameter = min(max(min(bounds.width, bounds.height) * 0.18, 20), 28)
+        let corners = hitRect(.topLeft, in: bounds).width
+        // Two ways a × does not belong: it would crowd the resize corners, or it would be a
+        // third of the tile. A camera that small is closed from the chip, the menu or the key.
+        guard bounds.width - 2 * corners >= diameter + 8, bounds.height >= diameter * 3 else { return nil }
+        let margin = max(6, min(bounds.width, bounds.height) * 0.05)
+        return CGRect(x: bounds.midX - diameter / 2,
+                      y: bounds.maxY - margin - diameter,
+                      width: diameter, height: diameter)
+    }
+
+    /// The generous zone that reveals the close button — the owner moves to the top middle,
+    /// not onto a 20 pt circle. Never overlaps the corner resize zones.
+    static func closeHitRect(in bounds: CGRect) -> CGRect? {
+        guard let circle = closeFrame(in: bounds) else { return nil }
+        let corners = hitRect(.topLeft, in: bounds).width
+        let width = min(max(circle.width * 2.4, 44), bounds.width - 2 * corners)
+        let height = min(max(circle.height * 1.9, 34), bounds.height * 0.5)
+        return CGRect(x: bounds.midX - width / 2, y: bounds.maxY - height, width: width, height: height)
+    }
+
+    /// What the pointer is over. Corners keep priority: `closeHitRect` is already carved to
+    /// avoid them, and a resize started from a corner must never be stolen by the ×.
+    static func hotspot(at point: CGPoint, in bounds: CGRect) -> CameraHotspot? {
+        if let corner = corner(at: point, in: bounds) { return .resize(corner) }
+        if let close = closeHitRect(in: bounds), close.contains(point) { return .close }
+        return nil
     }
 
     /// The sizes people actually pick, and the half-window around each where a resize
