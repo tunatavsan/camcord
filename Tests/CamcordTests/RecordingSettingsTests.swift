@@ -21,6 +21,25 @@ struct RecordingSettingsTests {
         #expect(merged.microphoneGainDB == 9)
     }
 
+    @Test("game mode halves a game display only, and defaults on for settings saved before it existed")
+    func gameModeScale() throws {
+        let old = try JSONDecoder().decode(RecordingSettings.self, from: Data("{\"fps\":30}".utf8))
+        #expect(old.gameModeScale)
+        // A Retina display: native = the backing scale, game mode = logical points (half).
+        #expect(old.captureScale(displayScale: 2, gameLike: true) == 1)
+        #expect(old.captureScale(displayScale: 2, gameLike: false) == 2)
+        var off = old
+        off.gameModeScale = false
+        #expect(off.captureScale(displayScale: 2, gameLike: true) == 2)
+        let decoded = try JSONDecoder().decode(RecordingSettings.self, from: JSONEncoder().encode(off))
+        #expect(!decoded.gameModeScale)
+        var otherEditor = old
+        otherEditor.fps = 60
+        let merged = off.merging(from: old, into: otherEditor)
+        #expect(!merged.gameModeScale)
+        #expect(merged.fps == 60)
+    }
+
     @Test("settings that still carry the retired arming key decode without loss")
     func retiredArmingKeyIsIgnored() throws {
         let stored = Data("{\"windowGlowEnabled\":false,\"armBeforeWindowRecording\":true}".utf8)

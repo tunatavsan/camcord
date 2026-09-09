@@ -182,11 +182,25 @@ final class RecordingController: NSObject {
             fail("recordWindow: shareable content fetch failed: \(error)")
             return
         }
-        guard let window = await windowPicker.pick(content: content) else { return }   // dismissed
-        // Every window pick arms: the red frame shows what will be recorded and the owner
-        // places the camera before pressing Başlat. The fullscreen→display conversion the
-        // window path needs happens inside startArmed(), so a game window arms too.
-        arm(target: .window(window))
+        guard let choice = await windowPicker.pick(content: content) else { return }   // dismissed
+        switch choice {
+        case .window(let window):
+            // Every window pick arms: the red frame shows what will be recorded and the owner
+            // places the camera before pressing Başlat. The fullscreen→display conversion the
+            // window path needs happens inside startArmed(), so a game window arms too.
+            arm(target: .window(window))
+        case .display(let display):
+            // The picker's "<App> — tam ekran" card: the game's own window never reached the
+            // grid, so there is no window frame to arm a red placement rectangle against —
+            // record the display it covers straight away, at the game scale.
+            let settings = RecordingSettings.load(from: .standard)
+            let ownApp = content.applications.first { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
+            await begin(target: .display(
+                display,
+                scale: settings.captureScale(displayScale: scale(for: display), gameLike: true),
+                excluding: ownApp
+            ))
+        }
     }
 
     private func arm(target: RecordingEngine.Target) {
@@ -308,8 +322,11 @@ final class RecordingController: NSObject {
         }
     }
 
-    /// Records the entire display under the mouse pointer (menu action).
-    func recordFullScreen() async {
+    /// Records the entire display under the mouse pointer (menu action). `gameLike` marks
+    /// the Phase G.6 hotkey path taken while a fullscreen game owns the screen: no
+    /// countdown, no stop pill over the game, and the "Oyunda 1080p kaydet" scale. The
+    /// same hotkey stops the run (`toggleRecording()` handles that side).
+    func recordFullScreen(gameLike: Bool = false) async {
         guard !isTerminating, uiState == .idle, !isStarting, !isFinalizing, armed == nil else { return }
         isStarting = true
         defer { isStarting = false }
@@ -327,13 +344,23 @@ final class RecordingController: NSObject {
                 fail("recordFullScreen: no SCDisplay match for display \(displayID)")
                 return
             }
+            let settings = RecordingSettings.load(from: .standard)
             // A short countdown keeps the panel-close animation and the parked pointer
-            // out of the first frames, and gives the user a beat to set the stage.
-            if RecordingSettings.load(from: .standard).countdownEnabled {
+            // out of the first frames, and gives the user a beat to set the stage. In a
+            // game it would only delay a trigger the owner pressed mid-play.
+            if !gameLike, settings.countdownEnabled {
                 guard await CountdownOverlay.run(onScreenFrame: screen.frame) else { return }
             }
             let ownApp = content.applications.first { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
-            await begin(target: .display(display, scale: screen.backingScaleFactor, excluding: ownApp))
+            await begin(target: .display(
+                display,
+                scale: settings.captureScale(displayScale: screen.backingScaleFactor, gameLike: gameLike),
+                excluding: ownApp
+            ))
+            // G.6: nothing of ours belongs over a game. begin() orders the stop pill up
+            // with no await after it, so dismissing it here removes it before it draws —
+            // the start/stop sounds and the same hotkey are the whole interface there.
+            if gameLike { indicator.hide() }
         } catch {
             fail("recordFullScreen: shareable content fetch failed: \(error)")
         }
