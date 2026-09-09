@@ -524,7 +524,7 @@ struct RecordingSettingsView: View {
             }
 
             Section("Kamera") {
-                Toggle("Kamerayı kayda ekle", isOn: $settings.camera.enabled)
+                Toggle("Kamerayı kaydet", isOn: $settings.camera.enabled)
                     .disabled(cameraMonitor.recordingLocked)
                 if settings.camera.enabled {
                     Picker("Kamera", selection: $settings.camera.deviceID) {
@@ -552,12 +552,13 @@ struct RecordingSettingsView: View {
                     }
                     .disabled(cameraMonitor.recordingLocked)
                     CameraPreviewView(options: settings.camera)
-                    Text("Kamera görüntüsü videoya gömülür. Ses, seçtiğin mikrofon ve sistem kanallarından gelir.")
+                    Text("Konum ve boyut tüm hedeflerde aynı oranda kullanılır; küçük pencerede %35 olan kamera ekran kaydında da %35 olur. 16:9 kamera, 4:3 hedefte daha büyük görünür.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
 
             Section("Gösterge") {
+                Toggle("Pencere kaydında önce yerleştir", isOn: $settings.armBeforeWindowRecording)
                 Toggle("Pencere kaydında pencereyi vurgula", isOn: $settings.windowGlowEnabled)
                 Text("Kaydedilen pencerenin çevresinde ince bir parıltı gösterilir (pencereyi taşırsan takip eder, kayda girmez).")
                     .font(.footnote)
@@ -623,6 +624,9 @@ struct RecordingSettingsView: View {
         .formStyle(.grouped)
         .onChange(of: settings) { oldValue, newValue in
             newValue.merging(from: oldValue, into: RecordingSettings.load(from: defaultsSuite)).save(to: defaultsSuite)
+            if newValue.camera != oldValue.camera, defaultsSuite === UserDefaults.standard {
+                CameraOverlayController.shared.applyPlacement(newValue.camera, source: .settings)
+            }
         }
         .task(id: settings.outputDirectoryPath) { await loadRecents() }
         .onDisappear { Task { await microphoneMonitor.stop() } }

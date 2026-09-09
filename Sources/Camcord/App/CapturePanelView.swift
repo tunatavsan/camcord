@@ -21,6 +21,7 @@ final class RecordingStateModel: ObservableObject {
     @Published var panelOpenToken = 0
     @Published var isPanelVisible = false
     @Published var isStarting = false
+    @Published var isArmed = false
 }
 
 /// The panel's actions, injected by AppDelegate. Each closure owns its own
@@ -37,7 +38,10 @@ struct PanelActions {
     /// Open the window picker and record the chosen window.
     var recordWindow: () -> Void = {}
     var recordFullScreen: () -> Void = {}
+    var cancelArmed: () -> Void = {}
     var pauseResume: () -> Void = {}
+    var setStageSink: ((@Sendable (PixelBufferBox) -> Void)?) -> Void = { _ in }
+    var recordingFrameSize: () -> CGSize = { .zero }
     var revealRecording: (URL) -> Void = { _ in }
     var openRecording: (URL) -> Void = { _ in }
     /// Reveal the newest saved screenshot in Finder.
@@ -55,6 +59,8 @@ struct CapturePanelView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.camcordDesignPreview) private var designPreview
     @State private var cameraEnabled = false
+    @State private var previewVisible = false
+    @State private var cameraRunning = false
     @State private var recordSystemAudio = true
     @State private var recordMicrophone = true
     @State private var systemGainDB: Double = 0
@@ -80,7 +86,7 @@ struct CapturePanelView: View {
     /// popover beak anchored correctly under the status item.
     static let panelWidth: CGFloat = 320
     static let panelHeight: CGFloat = 458
-    static let activeHeight: CGFloat = 458
+    static let activeHeight: CGFloat = 648
     static let finishingHeight: CGFloat = 220
     static let finishedHeight: CGFloat = 418
 
@@ -143,13 +149,13 @@ struct CapturePanelView: View {
             lastRecordingURL = url
             recordingDirectoryURL = url.deletingLastPathComponent()
         }
-        .onChange(of: model.isPanelVisible) { _, visible in
+        .onChange(of: model.isArmed) { _, _ in
+            if !designPreview { previewVisible = CameraOverlayController.shared.previewVisible }
+        }
+        .onReceive(CameraPreviewMonitor.shared.$isRunning.removeDuplicates()) { running in
             guard !designPreview else { return }
-            if visible {
-                if cameraEnabled { CameraOverlayController.shared.showPreview() }
-            } else if !CameraPreviewMonitor.shared.recordingLocked {
-                CameraOverlayController.shared.hide()
-            }
+            cameraRunning = running
+            previewVisible = CameraOverlayController.shared.previewVisible
         }
         // The hosting controller is retained across opens, so key this task to the explicit
         // open token. SwiftUI cancels the previous scan; the generation/path guards below
@@ -172,6 +178,14 @@ struct CapturePanelView: View {
             recordRow
                 .frame(height: 84, alignment: .top)
                 .animation(reduceMotion ? nil : Self.panelSpring, value: model.state)
+
+            if model.state != .idle, !model.isArmed {
+                StageView(
+                    state: model.state,
+                    setSink: actions.setStageSink,
+                    recordingFrameSize: actions.recordingFrameSize
+                )
+            }
 
             VStack(spacing: 8) {
                     AudioControlRow(title: "Sistem", symbol: "speaker.wave.2", health: model.health?.systemAudio ?? AudioSourceHealth(enabled: recordSystemAudio),
@@ -220,6 +234,12 @@ struct CapturePanelView: View {
 
     @ViewBuilder
     private var recordRow: some View {
+        if model.isArmed {
+            HStack(spacing: 8) {
+                CardButton(title: "Başlat", symbol: "play.fill", prominent: true, action: actions.toggleRecording)
+                CardButton(title: "İptal", symbol: "xmark", action: actions.cancelArmed)
+            }
+        } else {
         switch model.state {
         case .idle:
             VStack(spacing: 6) {
@@ -301,21 +321,24 @@ struct CapturePanelView: View {
         }
     }
 
+    }
+
     private var cameraRow: some View {
         HStack(spacing: 8) {
             Image(systemName: cameraEnabled ? "video.fill" : "video.slash")
                 .foregroundStyle(cameraEnabled ? Color.accentColor : Color.secondary)
-            Text("Kamera").font(.system(size: 12, weight: .medium))
+            Text("Kamerayı kaydet").font(.system(size: 11, weight: .medium))
             Spacer()
-            if cameraEnabled {
-                Button("Önizleme") {
-                    if !designPreview { CameraOverlayController.shared.showPreview(requestPermission: true) }
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+            if cameraRunning { Circle().fill(.green).frame(width: 6, height: 6) }
+            Button(previewVisible ? "Önizlemeyi gizle" : "Önizleme") {
+                guard !designPreview else { return }
+                CameraOverlayController.shared.togglePreview()
+                previewVisible = CameraOverlayController.shared.previewVisible
             }
-            Toggle("Kamera", isOn: Binding(
+            .buttonStyle(.plain)
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
+            Toggle("Kamerayı kaydet", isOn: Binding(
                 get: { cameraEnabled },
                 set: { enabled in
                     cameraEnabled = enabled
@@ -324,11 +347,6 @@ struct CapturePanelView: View {
                     if settings.camera.enabled != enabled {
                         settings.camera.enabled = enabled
                         settings.save(to: .standard)
-                    }
-                    if enabled, model.isPanelVisible {
-                        CameraOverlayController.shared.showPreview(requestPermission: true)
-                    } else if !enabled {
-                        CameraOverlayController.shared.hide()
                     }
                 }
             ))
@@ -423,6 +441,7 @@ struct CapturePanelView: View {
         recordSystemAudio = settings.systemAudio
         recordMicrophone = settings.microphone
         cameraEnabled = settings.camera.enabled
+        previewVisible = CameraOverlayController.shared.previewVisible
         soundEnabled = FeedbackSound.isEnabled()
         saveScreenshots = screenshotSettings.saveToDisk
         shortcuts = PanelShortcuts.load()
@@ -492,6 +511,242 @@ struct CapturePanelView: View {
         settings.systemAudio = recordSystemAudio
         settings.microphone = recordMicrophone
         settings.save(to: .standard)
+    }
+}
+
+/// The in-panel view of the exact composited recording output. Its image arrives through
+/// a queue-confined sink, but rendering and all interaction state stay off that queue.
+struct StageView: View {
+    let state: RecordingController.UIState
+    let setSink: ((@Sendable (PixelBufferBox) -> Void)?) -> Void
+    let recordingFrameSize: () -> CGSize
+
+    @State private var image: NSImage?
+    @State private var thumbnailPixelSize = CGSize.zero
+    @State private var frameSize = CGSize.zero
+    @State private var options = CameraOptions()
+    @State private var rendering = false
+    @State private var generation: UInt64 = 0
+    @State private var dragStart: (
+        options: CameraOptions,
+        rect: CGRect,
+        frameSize: CGSize,
+        corner: CameraCorner?
+    )?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                Text("Sahne")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Konum ve boyut tüm hedeflerde ortaktır.")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+
+            GeometryReader { geometry in
+                let bounds = CGRect(origin: .zero, size: geometry.size)
+                let thumbnail = Self.thumbnailRect(for: thumbnailPixelSize, in: bounds)
+
+                ZStack(alignment: .topLeading) {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(.black.opacity(0.28))
+
+                    if let image, !thumbnail.isEmpty {
+                        Image(nsImage: image)
+                            .resizable()
+                            .frame(width: thumbnail.width, height: thumbnail.height)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .position(x: thumbnail.midX, y: thumbnail.midY)
+
+                        if state == .paused {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(.black.opacity(0.46))
+                                .frame(width: thumbnail.width, height: thumbnail.height)
+                                .overlay {
+                                    Text("duraklatıldı")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundStyle(.white.opacity(0.9))
+                                }
+                                .position(x: thumbnail.midX, y: thumbnail.midY)
+                                .allowsHitTesting(false)
+                        }
+
+                        cameraOverlay(in: thumbnail)
+                    } else {
+                        VStack(spacing: 6) {
+                            Image(systemName: "rectangle.on.rectangle")
+                                .font(.system(size: 18, weight: .light))
+                            Text("Kayıt görüntüsü bekleniyor…")
+                                .font(.system(size: 10))
+                        }
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
+                .coordinateSpace(name: "recording-stage")
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            .frame(height: 158)
+        }
+        .onAppear(perform: installSink)
+        .onDisappear(perform: removeSink)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Kayıt sahnesi")
+    }
+
+    @ViewBuilder
+    private func cameraOverlay(in thumbnail: CGRect) -> some View {
+        let rect = Self.cameraRect(options: options, frameSize: frameSize, thumbnail: thumbnail)
+        if !rect.isEmpty {
+            ZStack {
+                RoundedRectangle(cornerRadius: max(3, CameraOptions.cornerRadius(for: rect.size)))
+                    .stroke(Color.accentColor, lineWidth: 2)
+                ForEach(CameraCorner.allCases.indices, id: \.self) { index in
+                    let corner = CameraCorner.allCases[index]
+                    Circle()
+                        .fill(Color(nsColor: .windowBackgroundColor))
+                        .overlay(Circle().stroke(Color.accentColor, lineWidth: 2))
+                        .frame(width: 9, height: 9)
+                        .position(Self.handlePoint(corner, in: CGRect(origin: .zero, size: rect.size)))
+                }
+            }
+            .frame(width: rect.width, height: rect.height)
+            .contentShape(Rectangle())
+            .position(x: rect.midX, y: rect.midY)
+            .gesture(stageDrag(thumbnail: thumbnail))
+            .accessibilityLabel("Kamera konumu")
+            .accessibilityHint("Taşımak için sürükle; köşelerden sürükleyerek boyutlandır")
+        }
+    }
+
+    private func stageDrag(thumbnail: CGRect) -> some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .named("recording-stage"))
+            .onChanged { value in
+                if dragStart == nil {
+                    let rect = options.rect(in: frameSize)
+                    let scaledRect = Self.yUpThumbnailRect(rect, frameSize: frameSize, thumbnail: thumbnail)
+                    let point = CGPoint(
+                        x: value.startLocation.x - thumbnail.minX,
+                        y: thumbnail.height - (value.startLocation.y - thumbnail.minY)
+                    )
+                    dragStart = (
+                        options,
+                        rect,
+                        frameSize,
+                        CameraResizeGeometry.corner(at: point, in: scaledRect)
+                    )
+                }
+                updatePlacement(translation: value.translation, thumbnail: thumbnail)
+            }
+            .onEnded { value in
+                updatePlacement(translation: value.translation, thumbnail: thumbnail)
+                dragStart = nil
+            }
+    }
+
+    private func updatePlacement(translation: CGSize, thumbnail: CGRect) {
+        guard let start = dragStart, start.frameSize.width > 0, start.frameSize.height > 0 else { return }
+        let delta = Self.recordingTranslation(
+            translation,
+            frameSize: start.frameSize,
+            thumbnail: thumbnail
+        )
+        var updated: CameraOptions
+        if let corner = start.corner {
+            updated = CameraResizeGeometry.resize(
+                start: start.rect,
+                translation: delta,
+                corner: corner,
+                options: start.options,
+                in: start.frameSize
+            )
+        } else {
+            updated = start.options
+            updated.place(
+                start.rect.offsetBy(dx: delta.x, dy: delta.y),
+                in: start.frameSize,
+                snapDistance: min(84, min(start.frameSize.width, start.frameSize.height) * 0.18)
+            )
+        }
+        options = updated.resolved()
+        CameraOverlayController.shared.applyPlacement(options, source: .stage)
+    }
+
+    private func installSink() {
+        generation &+= 1
+        let token = generation
+        options = RecordingSettings.load(from: .standard).camera.resolved()
+        setSink { box in
+            Task { @MainActor in
+                guard token == generation, !rendering else { return }
+                let points = recordingFrameSize()
+                guard points.width > 0, points.height > 0 else { return }
+                rendering = true
+                let rendered = await CameraPreviewMonitor.shared.renderer.render(box.value, maximumWidth: 360)
+                guard token == generation else { return }
+                rendering = false
+                guard let rendered else { return }
+                image = NSImage(cgImage: rendered.image, size: rendered.size)
+                thumbnailPixelSize = box.pixelSize
+                frameSize = points
+                if dragStart == nil {
+                    options = RecordingSettings.load(from: .standard).camera.resolved()
+                }
+            }
+        }
+    }
+
+    private func removeSink() {
+        generation &+= 1
+        setSink(nil)
+        rendering = false
+        dragStart = nil
+        image = nil
+        thumbnailPixelSize = .zero
+        frameSize = .zero
+    }
+
+    /// Aspect-fits the actual recording pixels into the fixed panel canvas.
+    static func thumbnailRect(for pixelSize: CGSize, in bounds: CGRect) -> CGRect {
+        guard pixelSize.width > 0, pixelSize.height > 0, bounds.width > 0, bounds.height > 0 else { return .zero }
+        let scale = min(bounds.width / pixelSize.width, bounds.height / pixelSize.height)
+        let size = CGSize(width: pixelSize.width * scale, height: pixelSize.height * scale)
+        return CGRect(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2,
+                      width: size.width, height: size.height)
+    }
+
+    /// Maps the y-up recording rectangle into SwiftUI's y-down thumbnail coordinates.
+    static func cameraRect(options: CameraOptions, frameSize: CGSize, thumbnail: CGRect) -> CGRect {
+        guard frameSize.width > 0, frameSize.height > 0, !thumbnail.isEmpty else { return .zero }
+        let rect = options.rect(in: frameSize)
+        let scale = thumbnail.width / frameSize.width
+        return CGRect(
+            x: thumbnail.minX + rect.minX * scale,
+            y: thumbnail.minY + (frameSize.height - rect.maxY) * scale,
+            width: rect.width * scale,
+            height: rect.height * scale
+        )
+    }
+
+    static func recordingTranslation(_ translation: CGSize, frameSize: CGSize, thumbnail: CGRect) -> CGPoint {
+        guard frameSize.width > 0, thumbnail.width > 0 else { return .zero }
+        let scale = thumbnail.width / frameSize.width
+        return CGPoint(x: translation.width / scale, y: -translation.height / scale)
+    }
+
+    private static func yUpThumbnailRect(_ rect: CGRect, frameSize: CGSize, thumbnail: CGRect) -> CGRect {
+        guard frameSize.width > 0 else { return .zero }
+        let scale = thumbnail.width / frameSize.width
+        return CGRect(x: rect.minX * scale, y: rect.minY * scale,
+                      width: rect.width * scale, height: rect.height * scale)
+    }
+
+    private static func handlePoint(_ corner: CameraCorner, in rect: CGRect) -> CGPoint {
+        let right = corner == .topRight || corner == .bottomRight
+        let top = corner == .topLeft || corner == .topRight
+        return CGPoint(x: right ? rect.maxX : rect.minX, y: top ? rect.minY : rect.maxY)
     }
 }
 

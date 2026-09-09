@@ -62,4 +62,45 @@ struct RecordingIndicatorTests {
         #expect(indicator.stopPanelForTesting?.ignoresMouseEvents == true)
         indicator.hide()
     }
+
+    @Test("armed pill exposes start and cancel actions and never idles dim")
+    func armedPillActionsAndVisibility() throws {
+        _ = NSApplication.shared
+        let primaryHeight = try #require(NSScreen.screens.first?.frame.height)
+        let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
+        let target = screen.visibleFrame.insetBy(dx: 120, dy: 120)
+        let cgTarget = Geometry.appKitToCG(target, primaryScreenHeight: primaryHeight)
+        let indicator = CaptureAreaIndicator(panelPresenter: { _ in })
+        var starts = 0
+        var cancels = 0
+
+        indicator.showRecordingWindow(
+            CGWindowID.max,
+            initialCGRect: cgTarget,
+            showsBorder: true,
+            title: "Başlat",
+            glyph: .play,
+            color: .controlAccentColor,
+            onCancel: { cancels += 1 },
+            onStop: { starts += 1 }
+        )
+
+        let stop = try #require(indicator.stopPanelForTesting)
+        let label = try #require(stop.contentView?.subviews.compactMap { $0 as? NSTextField }.first)
+        #expect(label.stringValue == "Başlat")
+        #expect(stop.frame.width == 178)
+
+        indicator.activateStopPillForTesting(at: CGPoint(x: 40, y: 15))
+        indicator.activateStopPillForTesting(at: CGPoint(x: stop.frame.width - 15, y: 15))
+        #expect(starts == 1)
+        #expect(cancels == 1)
+
+        indicator.applyStopPillIdleFadeForTesting()
+        #expect(stop.alphaValue == 1)
+
+        indicator.setOccludedForTesting(true)
+        #expect(stop.contentView?.layer?.opacity == 1)
+        #expect(!stop.ignoresMouseEvents)
+        indicator.hide()
+    }
 }

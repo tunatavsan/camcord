@@ -29,6 +29,7 @@ final class RecordingController: NSObject {
     private var didWarnAudio = false
     private var didWarnDroppedSamples = false
     private var audioMixFailed = false
+    private var recordingCameraEnabled = false
     private var microphoneHealthGraceUntilUptime: TimeInterval = 0
 
     /// Wired by AppDelegate to the status item's failure flash (same as the
@@ -43,10 +44,22 @@ final class RecordingController: NSObject {
     /// and important notices (auto-stop on low disk / max duration).
     var onToast: ((ToastRequest) -> Void)?
 
+    private(set) var recordingFrameSize: CGSize = .zero
+
+    func setStageSink(_ sink: (@Sendable (PixelBufferBox) -> Void)?) { engine.setStageSink(sink) }
+
     private(set) var uiState: UIState = .idle
 
     /// Guards the selection/starting window so a second hotkey press can't start a
     /// parallel flow (the overlay's own isPresenting guard covers the overlay part).
+    private var armed: RecordingEngine.Target?
+    private var previewBeforeArming = false
+    private var armedPoll: Timer?
+    private var armedMissingBounds = 0
+    private var armedEscapeMonitor: Any?
+    private var armedPreviewTask: Task<Void, Never>?
+    var isArmed: Bool { armed != nil }
+    var onArmedChange: ((Bool) -> Void)?
     var onStartingChange: ((Bool) -> Void)?
     private var isStarting = false { didSet { onStartingChange?(isStarting) } }
     /// True ONLY while `engine.start()` is bringing the stream/writer up — the narrow
@@ -92,7 +105,7 @@ final class RecordingController: NSObject {
 
     /// Anything in flight that app termination must not kill mid-way: an interactive
     /// start (stream/writer coming up), a live session, or a finalize still writing.
-    var isBusy: Bool { isStarting || uiState != .idle || isFinalizing }
+    var isBusy: Bool { isArmed || isStarting || uiState != .idle || isFinalizing }
 
     /// Mirrors `lastPauseToggle`: with the status menu open, the menu key-equivalent
     /// AND the buffered Carbon hotkey can both deliver one ⌘⇧9 press, which would
@@ -137,6 +150,8 @@ final class RecordingController: NSObject {
         switch uiState {
         case .recording, .paused:
             await stop()
+        case .idle where armed != nil:
+            await startArmed()
         case .idle:
             await beginInteractive()
         }
@@ -147,7 +162,7 @@ final class RecordingController: NSObject {
     /// desktop to drag a region on. The `.window` target follows that window across Spaces
     /// and keeps recording it when it's occluded or sent to the back.
     func recordWindow() async {
-        guard !isTerminating, uiState == .idle, !isStarting, !isFinalizing else { return }
+        guard !isTerminating, uiState == .idle, !isStarting, !isFinalizing, armed == nil else { return }
         isStarting = true
         defer { isStarting = false }
 
@@ -164,6 +179,10 @@ final class RecordingController: NSObject {
             return
         }
         guard let window = await windowPicker.pick(content: content) else { return }   // dismissed
+        if RecordingSettings.load(from: .standard).armBeforeWindowRecording {
+            arm(target: .window(window))
+            return
+        }
         // A display-sized pick (a fullscreen game) records the DISPLAY instead: window-surface
         // capture freezes once a fullscreen app stops presenting after losing focus, while
         // display capture keeps compositing regardless — and it sidesteps the double-scale
@@ -174,6 +193,75 @@ final class RecordingController: NSObject {
             return
         }
         await begin(target: .window(window))
+    }
+
+    private func arm(target: RecordingEngine.Target) {
+        guard armed == nil, !isTerminating, case .window(let window) = target else { return }
+        armed = target
+        armedMissingBounds = 0
+        let overlay = CameraOverlayController.shared
+        previewBeforeArming = overlay.previewVisible
+        overlay.previewVisible = true
+        let settings = RecordingSettings.load(from: .standard)
+        overlay.prepareRecording(cgRect: window.frame, options: settings.camera)
+        armedPreviewTask = Task {
+            await CameraPreviewMonitor.shared.start(deviceID: settings.camera.resolved().deviceID,
+                                                    fps: settings.fps, requestPermission: true)
+        }
+        indicator.showRecordingWindow(window.windowID, initialCGRect: window.frame, showsBorder: true,
+                                      title: "Başlat", glyph: .play, color: .systemBlue,
+                                      onCancel: { [weak self] in self?.cancelArmed() }) { [weak self] in
+            Task { await self?.startArmed() }
+        }
+        armedPoll = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, case .window(let window) = self.armed else { return }
+                self.armedMissingBounds = CaptureAreaIndicator.windowBounds(window.windowID) == nil ? self.armedMissingBounds + 1 : 0
+                if self.armedMissingBounds >= 2 { self.cancelArmed() }
+            }
+        }
+        armedEscapeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.keyCode == 53 { self?.cancelArmed() }
+        }
+        onArmedChange?(true)
+    }
+
+    func startArmed() async {
+        guard let requestedTarget = armed, !isTerminating, !isStarting else { return }
+        isStarting = true
+        defer { isStarting = false }
+        clearArmedControls()
+        armed = nil
+        onArmedChange?(false)
+        var target = requestedTarget
+        if case .window(let window) = target,
+           let content = try? await coordinator.contentCache.content(),
+           let display = fullscreenDisplay(for: window, in: content) {
+            let ownApp = content.applications.first { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
+            target = .display(display, scale: scale(for: display), excluding: ownApp)
+        }
+        await begin(target: target, convertsFullscreen: false)
+        if uiState == .idle { CameraOverlayController.shared.recordingEnded() }
+    }
+
+    func cancelArmed() {
+        guard armed != nil else { return }
+        clearArmedControls()
+        armed = nil
+        let overlay = CameraOverlayController.shared
+        overlay.previewVisible = previewBeforeArming
+        overlay.recordingEnded()
+        onArmedChange?(false)
+    }
+
+    private func clearArmedControls() {
+        armedPoll?.invalidate()
+        armedPoll = nil
+        armedPreviewTask?.cancel()
+        armedPreviewTask = nil
+        if let armedEscapeMonitor { NSEvent.removeMonitor(armedEscapeMonitor) }
+        armedEscapeMonitor = nil
+        indicator.hide()
     }
 
     /// The display whose frame the window covers (±2pt), either at point size or at the
@@ -192,7 +280,7 @@ final class RecordingController: NSObject {
 
     /// Records the entire display under the mouse pointer (menu action).
     func recordFullScreen() async {
-        guard !isTerminating, uiState == .idle, !isStarting, !isFinalizing else { return }
+        guard !isTerminating, uiState == .idle, !isStarting, !isFinalizing, armed == nil else { return }
         isStarting = true
         defer { isStarting = false }
 
@@ -227,6 +315,7 @@ final class RecordingController: NSObject {
     /// already finalizing, it waits for that instead of tearing down twice.
     func stopForTermination() async {
         isTerminating = true
+        cancelArmed()
         startCueTask?.cancel()
         cancelPendingResumeCue()
         engine.cancelPendingStart()
@@ -314,7 +403,7 @@ final class RecordingController: NSObject {
     // MARK: - Start
 
     private func beginInteractive() async {
-        guard !isTerminating, uiState == .idle, !isStarting, !isFinalizing else { return }
+        guard !isTerminating, uiState == .idle, !isStarting, !isFinalizing, armed == nil else { return }
         isStarting = true
         defer { isStarting = false }
 
@@ -334,7 +423,11 @@ final class RecordingController: NSObject {
 
         switch selection {
         case .window(let window):
-            await begin(target: .window(window))
+            if RecordingSettings.load(from: .standard).armBeforeWindowRecording {
+                arm(target: .window(window))
+            } else {
+                await begin(target: .window(window))
+            }
         case .region(let cgRect):
             do {
                 let content = try await coordinator.contentCache.content()
@@ -359,7 +452,7 @@ final class RecordingController: NSObject {
         }
     }
 
-    private func begin(target requestedTarget: RecordingEngine.Target) async {
+    private func begin(target requestedTarget: RecordingEngine.Target, convertsFullscreen: Bool = true) async {
         guard !isTerminating else { return }
         // Check the permission that actually gates the recording BEFORE possibly
         // popping a microphone TCC prompt for a session that can't start.
@@ -396,7 +489,7 @@ final class RecordingController: NSObject {
         // Every window entry point (including the recording hotkey's click-to-pick)
         // uses the same fullscreen game policy as the explicit window picker.
         var target = requestedTarget
-        if case .window(let window) = target,
+        if convertsFullscreen, case .window(let window) = target,
            let content = try? await coordinator.contentCache.content(),
            let display = fullscreenDisplay(for: window, in: content) {
             let ownApp = content.applications.first { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
@@ -411,15 +504,23 @@ final class RecordingController: NSObject {
         case .display(let display, _, _): cameraRect = display.frame
         case .region(let clamp, _, _): cameraRect = clamp.clampedRegion
         }
-        CameraOverlayController.shared.prepareRecording(cgRect: cameraRect, options: settings.camera)
-        let preparedCamera = await CameraPreviewMonitor.shared.prepareForRecording(options: settings.camera)
+        recordingFrameSize = cameraRect.size
+        recordingCameraEnabled = settings.camera.enabled
+        var preparedCamera: CameraCapture?
+        if settings.camera.enabled {
+            CameraOverlayController.shared.prepareRecording(cgRect: cameraRect, options: settings.camera)
+            preparedCamera = await CameraPreviewMonitor.shared.prepareForRecording(options: settings.camera)
+        }
         var didStart = false
         defer {
             if !didStart {
                 if let preparedCamera { Task { await preparedCamera.stop() } }
                 MicrophoneMonitor.shared.recordingEnded()
-                CameraOverlayController.shared.hide()
-                CameraPreviewMonitor.shared.recordingEnded()
+                if recordingCameraEnabled {
+                    CameraPreviewMonitor.shared.recordingEnded()
+                    CameraOverlayController.shared.recordingEnded()
+                    recordingCameraEnabled = false
+                }
             }
         }
         guard !isTerminating else { return }
@@ -576,8 +677,11 @@ final class RecordingController: NSObject {
             guard let self else { return }
             defer {
                 MicrophoneMonitor.shared.recordingEnded()
-                CameraOverlayController.shared.hide()
-                CameraPreviewMonitor.shared.recordingEnded()
+                if recordingCameraEnabled {
+                    CameraPreviewMonitor.shared.recordingEnded()
+                    CameraOverlayController.shared.recordingEnded()
+                    recordingCameraEnabled = false
+                }
             }
             do {
                 let url = try await engine.stop()
@@ -614,8 +718,11 @@ final class RecordingController: NSObject {
         startCueTask = nil
         cancelPendingResumeCue()
         MicrophoneMonitor.shared.recordingEnded()
-        CameraOverlayController.shared.hide()
-        CameraPreviewMonitor.shared.recordingEnded()
+        if recordingCameraEnabled {
+            CameraPreviewMonitor.shared.recordingEnded()
+            CameraOverlayController.shared.recordingEnded()
+            recordingCameraEnabled = false
+        }
         stopElapsedTimer()
         segmentStart = nil
         accumulatedElapsed = 0

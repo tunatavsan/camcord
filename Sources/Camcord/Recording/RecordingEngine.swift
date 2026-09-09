@@ -68,6 +68,11 @@ final class RecordingEngine: NSObject {
         sampleQueue.async { writer.updateCameraOptions(options) }
     }
 
+    func setStageSink(_ sink: (@Sendable (PixelBufferBox) -> Void)?) {
+        guard let writer = streamWriter else { return }
+        sampleQueue.async { writer.stageSink = sink }
+    }
+
     func healthSnapshot() async -> RecordingHealth? {
         guard let writer = streamWriter else { return nil }
         return await withCheckedContinuation { continuation in
@@ -755,9 +760,11 @@ final class RecordingEngine: NSObject {
         cameraToken = nil
         cameraTimer?.cancel()
         cameraTimer = nil
-        if let source = cameraSource { Task.detached { await source.stop() } }
+        if let source = cameraSource {
+            Task.detached { await source.stop() }
+            CameraPreviewMonitor.shared.useRecordingSource(nil)
+        }
         cameraSource = nil
-        CameraPreviewMonitor.shared.useRecordingSource(nil)
         stream = nil
         streamWriter = nil
         delegateRelay = nil

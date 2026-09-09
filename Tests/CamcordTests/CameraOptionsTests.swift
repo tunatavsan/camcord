@@ -35,6 +35,25 @@ struct CameraOptionsTests {
         #expect(abs(large.width / large.height - 16.0 / 9.0) < 0.001)
     }
 
+    @Test("full-frame preview points and compositor pixels preserve placement scale")
+    func fullFramePreviewMatchesCompositorScale() {
+        let previewFrame = CGSize(width: 1512, height: 982)
+        let pixelScale: CGFloat = 2
+        let options = CameraOptions(
+            enabled: true,
+            widthFraction: 0.37,
+            position: CameraPosition(x: 0.23, y: 0.71)
+        )
+        let previewRect = options.rect(in: previewFrame)
+        let compositorRect = options.rect(in: CGSize(width: previewFrame.width * pixelScale,
+                                                     height: previewFrame.height * pixelScale))
+        let scaledPreview = CGRect(x: previewRect.minX * pixelScale, y: previewRect.minY * pixelScale,
+                                   width: previewRect.width * pixelScale, height: previewRect.height * pixelScale)
+        #expect(zip([compositorRect.minX, compositorRect.minY, compositorRect.width, compositorRect.height],
+                    [scaledPreview.minX, scaledPreview.minY, scaledPreview.width, scaledPreview.height])
+            .allSatisfy { abs($0 - $1) < 1e-9 })
+    }
+
     @Test("all corners round-trip through Codable")
     func codableRoundTrip() throws {
         for corner in CameraCorner.allCases {

@@ -3,7 +3,7 @@ import Testing
 
 @testable import Camcord
 
-@Suite("Camera interaction")
+@Suite("Camera interaction", .serialized)
 struct CameraInteractionTests {
     let area = CGSize(width: 1800, height: 1100)
 
@@ -168,21 +168,146 @@ struct CameraInteractionTests {
         window.close()
     }
 
-    @Test("camera overlay is hidden after a panel hide without recording")
-    @MainActor func panelHideClosesCameraOverlay() async {
+    @Test("recording camera flag and panel lifecycle keep the hidden preview monitor idle")
+    @MainActor func hiddenPreviewStaysClosedAcrossPanelLifecycle() {
         _ = NSApplication.shared
-        let controller = CameraOverlayController.shared
-        controller.prepareRecording(
+        let overlay = CameraOverlayController.shared
+        let oldPreviewVisible = overlay.previewVisible
+        let monitor = CameraPreviewMonitor.shared
+        let wasStarting = monitor.isStarting
+        let wasRunning = monitor.isRunning
+        defer {
+            overlay.previewVisible = false
+            overlay.recordingEnded()
+            overlay.previewVisible = oldPreviewVisible
+            overlay.hide()
+        }
+
+        overlay.previewVisible = false
+        overlay.hide()
+        overlay.prepareRecording(
             cgRect: CGRect(x: -10_000, y: -10_000, width: 640, height: 360),
             options: CameraOptions(enabled: true)
         )
-        #expect(controller.isVisible)
+        #expect(!overlay.isVisible)
+        let panel = PanelController(
+            model: RecordingStateModel(),
+            actions: PanelActions(),
+            detachedPanelPresenter: { _, _ in true }
+        )
+        panel.presentDetached()
+        panel.close()
+        #expect(!overlay.previewVisible)
+        #expect(!overlay.isVisible)
+        #expect(monitor.isStarting == wasStarting)
+        #expect(monitor.isRunning == wasRunning)
 
-        controller.hide()
+        overlay.previewVisible = true
+        overlay.prepareRecording(
+            cgRect: CGRect(x: -10_000, y: -10_000, width: 640, height: 360),
+            options: CameraOptions(enabled: false)
+        )
+        #expect(overlay.isVisible)
+        panel.presentDetached()
+        panel.close()
+        #expect(overlay.previewVisible)
+        #expect(overlay.isVisible)
+    }
 
-        #expect(!controller.isVisible)
-        await Task.detached {
-            NotificationCenter.default.post(name: RecordingSettings.didChangeNotification, object: nil)
-        }.value
+    @Test("placement from every surface persists and emits the resolved options")
+    @MainActor func placementSourcesShareOneFunnel() throws {
+        let defaults = UserDefaults.standard
+        let key = RecordingSettings.defaultsKey
+        let savedData = defaults.data(forKey: key)
+        let overlay = CameraOverlayController.shared
+        let savedCallback = overlay.onPlacementChange
+        let savedPreview = overlay.previewVisible
+        defer {
+            overlay.onPlacementChange = nil
+            if let savedData { defaults.set(savedData, forKey: key) } else { defaults.removeObject(forKey: key) }
+            overlay.previewVisible = savedPreview
+            overlay.hide()
+            overlay.onPlacementChange = savedCallback
+        }
+
+        var emitted: [CameraOptions] = []
+        overlay.onPlacementChange = { emitted.append($0) }
+        let sources: [CameraOverlayController.PlacementSource] = [.floating, .stage, .settings]
+        for (index, source) in sources.enumerated() {
+            let options = CameraOptions(enabled: true, deviceID: " camera-\(index) ",
+                                        widthFraction: 0.18 + Double(index) * 0.1,
+                                        mirrored: index.isMultiple(of: 2),
+                                        position: CameraPosition(x: Double(index) / 3, y: Double(index + 1) / 4))
+            overlay.applyPlacement(options, source: source)
+            let expected = options.resolved()
+            #expect(RecordingSettings.load(from: defaults).camera == expected)
+            #expect(emitted.last == expected)
+        }
+        #expect(emitted.count == 3)
+    }
+
+    @Test("hidden recording preparation follows moved window bounds and remains confined")
+    @MainActor func hiddenPreparationTracksMovedWindowBounds() throws {
+        _ = NSApplication.shared
+        let overlay = CameraOverlayController.shared
+        let savedPreview = overlay.previewVisible
+        defer {
+            overlay.previewVisible = false
+            overlay.recordingEnded()
+            overlay.previewVisible = savedPreview
+            overlay.hide()
+        }
+        overlay.previewVisible = false
+        let options = CameraOptions(widthFraction: 0.6, position: CameraPosition(x: 1, y: 1))
+        let initial = CGRect(x: 100, y: 120, width: 800, height: 500)
+        let moved = CGRect(x: 700, y: 260, width: 420, height: 280)
+        overlay.prepareRecording(cgRect: initial, options: options)
+        #expect(!overlay.isVisible)
+        overlay.updateRecordingBounds(cgRect: moved)
+        let nativePanel = try #require(NSApp.windows.first { $0.contentView is FloatingCameraView })
+        let appKitBounds = Geometry.cgToAppKit(moved,
+            primaryScreenHeight: NSScreen.screens.first?.frame.height ?? 0)
+        let expected = options.rect(in: appKitBounds.size)
+            .offsetBy(dx: appKitBounds.minX, dy: appKitBounds.minY)
+        // AppKit rounds native window origins to the screen-point grid.
+        #expect(abs(nativePanel.frame.minX - expected.minX) < 1)
+        #expect(abs(nativePanel.frame.minY - expected.minY) < 1)
+        #expect(nativePanel.frame.maxX <= appKitBounds.maxX + 0.01)
+        #expect(nativePanel.frame.maxY <= appKitBounds.maxY + 0.01)
+    }
+
+    @Test("stage camera geometry scales exactly with its thumbnail")
+    @MainActor func stageThumbnailScale() {
+        let frameSize = CGSize(width: 1600, height: 900)
+        var options = CameraOptions(widthFraction: 0.3)
+        options.position = CameraPosition(x: 0.27, y: 0.68)
+        let small = CGRect(x: 8, y: 12, width: 320, height: 180)
+        let large = CGRect(x: 16, y: 24, width: 640, height: 360)
+
+        let a = StageView.cameraRect(options: options, frameSize: frameSize, thumbnail: small)
+        let b = StageView.cameraRect(options: options, frameSize: frameSize, thumbnail: large)
+
+        #expect(abs(b.minX - a.minX * 2) < 0.0001)
+        #expect(abs(b.minY - a.minY * 2) < 0.0001)
+        #expect(abs(b.width - a.width * 2) < 0.0001)
+        #expect(abs(b.height - a.height * 2) < 0.0001)
+    }
+
+    @Test("an upward stage drag moves the y-up camera rectangle upward")
+    @MainActor func stageDragUsesYUpCoordinates() {
+        let frameSize = CGSize(width: 1600, height: 900)
+        let thumbnail = CGRect(x: 0, y: 0, width: 320, height: 180)
+        let translation = StageView.recordingTranslation(
+            CGSize(width: 0, height: -20),
+            frameSize: frameSize,
+            thumbnail: thumbnail
+        )
+        var options = CameraOptions(widthFraction: 0.3, position: CameraPosition(x: 0.5, y: 0.4))
+        let start = options.rect(in: frameSize)
+
+        options.place(start.offsetBy(dx: translation.x, dy: translation.y), in: frameSize)
+
+        #expect(abs(translation.y - 100) < 0.0001)
+        #expect(options.rect(in: frameSize).minY > start.minY)
     }
 }

@@ -262,6 +262,38 @@ struct StreamWriterCameraTests {
         #expect(abs(videoDuration - audioDuration) < 0.08)
     }
 
+    @Test("stage handoff is limited to 10 Hz, freezes on pause, and detaches cleanly")
+    func stageCadence() async throws {
+        let url = temporaryMovieURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let source = FakeCameraFrameSource(try pixelBuffer(width: 80, height: 60, color: .red))
+        let clock = OSAllocatedUnfairLock(initialState: CMTime.zero)
+        let received = OSAllocatedUnfairLock(initialState: [CMTime]())
+        let writer = try makeWriter(url: url, source: source, options: CameraOptions(enabled: true),
+                                    hostTimeProvider: { clock.withLock { $0 } })
+        writer.consume(try screenSample(pts: CMTime(value: 100, timescale: 30)), of: .screen)
+        #expect(received.withLock { $0.isEmpty })
+        writer.stageSink = { frame in
+            #expect(CVPixelBufferGetWidth(frame.value) == 320)
+            received.withLock { $0.append(clock.withLock { $0 }) }
+        }
+        for (index, milliseconds) in [20, 40, 80, 120, 140, 220].enumerated() {
+            clock.withLock { $0 = CMTime(value: Int64(milliseconds), timescale: 1_000) }
+            writer.consume(try screenSample(pts: CMTime(value: Int64(101 + index), timescale: 30)), of: .screen)
+        }
+        #expect(received.withLock { $0 } == [20, 120, 220].map { CMTime(value: $0, timescale: 1_000) })
+        writer.pause()
+        clock.withLock { $0 = CMTime(value: 300, timescale: 1_000) }
+        writer.consume(try screenSample(pts: CMTime(value: 110, timescale: 30)), of: .screen)
+        #expect(received.withLock { $0.count } == 3)
+        writer.stageSink = nil
+        writer.resume()
+        writer.consume(try screenSample(pts: CMTime(value: 111, timescale: 30)), of: .screen)
+        #expect(received.withLock { $0.count } == 3)
+        writer.markFinished(atHostTime: nil)
+        _ = try await writer.finishWriting()
+    }
+
     private func makeWriter(
         url: URL,
         source: FakeCameraFrameSource,

@@ -51,6 +51,10 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     private var isAwaitingInitialRelease: Bool
     private var lastCameraPTS: CMTime = .invalid
     private var lastAppendedMediaEnd: CMTime = .invalid
+    private var lastStageTime: CMTime = .invalid
+    var stageSink: (@Sendable (PixelBufferBox) -> Void)? {
+        didSet { lastStageTime = .invalid }
+    }
     var onCameraFailure: (@Sendable () -> Void)?
 
     func updateCameraOptions(_ options: CameraOptions) {
@@ -298,6 +302,14 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
                 cameraCompositingFailed = true
                 logger.error("Camera composition failed; screen capture continues: \(String(describing: error), privacy: .public)")
                 onCameraFailure?()
+            }
+        }
+        if let stageSink {
+            let now = hostTimeProvider()
+            if !lastStageTime.isValid || CMTimeSubtract(now, lastStageTime) >= CMTime(value: 1, timescale: 10),
+               let pixels = CMSampleBufferGetImageBuffer(output) {
+                lastStageTime = now
+                stageSink(PixelBufferBox(pixels))
             }
         }
         if append(output, retimedTo: retimedPTS, originalPTS: pts, input: videoInput) {

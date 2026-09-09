@@ -109,6 +109,7 @@ struct RecordingSettings: Codable, Equatable {
     /// A subtle glow border around a recorded window while recording (window target
     /// only; never full-screen). Not captured in the recording.
     var windowGlowEnabled: Bool
+    var armBeforeWindowRecording: Bool
 
     init(
         systemAudio: Bool = true,
@@ -134,7 +135,8 @@ struct RecordingSettings: Codable, Equatable {
         countdownEnabled: Bool = false,
         outputDirectoryPath: String? = nil,
         filenamePrefix: String = "camcord",
-        windowGlowEnabled: Bool = true
+        windowGlowEnabled: Bool = true,
+        armBeforeWindowRecording: Bool = false
     ) {
         self.systemAudio = systemAudio
         self.microphone = microphone
@@ -160,6 +162,7 @@ struct RecordingSettings: Codable, Equatable {
         self.outputDirectoryPath = outputDirectoryPath
         self.filenamePrefix = filenamePrefix
         self.windowGlowEnabled = windowGlowEnabled
+        self.armBeforeWindowRecording = armBeforeWindowRecording
     }
 
     /// True when a recording will produce two separate audio tracks that should be
@@ -219,6 +222,7 @@ struct RecordingSettings: Codable, Equatable {
         outputDirectoryPath = try c.decodeIfPresent(String.self, forKey: .outputDirectoryPath)
         filenamePrefix = try c.decodeIfPresent(String.self, forKey: .filenamePrefix) ?? d.filenamePrefix
         windowGlowEnabled = try c.decodeIfPresent(Bool.self, forKey: .windowGlowEnabled) ?? d.windowGlowEnabled
+        armBeforeWindowRecording = try c.decodeIfPresent(Bool.self, forKey: .armBeforeWindowRecording) ?? d.armBeforeWindowRecording
     }
 
     /// Applies onto `base` only the fields where `self` differs from `old` — so a whole-
@@ -251,6 +255,7 @@ struct RecordingSettings: Codable, Equatable {
         if outputDirectoryPath != old.outputDirectoryPath { r.outputDirectoryPath = outputDirectoryPath }
         if filenamePrefix != old.filenamePrefix { r.filenamePrefix = filenamePrefix }
         if windowGlowEnabled != old.windowGlowEnabled { r.windowGlowEnabled = windowGlowEnabled }
+        if armBeforeWindowRecording != old.armBeforeWindowRecording { r.armBeforeWindowRecording = armBeforeWindowRecording }
         return r
     }
 

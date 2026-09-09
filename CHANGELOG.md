@@ -56,3 +56,6 @@
 
 ## Scrolling capture v3
 - Defer scroll strips through bounce recovery, settle Done captures, and measure automatic wheel direction before persisting it.
+
+## Camera C
+- Separate camera preview from recording, arm window recordings for placement, and add a live stage for moving and resizing the recorded camera.

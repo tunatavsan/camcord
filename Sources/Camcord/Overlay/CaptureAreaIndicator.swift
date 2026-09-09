@@ -2,6 +2,11 @@ import AppKit
 import CoreGraphics
 import QuartzCore
 
+enum StopPillGlyph {
+    case stop
+    case play
+}
+
 /// A minimal, glowing border around a captured area (a recorded window, or a scrolling-
 /// capture region). It lives in its OWN borderless panels — different windows than the one
 /// being captured — and the stroke sits OUTSIDE the target rect, so it never appears in the
@@ -74,7 +79,14 @@ final class CaptureAreaIndicator {
 
         borderPanel = makeBorderPanel(target: target, color: color)
         if let onStop {
-            stopPanel = makeStopPanel(target: target, color: color, onStop: onStop)
+            stopPanel = makeStopPanel(
+                target: target,
+                title: label ?? "Kaydı Durdur",
+                glyph: .stop,
+                color: color,
+                onCancel: nil,
+                onStop: onStop
+            )
         }
     }
 
@@ -88,7 +100,14 @@ final class CaptureAreaIndicator {
         // bar on a desktop (not over it); in fullscreen the bar is hidden and the
         // visible frame reaches the top edge — the pill lands where the bar was.
         let screen = NSScreen.screens.first { $0.frame.intersects(target) } ?? NSScreen.main
-        stopPanel = makeStopPanel(target: screen?.visibleFrame ?? target, color: color, onStop: onStop)
+        stopPanel = makeStopPanel(
+            target: screen?.visibleFrame ?? target,
+            title: "Kaydı Durdur",
+            glyph: .stop,
+            color: color,
+            onCancel: nil,
+            onStop: onStop
+        )
     }
 
     /// Window-recording surface that never loses its stop affordance. The optional
@@ -98,6 +117,10 @@ final class CaptureAreaIndicator {
         _ windowID: CGWindowID,
         initialCGRect: CGRect,
         showsBorder: Bool,
+        title: String = "Kaydı Durdur",
+        glyph: StopPillGlyph = .stop,
+        color: NSColor = .systemRed,
+        onCancel: (() -> Void)? = nil,
         onStop: @escaping () -> Void
     ) {
         hide()
@@ -107,9 +130,16 @@ final class CaptureAreaIndicator {
 
         keepsStopPillVisibleWhenOccluded = true
         if showsBorder {
-            borderPanel = makeBorderPanel(target: target, color: .systemRed)
+            borderPanel = makeBorderPanel(target: target, color: color)
         }
-        stopPanel = makeStopPanel(target: target, color: .systemRed, onStop: onStop)
+        stopPanel = makeStopPanel(
+            target: target,
+            title: title,
+            glyph: glyph,
+            color: color,
+            onCancel: onCancel,
+            onStop: onStop
+        )
         followWindowID = windowID
         lastFollowedBounds = cgBounds
         startFollowing()
@@ -323,8 +353,15 @@ final class CaptureAreaIndicator {
         return panel
     }
 
-    private func makeStopPanel(target: CGRect, color: NSColor, onStop: @escaping () -> Void) -> NSPanel {
-        let size = CGSize(width: 148, height: 30)
+    private func makeStopPanel(
+        target: CGRect,
+        title: String,
+        glyph: StopPillGlyph,
+        color: NSColor,
+        onCancel: (() -> Void)?,
+        onStop: @escaping () -> Void
+    ) -> NSPanel {
+        let size = CGSize(width: onCancel == nil ? 148 : 178, height: 30)
         // Bounds = the VISIBLE frame: the pill must never rest on the live menu bar,
         // where its interactive panel would eat clicks meant for status items.
         let bounds = relevantScreen(for: target)?.visibleFrame ?? target
@@ -332,7 +369,13 @@ final class CaptureAreaIndicator {
 
         let panel = borderlessPanel(frame: CGRect(origin: origin, size: size))
         panel.ignoresMouseEvents = false
-        let pill = StopPillView(frame: CGRect(origin: .zero, size: size), color: color)
+        let pill = StopPillView(
+            frame: CGRect(origin: .zero, size: size),
+            title: title,
+            glyph: glyph,
+            color: color,
+            onCancel: onCancel
+        )
         pill.onClick = onStop
         panel.contentView = pill
         stopPillView = pill
@@ -406,6 +449,14 @@ final class CaptureAreaIndicator {
     func setOccludedForTesting(_ value: Bool) {
         occluded = value
         applyOcclusion()
+    }
+
+    func activateStopPillForTesting(at point: CGPoint) {
+        stopPillView?.performClick(at: point)
+    }
+
+    func applyStopPillIdleFadeForTesting() {
+        stopPillView?.applyIdleFade()
     }
 }
 
@@ -535,8 +586,11 @@ struct FollowPredictor {
 /// attention; full opacity returns on hover.
 private final class StopPillView: NSView {
     var onClick: (() -> Void)?
+    private let title: String
+    private let glyph: StopPillGlyph
     private let color: NSColor
-    private let label = NSTextField(labelWithString: "Kaydı Durdur")
+    private let onCancel: (() -> Void)?
+    private let label: NSTextField
     private var elapsedText: String?
     private var hovered = false
     private var fadeWorkItem: DispatchWorkItem?
@@ -544,9 +598,20 @@ private final class StopPillView: NSView {
     private var downMouse: NSPoint?
     private var downOrigin: NSPoint?
     private var draggedBeyondSlop = false
+    private var downInCancel = false
 
-    init(frame: NSRect, color: NSColor) {
+    init(
+        frame: NSRect,
+        title: String,
+        glyph: StopPillGlyph,
+        color: NSColor,
+        onCancel: (() -> Void)?
+    ) {
+        self.title = title
+        self.glyph = glyph
         self.color = color
+        self.onCancel = onCancel
+        self.label = NSTextField(labelWithString: title)
         super.init(frame: frame)
         wantsLayer = true
         layer?.cornerRadius = 15
@@ -590,7 +655,7 @@ private final class StopPillView: NSView {
 
     private func refreshLabel() {
         if hovered || elapsedText == nil {
-            label.stringValue = "Kaydı Durdur"
+            label.stringValue = title
             label.font = .systemFont(ofSize: 11.5, weight: .semibold)
         } else {
             label.stringValue = elapsedText ?? ""
@@ -600,14 +665,17 @@ private final class StopPillView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil { scheduleIdleFade() }
+        if window != nil {
+            window?.alphaValue = 1
+            scheduleIdleFade()
+        }
     }
 
     private func scheduleIdleFade() {
         fadeWorkItem?.cancel()
+        guard onCancel == nil else { return }
         let item = DispatchWorkItem { [weak self] in
-            guard let self, !self.hovered else { return }
-            self.window?.animator().alphaValue = 0.6
+            self?.applyIdleFade(animated: true)
         }
         fadeWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: item)
@@ -615,14 +683,67 @@ private final class StopPillView: NSView {
 
     override func layout() {
         super.layout()
-        label.frame = CGRect(x: 30, y: (bounds.height - 16) / 2, width: bounds.width - 36, height: 16)
+        let trailingInset: CGFloat = onCancel == nil ? 6 : 36
+        label.frame = CGRect(
+            x: 30,
+            y: (bounds.height - 16) / 2,
+            width: bounds.width - 30 - trailingInset,
+            height: 16
+        )
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        let square = CGRect(x: 12, y: bounds.midY - 5, width: 10, height: 10)
         NSColor.white.setFill()
-        NSBezierPath(roundedRect: square, xRadius: 2, yRadius: 2).fill()
+        switch glyph {
+        case .stop:
+            let square = CGRect(x: 12, y: bounds.midY - 5, width: 10, height: 10)
+            NSBezierPath(roundedRect: square, xRadius: 2, yRadius: 2).fill()
+        case .play:
+            let triangle = NSBezierPath()
+            triangle.move(to: CGPoint(x: 12, y: bounds.midY - 6))
+            triangle.line(to: CGPoint(x: 23, y: bounds.midY))
+            triangle.line(to: CGPoint(x: 12, y: bounds.midY + 6))
+            triangle.close()
+            triangle.fill()
+        }
+
+        if onCancel != nil {
+            NSColor.white.withAlphaComponent(0.28).setStroke()
+            let divider = NSBezierPath()
+            divider.move(to: CGPoint(x: cancelHitRect.minX, y: 6))
+            divider.line(to: CGPoint(x: cancelHitRect.minX, y: bounds.height - 6))
+            divider.lineWidth = 1
+            divider.stroke()
+
+            NSColor.white.setStroke()
+            let cross = NSBezierPath()
+            let center = CGPoint(x: cancelHitRect.midX, y: cancelHitRect.midY)
+            cross.move(to: CGPoint(x: center.x - 4, y: center.y - 4))
+            cross.line(to: CGPoint(x: center.x + 4, y: center.y + 4))
+            cross.move(to: CGPoint(x: center.x - 4, y: center.y + 4))
+            cross.line(to: CGPoint(x: center.x + 4, y: center.y - 4))
+            cross.lineWidth = 1.5
+            cross.stroke()
+        }
+    }
+
+    private var cancelHitRect: CGRect {
+        guard onCancel != nil else { return .null }
+        return CGRect(x: bounds.maxX - 30, y: bounds.minY, width: 30, height: bounds.height)
+    }
+
+    fileprivate func applyIdleFade() {
+        applyIdleFade(animated: false)
+    }
+
+    private func applyIdleFade(animated: Bool) {
+        guard onCancel == nil, !hovered else { return }
+        if animated {
+            window?.animator().alphaValue = 0.6
+        } else {
+            window?.alphaValue = 0.6
+        }
     }
 
     // MARK: Hover
@@ -654,9 +775,11 @@ private final class StopPillView: NSView {
         downMouse = NSEvent.mouseLocation
         downOrigin = window?.frame.origin
         draggedBeyondSlop = false
+        downInCancel = cancelHitRect.contains(convert(event.locationInWindow, from: nil))
     }
 
     override func mouseDragged(with event: NSEvent) {
+        guard !downInCancel else { return }
         guard let downMouse, let downOrigin, let window else { return }
         let now = NSEvent.mouseLocation
         let dx = now.x - downMouse.x
@@ -667,9 +790,25 @@ private final class StopPillView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        if !draggedBeyondSlop { onClick?() }
+        if !draggedBeyondSlop {
+            let point = convert(event.locationInWindow, from: nil)
+            if downInCancel {
+                if cancelHitRect.contains(point) { onCancel?() }
+            } else {
+                performClick(at: point)
+            }
+        }
         downMouse = nil
         downOrigin = nil
+        downInCancel = false
+    }
+
+    fileprivate func performClick(at point: CGPoint) {
+        if cancelHitRect.contains(point) {
+            onCancel?()
+        } else {
+            onClick?()
+        }
     }
 
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }

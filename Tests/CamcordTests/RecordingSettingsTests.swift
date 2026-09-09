@@ -21,6 +21,22 @@ struct RecordingSettingsTests {
         #expect(merged.microphoneGainDB == 9)
     }
 
+    @Test("window-recording arm defaults off, decodes compatibly, and merges independently")
+    func armBeforeWindowRecordingCompatibility() throws {
+        #expect(!RecordingSettings().armBeforeWindowRecording)
+        let legacy = try JSONDecoder().decode(RecordingSettings.self, from: Data("{}".utf8))
+        #expect(!legacy.armBeforeWindowRecording)
+        var enabled = legacy
+        enabled.armBeforeWindowRecording = true
+        #expect(try JSONDecoder().decode(RecordingSettings.self,
+                                        from: JSONEncoder().encode(enabled)).armBeforeWindowRecording)
+        var concurrent = legacy
+        concurrent.camera.enabled = true
+        let merged = enabled.merging(from: legacy, into: concurrent)
+        #expect(merged.armBeforeWindowRecording)
+        #expect(merged.camera.enabled)
+    }
+
     @Test("legacy settings use the balanced system gain while explicit gains round-trip independently")
     func audioGainCompatibility() throws {
         let legacy = try JSONDecoder().decode(RecordingSettings.self, from: Data("{\"microphone\":true,\"mixAudioTracks\":false}".utf8))

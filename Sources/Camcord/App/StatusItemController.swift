@@ -22,6 +22,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let captureTextFromFileItem = NSMenuItem(title: "Görüntüden Metni Çıkar…", action: nil, keyEquivalent: "")
     private let recordToggleItem = NSMenuItem(title: "Kayda Başla…", action: nil, keyEquivalent: "")
     private let recordFullScreenItem = NSMenuItem(title: "Tüm Ekranı Kaydet", action: nil, keyEquivalent: "")
+    private let cameraPreviewItem = NSMenuItem(title: "Kamera Önizlemesi", action: nil, keyEquivalent: "")
     private let showPanelItem = NSMenuItem(title: "Kayıt Panelini Aç", action: nil, keyEquivalent: "")
     private let pauseResumeItem = NSMenuItem(title: "Kaydı Duraklat", action: nil, keyEquivalent: "")
     private let screenRecordingStatusItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
@@ -126,6 +127,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         showPanelItem.target = self
         showPanelItem.action = #selector(showRecordingPanel)
         menu.addItem(showPanelItem)
+        cameraPreviewItem.target = self
+        cameraPreviewItem.action = #selector(toggleCameraPreview)
+        menu.addItem(cameraPreviewItem)
 
         menu.addItem(.separator())
 
@@ -196,6 +200,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     // MARK: - NSMenuDelegate
 
     func menuWillOpen(_ menu: NSMenu) {
+        cameraPreviewItem.state = CameraOverlayController.shared.previewVisible ? .on : .off
         refreshScreenRecordingState()
         refreshMicrophoneState()
         refreshLaunchAtLoginState()
@@ -409,6 +414,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     // MARK: - Recording actions
+
+    @objc private func toggleCameraPreview() {
+        CameraOverlayController.shared.togglePreview()
+        cameraPreviewItem.state = CameraOverlayController.shared.previewVisible ? .on : .off
+    }
 
     @objc private func toggleRecording() {
         Task {

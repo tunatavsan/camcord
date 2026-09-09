@@ -3,12 +3,15 @@ import Combine
 import QuartzCore
 
 /// One visible camera, sharing the recording's source. Placement changes are sent
-/// to the compositor immediately; UserDefaults is written only when a drag ends.
+/// to the compositor and the persisted placement through one shared funnel.
 @MainActor
 final class CameraOverlayController: NSObject {
     static let shared = CameraOverlayController()
+    enum PlacementSource { case floating, stage, settings }
+
     var onPlacementChange: ((CameraOptions) -> Void)?
     var isVisible: Bool { panel.isVisible }
+    var previewVisible = false
 
     private let panel: NSPanel
     private let cameraView = FloatingCameraView()
@@ -65,11 +68,33 @@ final class CameraOverlayController: NSObject {
             }.store(in: &observations)
     }
 
+    func applyPlacement(_ options: CameraOptions, source: PlacementSource) {
+        if source != .floating { stopMotion(); dragStart = nil }
+        self.options = options.resolved()
+        var settings = RecordingSettings.load(from: .standard)
+        if settings.camera != self.options {
+            settings.camera = self.options
+            settings.save(to: .standard)
+        }
+        if panel.isVisible { cameraView.mirrored = self.options.mirrored; layout() }
+        onPlacementChange?(self.options)
+    }
+
+    func togglePreview() {
+        previewVisible.toggle()
+        if previewVisible { showPreview(requestPermission: true) } else { hide() }
+    }
+
+    func recordingEnded() {
+        recordingBounds = nil
+        if previewVisible { showPreview() } else { hide() }
+    }
+
     func showPreview(requestPermission: Bool = false) {
         let settings = RecordingSettings.load(from: .standard)
-        guard settings.camera.enabled else { hide(); return }
+        guard previewVisible else { hide(); return }
         options = settings.camera.resolved()
-        previewBounds = (NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main)?.visibleFrame ?? .zero
+        previewBounds = (NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main)?.frame ?? .zero
         show()
         guard !CameraPreviewMonitor.shared.recordingLocked else { return }
         restartTask?.cancel()
@@ -91,7 +116,7 @@ final class CameraOverlayController: NSObject {
         }
         self.options = options.resolved()
         recordingBounds = Geometry.cgToAppKit(cgRect, primaryScreenHeight: NSScreen.screens.first?.frame.height ?? 0)
-        if options.enabled { show() } else { hide() }
+        if previewVisible { show() } else { hide() }
     }
 
     func updateRecordingBounds(cgRect: CGRect) {
@@ -112,7 +137,6 @@ final class CameraOverlayController: NSObject {
 
     func hide() {
         stopMotion()
-        recordingBounds = nil
         shadowPanel.orderOut(nil)
         panel.orderOut(nil)
         restartTask?.cancel()
@@ -130,7 +154,6 @@ final class CameraOverlayController: NSObject {
             options.corner = displayed.corner
             options.widthFraction = displayed.widthFraction
         }
-        if !updated.enabled { hide(); return }
         guard panel.isVisible else { return }
         cameraView.mirrored = updated.mirrored
         if dragStart == nil, motion == nil { layout() }
@@ -194,8 +217,7 @@ final class CameraOverlayController: NSObject {
         guard let motion else { return }
         options.place(motion.frame, in: bounds.size)
         if let corner = motion.magnetCorner { options.corner = corner }
-        layout()
-        onPlacementChange?(options)
+        applyPlacement(options, source: .floating)
     }
 
     @objc private func animateDrag(_ link: CADisplayLink) {
@@ -229,8 +251,7 @@ final class CameraOverlayController: NSObject {
                 options = CameraResizeGeometry.resize(start: local, translation: translation,
                                                       corner: corner, options: options, in: bounds.size)
                 final = options
-                layout()
-                onPlacementChange?(options)
+                applyPlacement(options, source: .floating)
             } else {
                 motion?.follow(CGPoint(x: local.minX + translation.x, y: local.minY + translation.y),
                                released: phase == .ended)
@@ -241,11 +262,7 @@ final class CameraOverlayController: NSObject {
             }
             if phase == .ended {
                 dragStart = nil
-                var settings = RecordingSettings.load(from: .standard)
-                settings.camera.position = final.position
-                settings.camera.corner = final.corner
-                settings.camera.widthFraction = final.widthFraction
-                settings.save(to: .standard)
+                applyPlacement(final, source: .floating)
             }
             if start.corner == nil { startMotion() }
         }

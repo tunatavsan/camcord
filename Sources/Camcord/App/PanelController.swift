@@ -173,7 +173,7 @@ final class PanelController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         // Read this at every presentation so a live Reduce Motion preference change is
         // honored without recreating the retained controller.
         popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        popover.behavior = model.state != .idle || model.isStarting ? .applicationDefined : .transient
+        popover.behavior = model.state != .idle || model.isStarting || model.isArmed ? .applicationDefined : .transient
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         model.isPanelVisible = popover.isShown
 

@@ -3,6 +3,18 @@ import AppKit
 import CoreImage
 import SwiftUI
 
+/// Retains a Core Video frame across the recording queue → preview-renderer handoff.
+/// The buffer is immutable while either side holds it.
+struct PixelBufferBox: @unchecked Sendable {
+    let value: CVPixelBuffer
+
+    init(_ value: CVPixelBuffer) { self.value = value }
+
+    var pixelSize: CGSize {
+        CGSize(width: CVPixelBufferGetWidth(value), height: CVPixelBufferGetHeight(value))
+    }
+}
+
 /// Coordinates the explicit Settings preview and the recording-owned camera source.
 /// Only the former is owned/stopped here; while recording, the monitor reads the exact
 /// `CameraCapture.latestFrame()` source that the compositor uses.
@@ -16,7 +28,9 @@ final class CameraPreviewMonitor: ObservableObject {
     @Published private(set) var recordingLocked = false
     @Published private(set) var message: String?
 
-    private let renderer = CameraPreviewRenderer()
+    /// The camera preview and recording stage share this renderer, including its queue
+    /// and CIContext, so opening the stage creates no second GPU rendering pipeline.
+    let renderer = CameraPreviewRenderer()
     private var ownedCapture: CameraCapture?
     private var ownedCaptureID: UUID?
     private weak var recordingSource: CameraCapture?
@@ -232,7 +246,7 @@ final class CameraPreviewMonitor: ObservableObject {
 /// GPU-backed preview conversion runs on a dedicated serial queue. Returning a CGImage
 /// keeps AppKit object creation on the main actor and bounds rendering to one in-flight
 /// frame because the monitor awaits each call before polling again.
-private final class CameraPreviewRenderer: @unchecked Sendable {
+final class CameraPreviewRenderer: @unchecked Sendable {
     struct RenderedFrame: @unchecked Sendable {
         let image: CGImage
         let size: NSSize
@@ -272,12 +286,6 @@ private final class CameraPreviewRenderer: @unchecked Sendable {
                 continuation.resume(returning: RenderedFrame(image: image, size: extent.size))
             }
         }
-    }
-
-    /// Core Video buffers are immutable to this renderer and retained across the queue hop.
-    private struct PixelBufferBox: @unchecked Sendable {
-        let value: CVPixelBuffer
-        init(_ value: CVPixelBuffer) { self.value = value }
     }
 }
 

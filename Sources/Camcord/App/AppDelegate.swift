@@ -68,10 +68,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if starting {
                 recordingStateModel?.finishedURL = nil
                 self?.panelController?.keepOpenForRecording()
-            } else if recordingStateModel?.state == .idle {
+            } else if recordingStateModel?.state == .idle, recordingStateModel?.isArmed != true {
                 self?.panelController?.releaseRecordingHold()
             }
             statusItemController?.setPreparing(starting)
+        }
+        recordingController.onArmedChange = { [weak self, weak recordingStateModel] armed in
+            recordingStateModel?.isArmed = armed
+            if armed {
+                recordingStateModel?.finishedURL = nil
+                self?.panelController?.keepOpenForRecording()
+            } else if recordingStateModel?.isStarting != true, recordingStateModel?.state == .idle {
+                self?.panelController?.releaseRecordingHold()
+            }
         }
         recordingController.onHealthChange = { [weak recordingStateModel] health in
             recordingStateModel?.health = health
@@ -224,6 +233,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.panelController?.keepOpenForRecording()
             Task { await recordingController?.recordFullScreen() }
         }
+        actions.cancelArmed = { [weak recordingController] in recordingController?.cancelArmed() }
+        actions.setStageSink = { [weak recordingController] sink in recordingController?.setStageSink(sink) }
+        actions.recordingFrameSize = { [weak recordingController] in recordingController?.recordingFrameSize ?? .zero }
         actions.pauseResume = { [weak recordingController] in
             recordingController?.pauseResume()
         }
