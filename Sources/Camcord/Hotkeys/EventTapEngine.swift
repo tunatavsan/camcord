@@ -599,6 +599,7 @@ final class EventTapEngine: NSObject {
     // MARK: - Action dispatch (same flows as HotkeyCenter)
 
     private func perform(_ action: TapAction) {
+        TriggerLog.fired("tap.\(action)")
         switch action {
         case .captureRegion:
             Task { await coordinator.captureRegionInteractive() }

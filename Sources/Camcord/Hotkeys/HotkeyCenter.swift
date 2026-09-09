@@ -28,26 +28,27 @@ final class HotkeyCenter {
         self.coordinator = coordinator
         self.recordingController = recordingController
 
-        KeyboardShortcuts.onKeyDown(for: .captureRegion) { [coordinator] in
-            Task { await coordinator.captureRegionInteractive() }
-        }
-        KeyboardShortcuts.onKeyDown(for: .captureActiveWindow) { [coordinator] in
-            Task { await coordinator.captureActiveWindow() }
-        }
-        KeyboardShortcuts.onKeyDown(for: .captureFullScreen) { [coordinator] in
-            Task { await coordinator.captureFullScreen() }
-        }
-        KeyboardShortcuts.onKeyDown(for: .captureTextRegion) { [coordinator] in
-            Task { await coordinator.captureTextRegionInteractive() }
-        }
-        KeyboardShortcuts.onKeyDown(for: .captureScrolling) { [coordinator] in
-            Task { await coordinator.captureScrollingInteractive() }
-        }
-        KeyboardShortcuts.onKeyDown(for: .toggleRecording) { [recordingController] in
-            Task { await recordingController.toggleRecording() }
-        }
-        KeyboardShortcuts.onKeyDown(for: .pauseRecording) { [recordingController] in
-            recordingController.pauseResume()
+        Self.onKeyDown(.captureRegion, "captureRegion") { [coordinator] in await coordinator.captureRegionInteractive() }
+        Self.onKeyDown(.captureActiveWindow, "captureActiveWindow") { [coordinator] in await coordinator.captureActiveWindow() }
+        Self.onKeyDown(.captureFullScreen, "captureFullScreen") { [coordinator] in await coordinator.captureFullScreen() }
+        Self.onKeyDown(.captureTextRegion, "captureTextRegion") { [coordinator] in await coordinator.captureTextRegionInteractive() }
+        Self.onKeyDown(.captureScrolling, "captureScrolling") { [coordinator] in await coordinator.captureScrollingInteractive() }
+        Self.onKeyDown(.toggleRecording, "toggleRecording") { [recordingController] in await recordingController.toggleRecording() }
+        Self.onKeyDown(.pauseRecording, "pauseRecording") { [recordingController] in recordingController.pauseResume() }
+    }
+
+    /// Every binding logs itself before it runs: in a fullscreen game the first question
+    /// is whether the trigger reached us at all (Phase G.1).
+    private static func onKeyDown(
+        _ name: KeyboardShortcuts.Name,
+        _ label: String,
+        _ action: @escaping @MainActor () async -> Void
+    ) {
+        KeyboardShortcuts.onKeyDown(for: name) {
+            Task { @MainActor in
+                TriggerLog.fired("hotkey.\(label)")
+                await action()
+            }
         }
     }
 }

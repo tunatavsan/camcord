@@ -157,3 +157,33 @@ struct TapBindingsForwardCompatTests {
         #expect(TapBindings.load(from: defaults) == TapBindings())
     }
 }
+
+@Suite("Fullscreen context")
+struct FullscreenContextTests {
+    private func context(front: String?, covers: Bool, layer: Int = 0, captured: Bool = false) -> FullscreenContext {
+        FullscreenContext(displayID: 1, frontmostBundleID: front, coversDisplay: covers,
+                          windowLayer: layer, displayCaptured: captured)
+    }
+
+    @Test("only another app covering the whole display is game-like")
+    func decisionTable() {
+        let game = "com.riotgames.LeagueofLegends"
+        #expect(context(front: game, covers: true, layer: 0).isGameLike)
+        #expect(context(front: game, covers: true, layer: 2_147_483_631, captured: true).isGameLike)
+        // A window that does not cover the display leaves room for our overlays.
+        #expect(!context(front: game, covers: false, layer: 0).isGameLike)
+        // Our own full-screen surfaces (the selection overlay itself) are never a game.
+        #expect(!context(front: Bundle.main.bundleIdentifier, covers: true).isGameLike)
+        // Nothing frontmost (login window / fast user switch) is not a game context.
+        #expect(!context(front: nil, covers: true).isGameLike)
+    }
+
+    @Test("the log line carries both failure classes")
+    func logLineShape() {
+        let line = context(front: "com.x.y", covers: true, layer: 25, captured: true).logLine
+        #expect(line.contains("covers=true"))
+        #expect(line.contains("layer=25"))
+        #expect(line.contains("captured=true"))
+        #expect(line.contains("game=true"))
+    }
+}

@@ -324,6 +324,16 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         // Make key WITHOUT activating the app (no NSApp.activate call).
         (keyPanel ?? panels.first)?.makeKey()
 
+        // Phase G.1: a trigger can arrive and still draw nothing — a fullscreen game sits
+        // above .screenSaver. Report whether the panels actually made it on screen.
+        TriggerLog.overlay("ordered=\(panels.count)")
+        let ordered = panels
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(50))
+            let visible = ordered.filter { $0.occlusionState.contains(.visible) }.count
+            TriggerLog.overlay("visible=\(visible)/\(ordered.count)")
+        }
+
         // Seed window-snap for the cursor's RESTING position: tracking areas emit no
         // mouseMoved for a cursor already inside the view, so the natural
         // "hover the target, then press the hotkey, then click" flow would otherwise
