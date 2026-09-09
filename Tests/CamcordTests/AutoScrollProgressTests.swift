@@ -14,12 +14,11 @@ struct AutoScrollProgressTests {
         }
     }
 
-    @Test("three no-motion frames after advancing mean the bottom was reached")
+    @Test("two no-motion frames after advancing mean the bottom was reached")
     func stallAfterAdvanceEnds() {
         var p = AutoScrollProgress()
         #expect(p.record(.down(20, score: 0)) == .keepScrolling)
         #expect(p.record(.down(20, score: 0)) == .keepScrolling)
-        #expect(p.record(.none) == .keepScrolling)
         #expect(p.record(.none) == .keepScrolling)
         #expect(p.record(.none) == .reachedEnd)
     }
@@ -29,17 +28,21 @@ struct AutoScrollProgressTests {
         var p = AutoScrollProgress()
         _ = p.record(.down(20, score: 0))
         #expect(p.record(.none) == .keepScrolling)
-        #expect(p.record(.none) == .keepScrolling)
         #expect(p.record(.down(20, score: 0)) == .keepScrolling)
-        #expect(p.record(.none) == .keepScrolling)
         #expect(p.record(.none) == .keepScrolling)
         #expect(p.record(.none) == .reachedEnd)
     }
 
-    @Test("three no-motion frames before any advance flip the direction")
+    @Test("a spring-back after the run advanced is the page end, not a wrong direction")
+    func springBackAfterAdvanceEnds() {
+        var p = AutoScrollProgress()
+        #expect(p.record(.down(20, score: 0)) == .keepScrolling)
+        #expect(p.record(.up(12)) == .reachedEnd)
+    }
+
+    @Test("two no-motion frames before any advance flip the direction")
     func stallBeforeAdvanceFlips() {
         var p = AutoScrollProgress()
-        #expect(p.record(.none) == .keepScrolling)
         #expect(p.record(.none) == .keepScrolling)
         #expect(p.record(.none) == .flipDirection)
     }
@@ -47,13 +50,13 @@ struct AutoScrollProgressTests {
     @Test("if both directions remain still, give up")
     func bothDirectionsFailGiveUp() {
         var p = AutoScrollProgress()
-        for _ in 0..<2 { #expect(p.record(.none) == .keepScrolling) }
+        #expect(p.record(.none) == .keepScrolling)
         #expect(p.record(.none) == .flipDirection)
-        for _ in 0..<2 { #expect(p.record(.none) == .keepScrolling) }
+        #expect(p.record(.none) == .keepScrolling)
         #expect(p.record(.none) == .reachedEnd)
     }
 
-    @Test("upward motion flips once, then ends")
+    @Test("upward motion before any advance flips once, then ends")
     func advanceAfterFlip() {
         var p = AutoScrollProgress()
         #expect(p.record(.up(20)) == .flipDirection)

@@ -33,6 +33,7 @@ final class ScrollStitcher {
     private let bandAbsFixed = 32.0     // ...or, when "moved" can't be tested, matches this well
     private let uniformBandRange = 24   // a strip flatter than this = blank over-scroll, skip it
     private let endStableLimit = 20.0   // a strip matching the reference's own tail = a bounce dup
+    private static let tailDupLimit = 3.0  // MAD at/below which a committed tail strip is a repeat
     private let maxTotalHeight: Int     // px safety cap on the stitched content
     private static let previewMaxHeightPx = 1200  // live preview renders at most this tall (tail only)
 
@@ -90,7 +91,14 @@ final class ScrollStitcher {
     private var strips: [CGImage] = []
     private var reference: Frame?
     private var committedHeight = 0
-    private var pending: (frame: Frame, offset: Int)?
+    private var pending: (frame: Frame, offset: Int, flat: Bool)?
+    /// Row signature of the COMMITTED composite (baseline rows, then every committed strip),
+    /// so finalize can ask whether the last strip merely repeats the band above it. One
+    /// `columns`-wide row per composed pixel row: 20 B/row, bounded by `maxTotalHeight`.
+    private var contentSig: [UInt8] = []
+    /// True when the newest committed strip repeated the band of equal height directly above
+    /// it — the signature of a page end stitched twice, and the end of an auto-scroll run.
+    private(set) var tailRepeated = false
     private(set) var lastMotion: Motion = .none
     private(set) var lastScore = 0.0
     var contentPixelHeight: Int { committedHeight + (pending?.offset ?? 0) }
@@ -181,7 +189,10 @@ final class ScrollStitcher {
     /// Full-resolution stitched image of everything so far (nil if nothing captured).
     func finalImage() -> CGImage? {
         if !detected { commitWarmup(forced: true) }
-        commitPending()
+        // Done with a move still pending means the move was real — unless it only revealed a
+        // blank over-scroll band, which nothing ever confirmed as content.
+        if pending?.flat == true { pending = nil } else { commitPending(revealsContent: true) }
+        dropRepeatedTail()
         return render(pieces(), maxWidth: nil)
     }
 
@@ -227,6 +238,7 @@ final class ScrollStitcher {
         topImage = crop(first.image, y: 0, height: H - footerH)
         footerImage = footerH > 0 ? crop(first.image, y: H - footerH, height: footerH) : nil
         committedHeight = H - footerH
+        contentSig = Array(first.sig[0 ..< (H - footerH) * Self.columns])
         reference = first
         strips = []
 
@@ -263,9 +275,14 @@ final class ScrollStitcher {
         // step is NEVER dropped; only bounce slivers get bounce-checked.
         let stripTop = ref.height - footerH - offset
         let stripBottom = ref.height - footerH
+        // A revealed band with no vertical structure is blank over-scroll stretch, not page
+        // content — at ANY size, since a strong flick stretches far past the bounce sliver.
+        // Such a strip stays PROVISIONAL: only a later frame that reveals real content BELOW
+        // it proves the band was page content; otherwise finalize drops it.
+        let flat = isUniformBand(f.sig, from: stripTop, to: stripBottom)
         if offset < 2 * Self.minShift(ref.height) {
             // (a) The revealed band is blank window background (over-scroll past content).
-            if isUniformBand(f.sig, from: stripTop, to: stripBottom) {
+            if flat {
                 commitPending(); lastMotion = .none; return .noMotion
             }
             // (b) The revealed band re-shows what the reference already had at the bottom
@@ -275,19 +292,75 @@ final class ScrollStitcher {
             }
         }
 
-        commitPending()
-        pending = (f, offset)
+        commitPending(revealsContent: !flat)
+        pending = (f, offset, flat)
         return .appended
     }
 
-    private func commitPending() {
+    /// Commits the deferred strip. A strip whose revealed band is FLAT is provisional: it is
+    /// committed only when `revealsContent` reports that a later frame exposed real content
+    /// below it, and is otherwise left pending (and dropped by `finalImage`).
+    private func commitPending(revealsContent: Bool = false) {
         guard let pending else { return }
+        if pending.flat, !revealsContent { return }
         if let strip = cropContent(pending.frame.image, offset: pending.offset, footerH: footerH) {
+            let top = pending.frame.height - footerH - pending.offset
             strips.append(strip)
+            contentSig.append(
+                contentsOf: pending.frame.sig[(top * Self.columns)..<((top + pending.offset) * Self.columns)]
+            )
             committedHeight += pending.offset
             reference = pending.frame
+            tailRepeated = tailDuplicatesBandAbove()
         }
         self.pending = nil
+    }
+
+    // MARK: - End of page
+
+    /// True when the newest committed strip repeats the band of the same height directly
+    /// above it: the page stopped moving but a strip was appended anyway (a false periodic
+    /// match, a bounce, or the Done flush) — i.e. the end was stitched twice.
+    private func tailDuplicatesBandAbove() -> Bool {
+        guard let last = strips.last else { return false }
+        let h = last.height
+        let rows = contentSig.count / Self.columns
+        guard h > 0, rows - 2 * h >= 0 else { return false }
+        return Self.bandMAD(contentSig, rows - h, rows - 2 * h, height: h) <= Self.tailDupLimit
+    }
+
+    /// Drops every trailing strip that merely repeats the band above it, then a trailing
+    /// blank band — the page bottom stitched two or three times, and the over-scroll gap.
+    /// The baseline (top) image is never dropped, so a capture always keeps a first screen.
+    private func dropRepeatedTail() {
+        while tailDuplicatesBandAbove() { dropLastStrip() }
+        while let last = strips.last, last.height > 0 {
+            let rows = contentSig.count / Self.columns
+            guard isUniformBand(contentSig, from: rows - last.height, to: rows) else { break }
+            dropLastStrip()
+        }
+    }
+
+    private func dropLastStrip() {
+        guard let last = strips.popLast() else { return }
+        contentSig.removeLast(last.height * Self.columns)
+        committedHeight -= last.height
+    }
+
+    /// Mean per-pixel abs-diff between two equal-height row bands of the SAME signature.
+    private static func bandMAD(_ sig: [UInt8], _ a0: Int, _ b0: Int, height: Int) -> Double {
+        var sum = 0
+        var count = 0
+        var r = 0
+        while r < height {
+            let a = (a0 + r) * columns
+            let b = (b0 + r) * columns
+            var c = 0
+            while c < columns { sum += abs(Int(sig[a + c]) - Int(sig[b + c])); c += 1 }
+            count += columns
+            r += rowStride
+        }
+        return count > 0 ? Double(sum) / Double(count) : .greatestFiniteMagnitude
     }
 
     /// True once the buffered warm-up frames show consistent downward movement — i.e. the
@@ -411,21 +484,29 @@ final class ScrollStitcher {
     /// viewport, so momentum jitter and sub-line wheel steps don't register as content.
     private static func minShift(_ height: Int) -> Int { max(8, height / 12) }
 
+    /// `minimumShift` overrides how far the page must move to count as motion — the auto
+    /// calibration burst is deliberately smaller than a scroll step (5 % of the viewport, so a
+    /// wrong first guess is barely visible), which the default (~8 %) would read as `.none`.
     static func motion(
-        from a: Frame, to b: Frame, headerH: Int = 0, footerH: Int = 0, predicted: Int = 0
+        from a: Frame, to b: Frame, headerH: Int = 0, footerH: Int = 0, predicted: Int = 0,
+        minimumShift: Int? = nil
     ) -> Motion {
-        measureMotion(from: a, to: b, headerH: headerH, footerH: footerH, predicted: predicted).0
+        measureMotion(from: a, to: b, headerH: headerH, footerH: footerH,
+                      predicted: predicted, minimumShift: minimumShift).0
     }
 
     // A non-confident `.none` remains an alignment miss for permissive re-baselining.
     private static func measureMotion(
-        from a: Frame, to b: Frame, headerH: Int = 0, footerH: Int = 0, predicted: Int = 0
+        from a: Frame, to b: Frame, headerH: Int = 0, footerH: Int = 0, predicted: Int = 0,
+        minimumShift: Int? = nil
     ) -> (Motion, Double) {
         guard a.height == b.height, a.width == b.width else { return (.none, .infinity) }
         let still = regionMAD(a.sig, b.sig, from: headerH, to: a.height - footerH)
         if still <= staticLimit { return (.none, still) }
-        let down = downOffset(a.sig, b.sig, height: a.height, headerH: headerH, footerH: footerH, predicted: predicted)
-        let up = downOffset(b.sig, a.sig, height: a.height, headerH: headerH, footerH: footerH, predicted: 0, maximumOffset: a.height / 3)
+        let down = downOffset(a.sig, b.sig, height: a.height, headerH: headerH, footerH: footerH,
+                              predicted: predicted, minimumShift: minimumShift)
+        let up = downOffset(b.sig, a.sig, height: a.height, headerH: headerH, footerH: footerH,
+                            predicted: 0, maximumOffset: a.height / 3, minimumShift: minimumShift)
         if up.score < down.score, up.score <= confidenceLimit { return (.up(up.offset), up.score) }
         if down.score <= confidenceLimit { return (.down(down.offset, score: down.score), down.score) }
         return (.none, min(down.score, up.score))
@@ -437,13 +518,14 @@ final class ScrollStitcher {
     /// around `predicted` and falls back to a full search if that isn't confident.
     private static func downOffset(
         _ prev: [UInt8], _ new: [UInt8], height: Int,
-        headerH: Int, footerH: Int, predicted: Int, maximumOffset: Int? = nil
+        headerH: Int, footerH: Int, predicted: Int, maximumOffset: Int? = nil,
+        minimumShift: Int? = nil
     ) -> (offset: Int, score: Double) {
         let hTop = max(0, min(headerH, height))
         let hBot = max(0, min(footerH, height))
         let contentH = height - hTop - hBot
         guard contentH > 8 else { return (0, .greatestFiniteMagnitude) }
-        let minD = minShift(height)
+        let minD = max(1, minimumShift ?? minShift(height))
         let maxD = min(maximumOffset ?? height, max(minD, contentH - contentH / 6))   // keep ≥1/6 overlap
 
         func search(_ lo: Int, _ hi: Int) -> (Int, Double) {

@@ -54,6 +54,9 @@ final class ScrollingCaptureSession {
     private var autoScrolling = false
     private var calibrating = false
     private var autoProgress = AutoScrollProgress()
+    /// Set once the page end was reached: auto must never post again in this session, or the
+    /// bottom gets stitched again on every restart. Manual scrolling stays available.
+    private var autoEnded = false
     /// Bumped whenever an auto-scroll segment starts or stops, so a capture launched under
     /// one segment can't feed its outcome into a later segment's freshly-reset progress.
     private var autoGeneration = 0
@@ -177,6 +180,10 @@ final class ScrollingCaptureSession {
     private func toggleAuto() {
         if autoScrolling { stopAutoScroll(reachedEnd: false); return }
         guard !finished, !finishing else { return }
+        guard !autoEnded else {
+            preview.flashHint("Sayfa sonu")
+            return
+        }
         // Synthesized events only reach other apps when we're an Accessibility-trusted
         // process (same requirement as the app's event tap).
         guard AXIsProcessTrusted() else {
@@ -221,7 +228,9 @@ final class ScrollingCaptureSession {
             let deadline = ContinuousClock.now.advanced(by: .milliseconds(1200))
             guard autoGeneration == generation, !captureInFlight,
                   let baseline = stitcher.firstFrame else { return }
-            let burst = region.height * 0.15
+            // 5 % of the viewport: enough to measure the sign, small enough that a wrong
+            // first guess is barely visible (the persisted sign is tried FIRST).
+            let burst = region.height * 0.05
             scroller.start(at: CGPoint(x: region.midX, y: region.midY), region: region, burstPoints: burst)
             try? await Task.sleep(for: .milliseconds(250))
             guard autoGeneration == generation else { return }
@@ -229,14 +238,22 @@ final class ScrollingCaptureSession {
             try? await Task.sleep(for: .milliseconds(180))
             guard autoGeneration == generation, ContinuousClock.now < deadline else { return }
             captureInFlight = true
-            let image = await captureAndStitch(predictedPoints: burst, timeout: ContinuousClock.now.duration(to: deadline))
+            // Probe only: a 5 % burst is below the stitcher's motion floor, so feeding it
+            // would just look like a lost alignment and flash a spurious gap warning.
+            let image = await captureAndStitch(
+                predictedPoints: burst,
+                timeout: ContinuousClock.now.duration(to: deadline),
+                stitch: false
+            )
             captureInFlight = false
             guard autoGeneration == generation, ContinuousClock.now < deadline,
                   let image, let frame = ScrollStitcher.makeFrame(image) else { return }
             let bands = stitcher.detectedBands
+            let predictedPx = Int((burst * scale).rounded())
             let motion = ScrollStitcher.motion(from: baseline, to: frame,
                                                headerH: bands.header, footerH: bands.footer,
-                                               predicted: Int((burst * scale).rounded()))
+                                               predicted: predictedPx,
+                                               minimumShift: max(4, predictedPx / 2))
             switch motion {
             case .down:
                 scroller.confirmDirection()
@@ -250,7 +267,7 @@ final class ScrollingCaptureSession {
                 return
             }
             // Only a measured advance seeds the run. Recording a calibration `.up` would
-            // spend the run's single allowed flip before it starts, so the first three
+            // spend the run's single allowed flip before it starts, so the first two
             // stalled frames would report "page end" without ever having advanced.
             if case .down = motion { _ = autoProgress.record(motion) }
             calibrating = false
@@ -263,6 +280,7 @@ final class ScrollingCaptureSession {
 
     private func stopAutoScroll(reachedEnd: Bool) {
         guard autoScrolling else { return }
+        if reachedEnd { autoEnded = true }
         autoScrolling = false
         calibrating = false
         autoGeneration &+= 1   // captures launched under the old segment must not feed the next
@@ -322,8 +340,27 @@ final class ScrollingCaptureSession {
         }
     }
 
+    /// Auto-scroll state for the per-capture diagnostics line.
+    private var autoState: String {
+        if calibrating { return "calibrating" }
+        if autoScrolling { return "running" }
+        return autoEnded ? "ended" : "off"
+    }
+
+    /// One line per capture, to the FILE sink as well as `Logger`: the installed app's
+    /// `os_log` output is not retrievable with `log show`, so the file is the only record.
+    private func logCapture(_ outcome: String, offset: Int, score: Double, extra: String = "") {
+        let line = "scroll outcome=\(outcome) offset=\(offset) score=\(score) "
+            + "pending=\(stitcher.hasPending) rebaselines=\(stitcher.rebaselineCount) auto=\(autoState)"
+            + (extra.isEmpty ? "" : " " + extra)
+        logger.notice("\(line, privacy: .public)")
+        DiagnosticsLog.append(line)
+    }
+
     @discardableResult
-    private func captureAndStitch(predictedPoints: CGFloat, timeout: Duration = .seconds(2)) async -> CGImage? {
+    private func captureAndStitch(
+        predictedPoints: CGFloat, timeout: Duration = .seconds(2), stitch: Bool = true
+    ) async -> CGImage? {
         // Never attempt a capture before the filter/config exist (a very fast Done can
         // reach the flush before prepare() finished) — safe no-op instead of a crash.
         guard let filter, let config else { return nil }
@@ -337,15 +374,19 @@ final class ScrollingCaptureSession {
                 try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
             }
         } catch {
-            logger.notice("scroll outcome=failed offset=0 score=nan pending=\(self.stitcher.hasPending) rebaselines=\(self.stitcher.rebaselineCount) error=\(String(describing: error), privacy: .public)")
+            logCapture("failed", offset: 0, score: .nan, extra: "error=\(String(describing: error))")
             captureFailures += 1
             return nil
         }
         captureFailures = 0
         guard !finished else { return nil }
+        guard stitch else {
+            logCapture("probe", offset: 0, score: .nan)
+            return image
+        }
         let rebaselines = stitcher.rebaselineCount
         let outcome = stitcher.add(image, predictedOffset: predictedPx)
-        logger.notice("scroll outcome=\(String(describing: outcome), privacy: .public) offset=\(self.stitcher.lastOffset) score=\(self.stitcher.lastScore) pending=\(self.stitcher.hasPending) rebaselines=\(self.stitcher.rebaselineCount)")
+        logCapture(String(describing: outcome), offset: stitcher.lastOffset, score: stitcher.lastScore)
         if stitcher.rebaselineCount > rebaselines { preview.flashHint("Kopukluk · yavaş kaydır") }
         // Only recompose the (O(n)) preview when the composite actually changed —
         // .appended/.baselined grows or seeds it, .buffered shows the newest warm-up frame;
@@ -362,10 +403,16 @@ final class ScrollingCaptureSession {
         if autoScrolling, !calibrating, capturedGeneration == autoGeneration {
             let motion = stitcher.lastMotion
             if case .down = motion { autoScroller?.confirmDirection() }
-            switch autoProgress.record(motion) {
-            case .keepScrolling: break
-            case .flipDirection: autoScroller?.flipDirection()
-            case .reachedEnd: stopAutoScroll(reachedEnd: true)
+            // A strip that merely repeats the band above it means the page bottom was just
+            // stitched twice — the end, however the motion happened to classify.
+            if stitcher.tailRepeated {
+                stopAutoScroll(reachedEnd: true)
+            } else {
+                switch autoProgress.record(motion) {
+                case .keepScrolling: break
+                case .flipDirection: autoScroller?.flipDirection()
+                case .reachedEnd: stopAutoScroll(reachedEnd: true)
+                }
             }
         }
         return image
