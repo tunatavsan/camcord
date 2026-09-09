@@ -183,7 +183,7 @@ final class CaptureCoordinator {
             return
         }
 
-        let image = await ScrollingCaptureSession(region: clampedRegion, display: display, contentCache: cache).run()
+        let image = await ScrollingCaptureSession(region: clampedRegion, display: display).run()
         guard let image else { return }  // cancelled by the user — no chirp
         let acceptedToken = clipboardRequests.begin()
 

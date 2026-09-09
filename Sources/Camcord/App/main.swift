@@ -2,14 +2,6 @@ import AppKit
 import AVFoundation
 import SwiftUI
 
-if CommandLine.arguments.contains("--check-scrolling") {
-    let app = NSApplication.shared
-    app.setActivationPolicy(.accessory)
-    Task { @MainActor in exit(await ScrollCaptureCheck.run()) }
-    app.run()
-    exit(0)
-}
-
 if CommandLine.arguments.contains("--check-camera-recording") {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)

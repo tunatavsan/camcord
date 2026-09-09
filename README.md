@@ -14,10 +14,10 @@ uygulamasıdır. Swift 6 ile yazılmıştır ve macOS 15.2 veya yenisini gerekti
   aktarır. Finder veya başka bir uygulamadaki mevcut görseller için de Servisler menüsü
   üzerinden çalışır.
 - **Kaydırmalı çekim:** Elle kaydırırken ara kareleri sırayla toplar; birleştirme ve
-  önizleme işini arka planda yürütür. Kaydırma mesafesinin belli bir eşiğe ulaşmasını
-  beklemez. Örtüşme kaybolur veya belirsizleşirse dışa aktarmayı durdurur ve geri
-  kaydırılmasını ister. Önizlemedeki **Bitti** sonucu kopyalar; **İptal** veya `Esc`
-  çekimden çıkar. Otomatik kaydırma yoktur.
+  önizlemeyi günceller. Görünümün yaklaşık %40’ı kaydırılınca ve kaydırma durulunca
+  yeni kare alır. Kopuklukta kısa bir ipucu gösterip yakalamaya devam eder.
+  Önizlemedeki **Bitti** sonucu kopyalar; **İptal** veya `Esc`
+  çekimden çıkar. HUD’daki otomatik kaydırma düğmesi sayfayı ilerletir (Erişilebilirlik izni gerekir).
 - **Ekran kaydı:** Ekran veya pencereyi kaydeder; duraklatma/sürdürme, geri sayım,
   imleç, pencere göstergesi, düşük disk alanında güvenli durdurma ve isteğe bağlı süre
   sınırı sunar.
