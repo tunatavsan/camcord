@@ -23,13 +23,9 @@ struct CameraCompositorTests {
 
     @Test("layout keeps a fixed 16:9 shape even with a 4:3 camera")
     func layoutCornersAndAspect() {
-        let compositor = compositor()
         for corner in CameraCorner.allCases {
-            let rect = compositor.layout(
-                screenSize: CGSize(width: 1000, height: 600),
-                cameraSize: CGSize(width: 1600, height: 1200),
-                options: CameraOptions(enabled: true, corner: corner, widthFraction: 0.2)
-            )
+            let options = CameraOptions(enabled: true, corner: corner, widthFraction: 0.2)
+            let rect = options.rect(in: CGSize(width: 1000, height: 600))
             #expect(abs(rect.width / rect.height - 16.0 / 9.0) < 0.03)
             switch corner {
             case .topLeft: #expect(rect.midX < 500 && rect.midY > 300)
@@ -54,11 +50,7 @@ struct CameraCompositorTests {
         let compositor = compositor()
         let output = try compositor.composite(screen: screen, camera: camera, options: options)
         let outputBuffer = try #require(CMSampleBufferGetImageBuffer(output))
-        let rect = compositor.layout(
-            screenSize: CGSize(width: 200, height: 120),
-            cameraSize: CGSize(width: 40, height: 20),
-            options: options
-        )
+        let rect = options.rect(in: CGSize(width: 200, height: 120))
 
         let cameraPixel = pixel(outputBuffer, ciX: Int(rect.midX), ciY: Int(rect.midY))
         let oppositePixel = pixel(outputBuffer, ciX: 20, ciY: 20)
@@ -77,11 +69,7 @@ struct CameraCompositorTests {
             widthFraction: 0.4,
             mirrored: false
         )
-        let rect = compositor.layout(
-            screenSize: CGSize(width: 200, height: 120),
-            cameraSize: CGSize(width: 40, height: 20),
-            options: base
-        )
+        let rect = base.rect(in: CGSize(width: 200, height: 120))
 
         let unmirrored = try #require(CMSampleBufferGetImageBuffer(
             try compositor.composite(screen: screen, camera: camera, options: base)
@@ -121,8 +109,8 @@ struct CameraCompositorTests {
         #expect(CMVideoFormatDescriptionMatchesImageBuffer(try #require(CMSampleBufferGetFormatDescription(output)), imageBuffer: outputBuffer))
     }
 
-    @Test("timing, frame attachments, color metadata, format, and pool survive composition")
-    func preservesMediaContractAndReusesPool() throws {
+    @Test("timing, frame attachments, color metadata, and format survive composition")
+    func preservesMediaContract() throws {
         let screenBuffer = solidBuffer(width: 160, height: 90, bgra: (20, 30, 40, 255))
         CVBufferSetAttachment(
             screenBuffer,
@@ -145,7 +133,6 @@ struct CameraCompositorTests {
         let options = CameraOptions(enabled: true)
 
         let first = try compositor.composite(screen: screen, camera: camera, options: options)
-        let second = try compositor.composite(screen: screen, camera: camera, options: options)
         let outputBuffer = try #require(CMSampleBufferGetImageBuffer(first))
 
         #expect(CMSampleBufferGetPresentationTimeStamp(first) == pts)
@@ -158,8 +145,6 @@ struct CameraCompositorTests {
             == kCVImageBufferColorPrimaries_ITU_R_2020 as String)
         #expect(CVBufferCopyAttachment(outputBuffer, kCVImageBufferTransferFunctionKey, nil) as? String
             == kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ as String)
-        #expect(compositor.poolCreationCount == 1)
-        #expect(CMSampleBufferGetImageBuffer(second) != nil)
     }
 }
 

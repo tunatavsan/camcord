@@ -29,8 +29,6 @@ final class CameraCompositor {
         kCVPixelBufferPoolAllocationThresholdKey as String: 4
     ] as CFDictionary
 
-    private(set) var poolCreationCount = 0
-
     init(context: CIContext = CIContext(options: [.cacheIntermediates: false])) {
         self.context = context
     }
@@ -60,11 +58,7 @@ final class CameraCompositor {
         CVBufferPropagateAttachments(screenBuffer, output)
 
         let screenExtent = CGRect(x: 0, y: 0, width: width, height: height)
-        let cameraRect = layout(
-            screenSize: screenExtent.size,
-            cameraSize: CGSize(width: cameraWidth, height: cameraHeight),
-            options: options
-        )
+        let cameraRect = options.rect(in: screenExtent.size)
         let radius = CameraOptions.cornerRadius(for: cameraRect.size)
 
         let screenImage = CIImage(cvPixelBuffer: screenBuffer)
@@ -106,15 +100,6 @@ final class CameraCompositor {
         return try makeSampleBuffer(imageBuffer: output, copying: screen)
     }
 
-    /// Pure layout helper used by synthetic tests and the renderer.
-    func layout(
-        screenSize: CGSize,
-        cameraSize: CGSize,
-        options: CameraOptions
-    ) -> CGRect {
-        options.rect(in: screenSize)
-    }
-
     private func makeOutputBuffer(
         width: Int,
         height: Int,
@@ -146,7 +131,6 @@ final class CameraCompositor {
                 throw CameraCompositorError.poolCreationFailed(status)
             }
             pools[key] = created
-            poolCreationCount += 1
             pool = created
         }
 

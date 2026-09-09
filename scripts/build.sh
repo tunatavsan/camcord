@@ -4,10 +4,12 @@ cd "$(dirname "$0")/.."
 
 swift build -c release
 
-rm -rf dist/Camcord.app
+if [[ -e dist/Camcord.app ]]; then rm -r dist/Camcord.app; fi
 mkdir -p dist/Camcord.app/Contents/MacOS dist/Camcord.app/Contents/Resources
 cp .build/release/Camcord dist/Camcord.app/Contents/MacOS/Camcord
 cp Resources/Info.plist dist/Camcord.app/Contents/Info.plist
+build_number="$(git rev-list --count HEAD)"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build_number" dist/Camcord.app/Contents/Info.plist
 cp Resources/AppIcon.icns dist/Camcord.app/Contents/Resources/AppIcon.icns
 
 # SPM resource bundles (e.g. KeyboardShortcuts' localized strings) are built next to
@@ -30,6 +32,9 @@ codesign -dvv dist/Camcord.app 2>&1 | grep '^Authority='
 # --install: copy the freshly built+signed bundle into /Applications and relaunch
 # from there (the stable location the login item should point at).
 if [[ "${1:-}" == "--install" ]]; then
+    if [[ -e /Applications/Camcord.app.new ]]; then rm -r /Applications/Camcord.app.new; fi
+    ditto dist/Camcord.app /Applications/Camcord.app.new
+    codesign --verify --deep --strict /Applications/Camcord.app.new
     if pgrep -xq Camcord; then
         # Quit via Apple event so applicationShouldTerminate runs — a raw pkill
         # (SIGTERM) would skip it and corrupt an in-progress recording's file.
@@ -46,7 +51,19 @@ if [[ "${1:-}" == "--install" ]]; then
             exit 1
         fi
     fi
-    ditto dist/Camcord.app /Applications/Camcord.app
+    if [[ -e /Applications/Camcord.app ]]; then rm -r /Applications/Camcord.app; fi
+    mv /Applications/Camcord.app.new /Applications/Camcord.app
+    codesign --verify --deep --strict /Applications/Camcord.app
     open /Applications/Camcord.app
     echo "Installed and launched /Applications/Camcord.app"
 fi
+
+# Retain the newest dated rollback bundle; release staging bundles are disposable.
+shopt -s nullglob
+backups=(dist/install-backups/*)
+for ((i = 0; i + 1 < ${#backups[@]}; i++)); do
+    rm -r "${backups[$i]}"
+done
+for release_stage in dist/release-*; do
+    rm -r "$release_stage"
+done
