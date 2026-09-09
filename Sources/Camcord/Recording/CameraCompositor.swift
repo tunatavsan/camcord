@@ -80,35 +80,46 @@ final class CameraCompositor {
         let outerMask = try roundedMask(rect: cameraRect, radius: radius).cropped(to: screenExtent)
         // The shadow is sized off the TILE, not off the corner: the tile carries a light
         // Apple-ish curve now, and a shadow derived from it would have shrunk with it —
-        // the separation from the desktop behind is exactly what has to grow.
-        let short = min(cameraRect.width, cameraRect.height)
-        let shadowMask = outerMask.transformed(by: CGAffineTransform(translationX: 0, y: -short * 0.06))
-            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: short * 0.16])
+        // the separation from the desktop behind is exactly what has to grow. One set of
+        // numbers for both renderers, so the file lifts the tile the way the screen does.
+        let drop = CameraOptions.shadow(for: cameraRect.size)
+        let shadowMask = outerMask.transformed(by: CGAffineTransform(translationX: 0, y: drop.offsetY))
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: drop.blur])
             .cropped(to: screenExtent)
 
         let shadow = try masked(
-            CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0.62)).cropped(to: screenExtent),
+            CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: drop.alpha)).cropped(to: screenExtent),
             mask: shadowMask,
             background: transparent
         )
-        // A hairline of light along the edge. On a dark frame the shadow alone leaves the
-        // tile bleeding into the background; this draws the boundary without a "border".
+        // The same glass edge `FloatingCameraView` strokes on screen: a diagonal gradient of
+        // light along the hairline, and a darker line immediately inside it so the boundary
+        // survives bright content instead of turning into a flat white border.
         let hairline = CameraOptions.edgeHighlightWidth(for: cameraRect.size)
-        let innerMask = try roundedMask(
-            rect: cameraRect.insetBy(dx: hairline, dy: hairline),
-            radius: max(0, radius - hairline)
-        ).cropped(to: screenExtent)
-        let ringMask = outerMask.applyingFilter("CISourceOutCompositing", parameters: [
-            kCIInputBackgroundImageKey: innerMask
-        ]).cropped(to: screenExtent)
+        let innerRect = cameraRect.insetBy(dx: hairline, dy: hairline)
+        let innerRadius = max(0, radius - hairline)
+        let innerMask = try roundedMask(rect: innerRect, radius: innerRadius).cropped(to: screenExtent)
         let ring = try masked(
-            CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: 0.28)).cropped(to: screenExtent),
-            mask: ringMask,
+            try edgeGradient(in: cameraRect).cropped(to: screenExtent),
+            mask: band(outer: outerMask, inner: innerMask, extent: screenExtent),
+            background: transparent
+        )
+        let contrastWidth = CameraOptions.edgeShadowWidth(for: cameraRect.size)
+        let coreMask = try roundedMask(
+            rect: innerRect.insetBy(dx: contrastWidth, dy: contrastWidth),
+            radius: max(0, innerRadius - contrastWidth)
+        ).cropped(to: screenExtent)
+        let contrast = try masked(
+            CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: CameraOptions.edgeShadowAlpha))
+                .cropped(to: screenExtent),
+            mask: band(outer: innerMask, inner: coreMask, extent: screenExtent),
             background: transparent
         )
         let clippedCamera = try masked(cameraImage, mask: outerMask, background: transparent)
         let composed = ring
-            .composited(over: clippedCamera.composited(over: shadow.composited(over: screenImage)))
+            .composited(over: contrast.composited(
+                over: clippedCamera.composited(over: shadow.composited(over: screenImage))
+            ))
             .cropped(to: screenExtent)
 
         context.render(
@@ -181,6 +192,29 @@ final class CameraCompositor {
             "inputExtent": CIVector(cgRect: rect),
             "inputRadius": radius,
             "inputColor": CIColor.white,
+        ]), let output = filter.outputImage else {
+            throw CameraCompositorError.filterUnavailable
+        }
+        return output
+    }
+
+    /// The band between two concentric rounded masks: the hairline itself, or the darker
+    /// line inside it.
+    private func band(outer: CIImage, inner: CIImage, extent: CGRect) -> CIImage {
+        outer.applyingFilter("CISourceOutCompositing", parameters: [
+            kCIInputBackgroundImageKey: inner
+        ]).cropped(to: extent)
+    }
+
+    /// The hairline's light: brightest at the tile's top-leading corner, nearly gone at the
+    /// opposite one, so the edge reads as glass catching light from above.
+    private func edgeGradient(in rect: CGRect) throws -> CIImage {
+        let stops = CameraOptions.edgeHighlight
+        guard let filter = CIFilter(name: "CILinearGradient", parameters: [
+            "inputPoint0": CIVector(x: rect.minX, y: rect.maxY),
+            "inputPoint1": CIVector(x: rect.maxX, y: rect.minY),
+            "inputColor0": CIColor(red: 1, green: 1, blue: 1, alpha: stops.bright),
+            "inputColor1": CIColor(red: 1, green: 1, blue: 1, alpha: stops.dim),
         ]), let output = filter.outputImage else {
             throw CameraCompositorError.filterUnavailable
         }

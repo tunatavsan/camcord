@@ -207,7 +207,7 @@ final class CameraOverlayController: NSObject {
         }
         if waiting {
             pendingReveal = true
-            panel.ignoresMouseEvents = true
+            updateInteractivity()
             panel.alphaValue = 0
             shadowPanel.alphaValue = 0
             shadowPanel.orderFrontRegardless()
@@ -230,14 +230,15 @@ final class CameraOverlayController: NSObject {
         pendingReveal = false
         revealTimeout?.cancel()
         revealTimeout = nil
-        panel.ignoresMouseEvents = false
-        let animate = appearing && !Self.reducesMotion
+        updateInteractivity()
+        let reduceMotion = Self.reducesMotion
         let final = panel.frame
+        let scaled = appearing && CameraEntrance.scales(reduceMotion: reduceMotion)
         // Every pixel of the opening state is set BEFORE the panel is ordered front.
         // Ordering a window in makes the server composite it at its current alpha, so the
         // old "order front at 1, then set 0 and animate up" showed one opaque frame first.
-        if animate {
-            panel.setFrame(final.insetBy(dx: final.width * 0.04, dy: final.height * 0.04), display: false)
+        if appearing {
+            if scaled { panel.setFrame(CameraEntrance.startFrame(final), display: false) }
             panel.alphaValue = 0
             shadowPanel.alphaValue = 0
         } else {
@@ -246,14 +247,22 @@ final class CameraOverlayController: NSObject {
         }
         shadowPanel.orderFrontRegardless()
         panel.orderFrontRegardless()
-        guard animate else { return }
+        guard appearing else { return }
+        // Reduce Motion keeps the fade and drops the scale — the substitution the HIG asks
+        // for, rather than snapping a tile onto the screen with no transition at all.
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            panel.animator().setFrame(final, display: true)
+            context.duration = CameraEntrance.duration(reduceMotion: reduceMotion)
+            context.timingFunction = CameraEntrance.timing(reduceMotion: reduceMotion)
+            if scaled { panel.animator().setFrame(final, display: true) }
             panel.animator().alphaValue = 1
             shadowPanel.animator().alphaValue = 1
         }
+    }
+
+    /// One place for the two reasons the tile refuses the mouse: it is waiting for its
+    /// first frame, or it is fading out from under the pointer.
+    private func updateInteractivity() {
+        panel.ignoresMouseEvents = pendingReveal || fadingOut
     }
 
     /// `animated` is the owner dismissing the preview. Every other caller (recording
@@ -276,8 +285,8 @@ final class CameraOverlayController: NSObject {
         }
         // A tile that is fading out must not eat the click the × invited: the pointer is
         // already on it, and the next 150 ms would swallow whatever the owner clicks next.
-        panel.ignoresMouseEvents = true
         fadingOut = true
+        updateInteractivity()
         let token = visibilityToken
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.15
@@ -305,8 +314,8 @@ final class CameraOverlayController: NSObject {
         panel.orderOut(nil)
         panel.alphaValue = 1
         shadowPanel.alphaValue = 1
-        panel.ignoresMouseEvents = false
         fadingOut = false
+        updateInteractivity()
     }
 
     static var reducesMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
@@ -456,6 +465,35 @@ final class CameraOverlayController: NSObject {
         }
     }
 
+}
+
+/// The camera tile's entrance, in one place so the panel, its shadow and the test agree on
+/// the same numbers: the tile grows from 0.92 while its opacity comes up, over 320 ms.
+/// Reduce Motion keeps the fade and drops the scale.
+enum CameraEntrance {
+    /// The tile is 8% small when it appears — felt, not watched.
+    static let scale: CGFloat = 0.92
+    static let springDuration: TimeInterval = 0.32
+    static let fadeDuration: TimeInterval = 0.16
+
+    static func scales(reduceMotion: Bool) -> Bool { !reduceMotion }
+    static func duration(reduceMotion: Bool) -> TimeInterval {
+        reduceMotion ? fadeDuration : springDuration
+    }
+
+    /// A window's frame animates through `NSAnimationContext`, which takes a timing curve and
+    /// never a `CASpringAnimation`, so the spring is expressed as its curve: a fast start and
+    /// exactly one small settle past the target — no oscillation, nothing that blinks.
+    static func timing(reduceMotion: Bool) -> CAMediaTimingFunction {
+        reduceMotion
+            ? CAMediaTimingFunction(name: .easeOut)
+            : CAMediaTimingFunction(controlPoints: 0.22, 1.12, 0.36, 1)
+    }
+
+    /// The frame the tile grows from: `scale`, about the final frame's own centre.
+    static func startFrame(_ frame: CGRect) -> CGRect {
+        frame.insetBy(dx: frame.width * (1 - scale) / 2, dy: frame.height * (1 - scale) / 2)
+    }
 }
 
 /// Native mouse tracking leaves dragging/resizing on AppKit's event path, independent
@@ -737,16 +775,41 @@ final class FloatingCameraView: NSView {
         }
         NSGraphicsContext.restoreGraphicsState()
 
-        // The same hairline the compositor draws into the file.
+        // The same glass edge the compositor draws into the file: light down the hairline,
+        // brightest at the top-leading corner, then a darker line immediately inside it so
+        // the boundary holds over a white window as well as over the desktop. Two bands
+        // rather than one stroke, because a stroke can only carry a single flat colour.
         let hairline = CameraOptions.edgeHighlightWidth(for: bounds.size)
-        let edge = NSBezierPath(
-            roundedRect: bounds.insetBy(dx: hairline / 2, dy: hairline / 2),
-            xRadius: max(0, radius - hairline / 2), yRadius: max(0, radius - hairline / 2)
-        )
-        edge.lineWidth = hairline
-        NSColor.white.withAlphaComponent(0.28).setStroke()
-        edge.stroke()
+        let stops = CameraOptions.edgeHighlight
+        NSGraphicsContext.saveGraphicsState()
+        Self.band(in: bounds, radius: radius, inset: 0, width: hairline).addClip()
+        NSGradient(
+            starting: NSColor.white.withAlphaComponent(stops.bright),
+            ending: NSColor.white.withAlphaComponent(stops.dim)
+        )?.draw(in: bounds, angle: -45)
+        NSGraphicsContext.restoreGraphicsState()
 
+        NSGraphicsContext.saveGraphicsState()
+        Self.band(in: bounds, radius: radius,
+                  inset: hairline, width: CameraOptions.edgeShadowWidth(for: bounds.size)).addClip()
+        NSColor.black.withAlphaComponent(CameraOptions.edgeShadowAlpha).setFill()
+        bounds.fill()
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    /// The band between two concentric rounded rects — `inset` in from the tile's edge and
+    /// `width` thick. Even-odd, so it can be clipped and filled with a gradient instead of
+    /// stroked. Concentric curves share a centre, so each radius is the tile's minus its gap.
+    private static func band(in bounds: CGRect, radius: CGFloat, inset: CGFloat, width: CGFloat) -> NSBezierPath {
+        let outer = bounds.insetBy(dx: inset, dy: inset)
+        let inner = outer.insetBy(dx: width, dy: width)
+        let outerRadius = max(0, radius - inset)
+        let innerRadius = max(0, outerRadius - width)
+        let path = NSBezierPath()
+        path.appendRoundedRect(outer, xRadius: outerRadius, yRadius: outerRadius)
+        path.appendRoundedRect(inner, xRadius: innerRadius, yRadius: innerRadius)
+        path.windingRule = .evenOdd
+        return path
     }
 }
 
@@ -760,11 +823,11 @@ private final class CameraShadowView: NSView {
         // Sized off the tile, not off the corner — the curve is light now, the separation
         // from the desktop behind is not. Matches the compositor's shadow, so what the owner
         // places on screen is what the file shows.
-        let short = min(rect.width, rect.height)
+        let drop = CameraOptions.shadow(for: rect.size)
         let shadow = NSShadow()
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.62)
-        shadow.shadowBlurRadius = short * 0.16
-        shadow.shadowOffset = NSSize(width: 0, height: -short * 0.06)
+        shadow.shadowColor = NSColor.black.withAlphaComponent(drop.alpha)
+        shadow.shadowBlurRadius = drop.blur
+        shadow.shadowOffset = NSSize(width: 0, height: drop.offsetY)
         NSGraphicsContext.saveGraphicsState()
         shadow.set()
         NSColor.black.setFill()

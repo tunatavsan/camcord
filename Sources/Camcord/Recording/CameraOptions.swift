@@ -21,6 +21,25 @@ struct CameraOptions: Codable, Equatable, Sendable {
         max(1, min(size.width, size.height) * 0.006)
     }
 
+    /// The tile's edge is glass, not a border: the hairline carries a diagonal gradient of
+    /// light — bright where the light falls, almost gone at the opposite corner — so it
+    /// separates the tile from the desktop without laying a flat white line over the video.
+    /// Both renderers read these two numbers: the floating preview strokes them, the
+    /// compositor draws the same gradient into the file.
+    static let edgeHighlight: (bright: CGFloat, dim: CGFloat) = (0.55, 0.10)
+    /// A darker line immediately inside the hairline. Light content behind the tile swallows
+    /// a light-only edge; this is what keeps the boundary readable over a white window.
+    static let edgeShadowAlpha: CGFloat = 0.25
+    static func edgeShadowWidth(for size: CGSize) -> CGFloat { edgeHighlightWidth(for: size) / 2 }
+
+    /// The tile's drop shadow, in fractions of its short side so the preview's points and
+    /// the encoded frame's pixels drop the SAME shadow. At the 320x180 reference tile the
+    /// numbers are blur 18, y -6, alpha 0.35 — soft and low, a lift rather than a border.
+    static func shadow(for size: CGSize) -> (blur: CGFloat, offsetY: CGFloat, alpha: CGFloat) {
+        let short = min(size.width, size.height)
+        return (blur: short / 10, offsetY: -short / 30, alpha: 0.35)
+    }
+
     var enabled: Bool
     var deviceID: String?
     var corner: CameraCorner
