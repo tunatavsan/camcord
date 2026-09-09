@@ -416,6 +416,7 @@ final class RecordingController: NSObject {
             if !didStart {
                 if let preparedCamera { Task { await preparedCamera.stop() } }
                 MicrophoneMonitor.shared.recordingEnded()
+                CameraOverlayController.shared.hide()
                 CameraPreviewMonitor.shared.recordingEnded()
             }
         }
@@ -572,6 +573,7 @@ final class RecordingController: NSObject {
             guard let self else { return }
             defer {
                 MicrophoneMonitor.shared.recordingEnded()
+                CameraOverlayController.shared.hide()
                 CameraPreviewMonitor.shared.recordingEnded()
             }
             do {
@@ -609,6 +611,7 @@ final class RecordingController: NSObject {
         startCueTask = nil
         cancelPendingResumeCue()
         MicrophoneMonitor.shared.recordingEnded()
+        CameraOverlayController.shared.hide()
         CameraPreviewMonitor.shared.recordingEnded()
         stopElapsedTimer()
         segmentStart = nil

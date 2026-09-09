@@ -167,4 +167,19 @@ struct CameraInteractionTests {
         #expect(view.indicatedCorner == nil)
         window.close()
     }
+
+    @Test("camera overlay is hidden after a panel hide without recording")
+    @MainActor func panelHideClosesCameraOverlay() {
+        _ = NSApplication.shared
+        let controller = CameraOverlayController.shared
+        controller.prepareRecording(
+            cgRect: CGRect(x: -10_000, y: -10_000, width: 640, height: 360),
+            options: CameraOptions(enabled: true)
+        )
+        #expect(controller.isVisible)
+
+        controller.hide()
+
+        #expect(!controller.isVisible)
+    }
 }

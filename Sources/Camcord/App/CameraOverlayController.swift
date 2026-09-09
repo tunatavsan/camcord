@@ -8,6 +8,7 @@ import QuartzCore
 final class CameraOverlayController: NSObject {
     static let shared = CameraOverlayController()
     var onPlacementChange: ((CameraOptions) -> Void)?
+    var isVisible: Bool { panel.isVisible }
 
     private let panel: NSPanel
     private let cameraView = FloatingCameraView()
@@ -58,32 +59,26 @@ final class CameraOverlayController: NSObject {
         monitor.$message.sink { [weak self] message in
             MainActor.assumeIsolated { self?.cameraView.message = message ?? "Kamera açılıyor…" }
         }.store(in: &observations)
-        monitor.$recordingLocked.dropFirst().sink { [weak self] locked in
-            guard !locked else { return }
-            Task { @MainActor [weak self] in
-                guard let self, self.panel.isVisible else { return }
-                self.recordingBounds = nil
-                self.showPreview()
-            }
-        }.store(in: &observations)
         NotificationCenter.default.publisher(for: RecordingSettings.didChangeNotification)
             .sink { [weak self] _ in
                 Task { @MainActor [weak self] in self?.settingsChanged() }
             }.store(in: &observations)
     }
 
-    func showPreview() {
+    func showPreview(requestPermission: Bool = false) {
         let settings = RecordingSettings.load(from: .standard)
         guard settings.camera.enabled else { hide(); return }
         options = settings.camera.resolved()
-        if previewBounds.isEmpty {
-            previewBounds = (NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main)?.visibleFrame ?? .zero
-        }
+        previewBounds = (NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main)?.visibleFrame ?? .zero
         show()
         guard !CameraPreviewMonitor.shared.recordingLocked else { return }
         restartTask?.cancel()
         restartTask = Task {
-            await CameraPreviewMonitor.shared.start(deviceID: options.deviceID, fps: settings.fps)
+            await CameraPreviewMonitor.shared.start(
+                deviceID: options.deviceID,
+                fps: settings.fps,
+                requestPermission: requestPermission
+            )
         }
     }
 
@@ -115,8 +110,9 @@ final class CameraOverlayController: NSObject {
         panel.orderFrontRegardless()
     }
 
-    private func hide() {
+    func hide() {
         stopMotion()
+        recordingBounds = nil
         shadowPanel.orderOut(nil)
         panel.orderOut(nil)
         restartTask?.cancel()

@@ -54,7 +54,6 @@ struct CapturePanelView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.camcordDesignPreview) private var designPreview
-    @ObservedObject private var microphoneMonitor = MicrophoneMonitor.shared
     @State private var cameraEnabled = false
     @State private var recordSystemAudio = true
     @State private var recordMicrophone = true
@@ -144,17 +143,13 @@ struct CapturePanelView: View {
             lastRecordingURL = url
             recordingDirectoryURL = url.deletingLastPathComponent()
         }
-        .task(id: shouldMonitorMicrophone) {
-            guard !designPreview else { return }
-            if shouldMonitorMicrophone {
-                let settings = RecordingSettings.load(from: .standard)
-                await microphoneMonitor.start(deviceID: settings.microphoneDeviceID, gainDB: settings.resolvedMicrophoneGainDB)
-            } else if !microphoneMonitor.recordingLocked {
-                await microphoneMonitor.stop()
-            }
-        }
         .onChange(of: model.isPanelVisible) { _, visible in
-            if visible && !designPreview && cameraEnabled { CameraOverlayController.shared.showPreview() }
+            guard !designPreview else { return }
+            if visible {
+                if cameraEnabled { CameraOverlayController.shared.showPreview() }
+            } else if !CameraPreviewMonitor.shared.recordingLocked {
+                CameraOverlayController.shared.hide()
+            }
         }
         // The hosting controller is retained across opens, so key this task to the explicit
         // open token. SwiftUI cancels the previous scan; the generation/path guards below
@@ -181,12 +176,11 @@ struct CapturePanelView: View {
             VStack(spacing: 8) {
                     AudioControlRow(title: "Sistem", symbol: "speaker.wave.2", health: model.health?.systemAudio ?? AudioSourceHealth(enabled: recordSystemAudio),
                                     gainDB: $systemGainDB, range: -60...12, paused: model.state == .paused)
-                    AudioControlRow(title: "Mikrofon", symbol: "mic", health: microphoneHealth,
+                    AudioControlRow(title: "Mikrofon", symbol: "mic", health: model.health?.microphone ?? AudioSourceHealth(enabled: recordMicrophone),
                                     gainDB: $microphoneGainDB, range: -24...24, paused: model.state == .paused)
                 }
                 .onChange(of: systemGainDB) { _, value in saveGain(system: value, microphone: nil) }
                 .onChange(of: microphoneGainDB) { _, value in
-                    microphoneMonitor.updateGain(value)
                     saveGain(system: nil, microphone: value)
                 }
 
@@ -307,16 +301,6 @@ struct CapturePanelView: View {
         }
     }
 
-    private var microphoneHealth: AudioSourceHealth {
-        if model.state != .idle, let health = model.health?.microphone { return health }
-        return AudioSourceHealth(enabled: recordMicrophone, levels: microphoneMonitor.levels)
-    }
-
-    private var shouldMonitorMicrophone: Bool {
-        !designPreview && model.isPanelVisible && model.state == .idle && !model.isStarting
-            && !model.isFinishing && recordMicrophone && !microphoneMonitor.recordingLocked
-    }
-
     private var cameraRow: some View {
         HStack(spacing: 8) {
             Image(systemName: cameraEnabled ? "video.fill" : "video.slash")
@@ -325,28 +309,35 @@ struct CapturePanelView: View {
             Spacer()
             if cameraEnabled {
                 Button("Önizleme") {
-                    if !designPreview { CameraOverlayController.shared.showPreview() }
+                    if !designPreview { CameraOverlayController.shared.showPreview(requestPermission: true) }
                 }
                 .buttonStyle(.plain)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             }
-            Toggle("Kamera", isOn: $cameraEnabled)
+            Toggle("Kamera", isOn: Binding(
+                get: { cameraEnabled },
+                set: { enabled in
+                    cameraEnabled = enabled
+                    guard !designPreview else { return }
+                    var settings = RecordingSettings.load(from: .standard)
+                    if settings.camera.enabled != enabled {
+                        settings.camera.enabled = enabled
+                        settings.save(to: .standard)
+                    }
+                    if enabled, model.isPanelVisible {
+                        CameraOverlayController.shared.showPreview(requestPermission: true)
+                    } else if !enabled {
+                        CameraOverlayController.shared.hide()
+                    }
+                }
+            ))
                 .labelsHidden().toggleStyle(.switch).controlSize(.mini)
                 .disabled(model.state != .idle || model.isStarting)
         }
         .padding(.horizontal, 10)
         .frame(height: 34)
         .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 9))
-        .onChange(of: cameraEnabled) { _, enabled in
-            guard !designPreview else { return }
-            var settings = RecordingSettings.load(from: .standard)
-            if settings.camera.enabled != enabled {
-                settings.camera.enabled = enabled
-                settings.save(to: .standard)
-            }
-            if model.isPanelVisible || !enabled { CameraOverlayController.shared.showPreview() }
-        }
     }
 
     private var quickControls: some View {

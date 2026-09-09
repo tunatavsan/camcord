@@ -27,8 +27,8 @@ final class CameraPreviewMonitor: ObservableObject {
     private var ownedDeviceID: String?
     private var generation: UInt64 = 0
 
-    func start(deviceID: String?, fps: Int) async {
-        guard !recordingLocked, !isStarting, ownedCapture == nil else { return }
+    func start(deviceID: String?, fps: Int, requestPermission: Bool = false) async {
+        guard !Task.isCancelled, !recordingLocked, !isStarting, ownedCapture == nil else { return }
         generation &+= 1
         let token = generation
         isStarting = true
@@ -38,12 +38,14 @@ final class CameraPreviewMonitor: ObservableObject {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
             authorized = true
-        case .notDetermined:
+        case .notDetermined where requestPermission:
             authorized = await AVCaptureDevice.requestAccess(for: .video)
+        case .notDetermined:
+            authorized = false
         default:
             authorized = false
         }
-        guard generation == token, !recordingLocked else {
+        guard !Task.isCancelled, generation == token, !recordingLocked else {
             isStarting = false
             return
         }
@@ -330,7 +332,11 @@ struct CameraPreviewView: View {
                             if monitor.isRunning {
                                 await monitor.stop()
                             } else {
-                                await monitor.start(deviceID: options.resolved().deviceID, fps: 30)
+                                await monitor.start(
+                                    deviceID: options.resolved().deviceID,
+                                    fps: 30,
+                                    requestPermission: true
+                                )
                             }
                         }
                     }

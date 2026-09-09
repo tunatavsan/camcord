@@ -84,6 +84,7 @@ final class PanelController: NSObject, NSPopoverDelegate, NSWindowDelegate {
 
     /// Narrow test seam for native-window lifecycle and policy assertions.
     var detachedPanelForTesting: NSPanel? { detachedPanel }
+    var popoverBehaviorForTesting: NSPopover.Behavior { popover.behavior }
 
     func toggle(relativeTo button: NSStatusBarButton) {
         if detachedIsPresented {
@@ -178,6 +179,10 @@ final class PanelController: NSObject, NSPopoverDelegate, NSWindowDelegate {
 
         // A rapid open → close → reopen can reach here before the previous close's
         // popoverDidClose has removed its monitor; drop any stale one first so it can't leak.
+        installOutsideClickMonitor()
+    }
+
+    private func installOutsideClickMonitor() {
         removeOutsideClickMonitor()
         guard popover.behavior == .transient else { return }
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
@@ -373,6 +378,12 @@ final class PanelController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         removeOutsideClickMonitor()
     }
 
+    func releaseRecordingHold() {
+        popover.behavior = .transient
+        installOutsideClickMonitor()
+        close()
+    }
+
     func close() {
         model.isPanelVisible = false
         pendingCompletionAnchor = nil
@@ -383,6 +394,8 @@ final class PanelController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             isExplicitClose = true
             isClosing = true
             popover.performClose(nil)
+        } else {
+            removeOutsideClickMonitor()
         }
         detachedIsPresented = false
         detachedPanel?.close()

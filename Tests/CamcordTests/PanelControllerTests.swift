@@ -107,6 +107,28 @@ struct PanelControllerTests {
         controller.close()
     }
 
+    @Test("releasing the recording hold restores transient dismissal and closes the panel")
+    func recordingHoldReleaseRestoresTransientBehaviorAndCloses() {
+        _ = NSApplication.shared
+        let model = RecordingStateModel()
+        let presenter = DetachedPanelPresentationSpy()
+        let controller = PanelController(
+            model: model,
+            actions: PanelActions(),
+            detachedPanelPresenter: presenter.present
+        )
+
+        controller.presentDetached()
+        controller.keepOpenForRecording()
+        #expect(controller.popoverBehaviorForTesting == .applicationDefined)
+        #expect(controller.isShown)
+
+        controller.releaseRecordingHold()
+
+        #expect(controller.popoverBehaviorForTesting == .transient)
+        #expect(!controller.isShown)
+    }
+
     private func expectContentSize(_ panel: NSPanel, width: CGFloat, height: CGFloat) {
         #expect(abs(panel.contentLayoutRect.width - width) < 0.5)
         #expect(abs(panel.contentLayoutRect.height - height) < 0.5)

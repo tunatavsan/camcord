@@ -50,8 +50,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let recordingStateModel = RecordingStateModel()
         self.recordingStateModel = recordingStateModel
 
-        recordingController.onUIChange = { [weak statusItemController, weak recordingStateModel] state, elapsed in
+        recordingController.onUIChange = { [weak self, weak statusItemController, weak recordingStateModel] state, elapsed in
             statusItemController?.setRecordingUI(state, elapsed: elapsed)
+            if recordingStateModel?.state == .idle, state == .recording {
+                self?.panelController?.releaseRecordingHold()
+            }
             recordingStateModel?.state = state
             recordingStateModel?.elapsed = elapsed
             // A new/live recording clears any lingering "done" card.
@@ -135,8 +138,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.panelController = panelController
 
         statusItemController.onShowPanel = { [weak panelController, weak statusItemController] in
-            guard let button = statusItemController?.anchorButton, panelController?.isShown != true else { return }
-            panelController?.toggle(relativeTo: button)
+            guard let button = statusItemController?.anchorButton else { return }
+            panelController?.present(relativeTo: button)
         }
         statusItemController.onPrimaryClick = { [weak panelController, weak statusItemController] in
             // The status item always opens the same control surface. Recording exposes
