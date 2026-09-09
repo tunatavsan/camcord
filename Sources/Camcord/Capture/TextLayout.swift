@@ -72,21 +72,38 @@ enum TextLayout {
         }
 
         let charWidth = medianCharWidth(lines)
-        let blockMinX = lines.map { $0.rect.minX }.min() ?? 0
+        var blocks: [[[TextLine]]] = []
+        for row in rows {
+            let ordered = row.sorted { $0.rect.minX < $1.rect.minX }
+            let first = ordered[0]
+            if let previous = blocks.last?.last, let previousFirst = previous.first {
+                let bottom = previous.map { $0.rect.maxY }.max() ?? 0
+                let paragraphGap = first.rect.minY - bottom > max(first.rect.height, 1) * 0.75
+                let columnGap = first.rect.minX > previousFirst.rect.maxX + charWidth * 8
+                    || previousFirst.rect.minX > first.rect.maxX + charWidth * 8
+                if !paragraphGap && !columnGap {
+                    blocks[blocks.count - 1].append(ordered)
+                    continue
+                }
+            }
+            blocks.append([ordered])
+        }
 
         var out: [String] = []
         var prevBottom: CGFloat?
-        for row in rows {
-            let ordered = row.sorted { $0.rect.minX < $1.rect.minX }
-            let rowTop = ordered.map { $0.rect.minY }.min() ?? 0
-            let rowBottom = ordered.map { $0.rect.maxY }.max() ?? 0
-            let rowHeight = max(rowBottom - rowTop, 1)
-            // A clearly larger-than-a-line vertical gap = a paragraph break (blank line).
-            if let prevBottom, rowTop - prevBottom > rowHeight * 0.75 {
-                out.append("")
+        for block in blocks {
+            let blockMinX = block.compactMap { $0.first?.rect.minX }.min() ?? 0
+            for ordered in block {
+                let rowTop = ordered.map { $0.rect.minY }.min() ?? 0
+                let rowBottom = ordered.map { $0.rect.maxY }.max() ?? 0
+                let rowHeight = max(rowBottom - rowTop, 1)
+                // A clearly larger-than-a-line vertical gap = a paragraph break (blank line).
+                if let prevBottom, rowTop - prevBottom > rowHeight * 0.75 {
+                    out.append("")
+                }
+                out.append(composeRow(ordered, charWidth: charWidth, blockMinX: blockMinX))
+                prevBottom = rowBottom
             }
-            out.append(composeRow(ordered, charWidth: charWidth, blockMinX: blockMinX))
-            prevBottom = rowBottom
         }
         return out.joined(separator: "\n")
     }
@@ -122,7 +139,7 @@ enum TextLayout {
         var result = ""
         if charWidth > 0 {
             let indent = Int(((first.rect.minX - blockMinX) / charWidth).rounded())
-            if indent >= 2 { result += String(repeating: " ", count: min(indent, 40)) }
+            if indent >= 2 { result += String(repeating: " ", count: min(indent, 8)) }
         }
         result += first.text
         for i in 1..<ordered.count {

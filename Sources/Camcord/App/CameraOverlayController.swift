@@ -60,7 +60,7 @@ final class CameraOverlayController: NSObject {
             MainActor.assumeIsolated { self?.cameraView.message = message ?? "Kamera açılıyor…" }
         }.store(in: &observations)
         NotificationCenter.default.publisher(for: RecordingSettings.didChangeNotification)
-            .sink { [weak self] _ in
+            .sink { @Sendable [weak self] _ in
                 Task { @MainActor [weak self] in self?.settingsChanged() }
             }.store(in: &observations)
     }

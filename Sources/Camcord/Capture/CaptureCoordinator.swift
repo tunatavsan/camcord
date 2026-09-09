@@ -47,9 +47,11 @@ final class CaptureCoordinator {
         let anchor: CGPoint
         let mode: HoldCaptureMode
         let resolutionScale: ResolutionScale
+        let displayFrame: CGRect
         var latest: CGPoint
         var moved = false
         var releasedAt: CGPoint?
+        var selectedRect: CGRect?
         var snapshot: FrozenDesktopSnapshot?
         var overlayStarted = false
         var captureTask: Task<Void, Never>?
@@ -58,13 +60,15 @@ final class CaptureCoordinator {
             token: UInt64,
             anchor: CGPoint,
             mode: HoldCaptureMode,
-            resolutionScale: ResolutionScale
+            resolutionScale: ResolutionScale,
+            displayFrame: CGRect
         ) {
             self.token = token
             self.anchor = anchor
             self.latest = anchor
             self.mode = mode
             self.resolutionScale = resolutionScale
+            self.displayFrame = displayFrame
         }
     }
 
@@ -115,14 +119,29 @@ final class CaptureCoordinator {
         guard preflightScreenCapture("captureRegionInteractive") else { return }
         let settings = ScreenshotSettings.load(from: .standard)
         do {
+            guard let cursorPoint = currentCursorCGPoint() else {
+                fail("Frozen region capture: no display under the pointer")
+                return
+            }
             let snapshot = try await ScreenshotService.captureFrozenDesktop(
-                resolutionScale: settings.resolutionScale
+                resolutionScale: settings.resolutionScale,
+                atCGPoint: cursorPoint
             )
-            guard let (cgRect, mode) = await overlay.selectFrozen(snapshot: snapshot) else { return }
+            guard let (selection, mode) = await overlay.selectFrozen(snapshot: snapshot) else { return }
             switch mode {
             case .screenshot:
-                await performFrozenScreenshot(snapshot, cgRect: cgRect)
+                switch selection {
+                case .region(let cgRect):
+                    await performFrozenScreenshot(snapshot, cgRect: cgRect)
+                case .window(let window):
+                    await performWindowCapture(window)
+                }
             case .text:
+                let cgRect: CGRect
+                switch selection {
+                case .region(let region): cgRect = region
+                case .window(let window): cgRect = window.frame
+                }
                 performFrozenText(snapshot, cgRect: cgRect)
             }
         } catch {
@@ -139,9 +158,21 @@ final class CaptureCoordinator {
         defer { endExclusiveCapture() }
         guard preflightScreenCapture("captureTextRegion") else { return }
         do {
-            let snapshot = try await ScreenshotService.captureFrozenDesktop(resolutionScale: .native)
+            guard let cursorPoint = currentCursorCGPoint() else {
+                fail("Text capture: no display under the pointer")
+                return
+            }
+            let snapshot = try await ScreenshotService.captureFrozenDesktop(
+                resolutionScale: .native,
+                atCGPoint: cursorPoint
+            )
             // This entry point always OCRs, regardless of which button ended the selection.
-            guard let (cgRect, _) = await overlay.selectFrozen(snapshot: snapshot) else { return }
+            guard let (selection, _) = await overlay.selectFrozen(snapshot: snapshot) else { return }
+            let cgRect: CGRect
+            switch selection {
+            case .region(let region): cgRect = region
+            case .window(let window): cgRect = window.frame
+            }
             performFrozenText(snapshot, cgRect: cgRect)
         } catch {
             fail("Text capture failed: \(error)")
@@ -192,12 +223,25 @@ final class CaptureCoordinator {
         let scale = clampedRegion.width > 0 ? CGFloat(image.width) / clampedRegion.width : 2
         let pointSize = CGSize(width: clampedRegion.width, height: CGFloat(image.height) / max(scale, 0.01))
         let resolutionScale = ScreenshotSettings.load(from: .standard).resolutionScale
-        let scaled = await Task.detached(priority: .userInitiated) {
-            FrozenDesktopSnapshot.scaledImage(image, pointSize: pointSize, resolutionScale: resolutionScale)
-        }.value
-        guard let outputImage = scaled else {
-            fail("Scroll capture: output scaling failed")
-            return
+        let outputImage: CGImage
+        if resolutionScale == .native {
+            outputImage = image
+        } else {
+            let maximumPixels: CGFloat = 50_000_000
+            let requestedPixels = max(1, pointSize.width * pointSize.height)
+            let capScale = min(1, sqrt(maximumPixels / requestedPixels))
+            let cappedSize = CGSize(
+                width: max(1, floor(pointSize.width * capScale)),
+                height: max(1, floor(pointSize.height * capScale))
+            )
+            let scaled = await Task.detached(priority: .userInitiated) {
+                FrozenDesktopSnapshot.scaledImage(image, pointSize: cappedSize, resolutionScale: .oneX)
+            }.value
+            guard let scaled else {
+                fail("Scroll capture: output scaling failed")
+                return
+            }
+            outputImage = scaled
         }
         guard let copied = await copyScreenshot(outputImage, pointSize: pointSize, acceptedToken: acceptedToken) else { return }
         guard copied else {
@@ -234,12 +278,18 @@ final class CaptureCoordinator {
             NSSound.beep()
             return false
         }
+        guard let displayFrame = displayFrame(containingCGPoint: cgPoint) else {
+            endExclusiveCapture()
+            return false
+        }
+        let anchor = Self.clampedPoint(cgPoint, to: displayFrame)
         let token = holdRequests.begin()
         let request = FrozenHoldRequest(
             token: token,
-            anchor: cgPoint,
+            anchor: anchor,
             mode: mode,
-            resolutionScale: ScreenshotSettings.load(from: .standard).resolutionScale
+            resolutionScale: ScreenshotSettings.load(from: .standard).resolutionScale,
+            displayFrame: displayFrame
         )
         frozenHoldRequest = request
         pendingHoldSnapshots += 1
@@ -247,12 +297,17 @@ final class CaptureCoordinator {
             guard let self else { return }
             defer { self.pendingHoldSnapshots = max(0, self.pendingHoldSnapshots - 1) }
             do {
+                try Task.checkCancellation()
                 let snapshot = try await ScreenshotService.captureFrozenDesktop(
-                    resolutionScale: request.resolutionScale
+                    resolutionScale: request.resolutionScale,
+                    atCGPoint: request.anchor
                 )
+                try Task.checkCancellation()
                 self.holdSnapshotDidFinish(snapshot, request: request)
             } catch is CancellationError {
-                // A no-drag release or explicit cancel invalidated this request.
+                // A no-drag release or explicit cancel normally cleaned this request up.
+                // If cancellation came from below us, do the same cleanup here.
+                self.abandonFrozenHold(request)
             } catch {
                 self.holdSnapshotDidFail(error, request: request)
             }
@@ -264,39 +319,41 @@ final class CaptureCoordinator {
 
     func updateHoldRegionSelection(toCGPoint cgPoint: CGPoint) {
         guard let request = frozenHoldRequest else { return }
-        request.latest = cgPoint
+        let point = Self.clampedPoint(cgPoint, to: request.displayFrame)
+        request.latest = point
         if !request.moved {
             request.moved = hypot(
-                cgPoint.x - request.anchor.x,
-                cgPoint.y - request.anchor.y
+                point.x - request.anchor.x,
+                point.y - request.anchor.y
             ) >= Self.holdDragThreshold
         }
         guard request.moved else { return }
         if request.overlayStarted {
-            overlay.updateHoldSelection(toCGPoint: cgPoint)
-        } else if request.snapshot != nil {
+            overlay.updateHoldSelection(toCGPoint: point)
+        } else {
             startFrozenHoldOverlay(request)
         }
     }
 
     func finishHoldRegionSelection(atCGPoint cgPoint: CGPoint) {
         guard let request = frozenHoldRequest else { return }
-        request.latest = cgPoint
+        let point = Self.clampedPoint(cgPoint, to: request.displayFrame)
+        request.latest = point
+        request.releasedAt = point
         if !request.moved {
             request.moved = hypot(
-                cgPoint.x - request.anchor.x,
-                cgPoint.y - request.anchor.y
+                point.x - request.anchor.x,
+                point.y - request.anchor.y
             ) >= Self.holdDragThreshold
         }
         if request.overlayStarted {
-            overlay.finishHoldSelection(atCGPoint: cgPoint)
+            overlay.finishHoldSelection(atCGPoint: point)
             return
         }
         guard request.moved else {
             abandonFrozenHold(request)
             return
         }
-        request.releasedAt = cgPoint
         if request.snapshot != nil {
             completeFrozenHoldWithoutOverlay(request)
         }
@@ -317,7 +374,11 @@ final class CaptureCoordinator {
     ) {
         guard frozenHoldRequest === request, holdRequests.isCurrent(request.token) else { return }
         request.snapshot = snapshot
-        if request.releasedAt != nil {
+        if request.overlayStarted {
+            overlay.setFrozenDesktopSnapshot(snapshot)
+        } else if let selectedRect = request.selectedRect {
+            finishFrozenHold(request, cgRect: selectedRect)
+        } else if request.releasedAt != nil {
             completeFrozenHoldWithoutOverlay(request)
         } else if request.moved {
             startFrozenHoldOverlay(request)
@@ -326,28 +387,33 @@ final class CaptureCoordinator {
 
     private func holdSnapshotDidFail(_ error: Error, request: FrozenHoldRequest) {
         guard frozenHoldRequest === request, holdRequests.isCurrent(request.token) else { return }
-        frozenHoldRequest = nil
-        holdRequests.invalidate()
-        endExclusiveCapture()
+        if request.overlayStarted {
+            overlay.cancelHoldSelection()
+        } else {
+            abandonFrozenHold(request)
+        }
         fail("Hold capture snapshot failed: \(error)")
     }
 
     private func startFrozenHoldOverlay(_ request: FrozenHoldRequest) {
-        guard frozenHoldRequest === request, !request.overlayStarted,
-            let snapshot = request.snapshot
-        else { return }
+        guard frozenHoldRequest === request, !request.overlayStarted else { return }
         let started = overlay.beginHoldSelection(
             atCGPoint: request.anchor,
             mode: request.mode,
-            frozenSnapshot: snapshot
+            frozenSnapshot: request.snapshot,
+            constrainedToCGFrame: request.displayFrame
         ) { [weak self, weak request] result in
             guard let self, let request else { return }
             guard self.frozenHoldRequest === request else { return }
+            request.overlayStarted = false
             guard case .region(let cgRect) = result else {
                 self.abandonFrozenHold(request)
                 return
             }
-            self.finishFrozenHold(request, cgRect: cgRect)
+            request.selectedRect = cgRect
+            if request.snapshot != nil {
+                self.finishFrozenHold(request, cgRect: cgRect)
+            }
         }
         guard started else {
             abandonFrozenHold(request)
@@ -370,9 +436,10 @@ final class CaptureCoordinator {
 
     private func finishFrozenHold(_ request: FrozenHoldRequest, cgRect: CGRect) {
         guard frozenHoldRequest === request, let snapshot = request.snapshot else { return }
+        request.captureTask?.cancel()
+        request.captureTask = nil
         frozenHoldRequest = nil
         holdRequests.invalidate()
-        request.captureTask = nil
         Task { @MainActor [weak self] in
             guard let self else { return }
             switch request.mode {
@@ -387,10 +454,36 @@ final class CaptureCoordinator {
 
     private func abandonFrozenHold(_ request: FrozenHoldRequest) {
         guard frozenHoldRequest === request else { return }
+        request.captureTask?.cancel()
+        request.captureTask = nil
         frozenHoldRequest = nil
         holdRequests.invalidate()
-        request.captureTask = nil
+        if request.overlayStarted { overlay.cancelHoldSelection() }
         endExclusiveCapture()
+    }
+
+    private func currentCursorCGPoint() -> CGPoint? {
+        guard let primaryHeight = NSScreen.screens.first?.frame.height else { return nil }
+        let point = NSEvent.mouseLocation
+        return Geometry.appKitToCG(
+            CGRect(origin: point, size: .zero),
+            primaryScreenHeight: primaryHeight
+        ).origin
+    }
+
+    private func displayFrame(containingCGPoint point: CGPoint) -> CGRect? {
+        guard let primaryHeight = NSScreen.screens.first?.frame.height else { return nil }
+        let frames = NSScreen.screens.map {
+            Geometry.appKitToCG($0.frame, primaryScreenHeight: primaryHeight)
+        }
+        return frames.first { $0.contains(point) } ?? frames.first
+    }
+
+    private static func clampedPoint(_ point: CGPoint, to frame: CGRect) -> CGPoint {
+        CGPoint(
+            x: min(max(point.x, frame.minX), frame.maxX),
+            y: min(max(point.y, frame.minY), frame.maxY)
+        )
     }
 
     // MARK: - OCR on an existing image (file / dropped / Services)

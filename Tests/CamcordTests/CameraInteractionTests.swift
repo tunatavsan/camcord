@@ -169,7 +169,7 @@ struct CameraInteractionTests {
     }
 
     @Test("camera overlay is hidden after a panel hide without recording")
-    @MainActor func panelHideClosesCameraOverlay() {
+    @MainActor func panelHideClosesCameraOverlay() async {
         _ = NSApplication.shared
         let controller = CameraOverlayController.shared
         controller.prepareRecording(
@@ -181,5 +181,8 @@ struct CameraInteractionTests {
         controller.hide()
 
         #expect(!controller.isVisible)
+        await Task.detached {
+            NotificationCenter.default.post(name: RecordingSettings.didChangeNotification, object: nil)
+        }.value
     }
 }

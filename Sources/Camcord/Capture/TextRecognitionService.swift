@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 import Vision
 
 /// The combined result of reading a captured region: OCR text plus any decoded
@@ -90,8 +91,9 @@ enum TextRecognitionService {
     private static func recognize(_ image: CGImage) async throws -> [RecognizedTextObservation] {
         var request = RecognizeTextRequest()
         request.recognitionLevel = .accurate
-        request.usesLanguageCorrection = true
-        request.automaticallyDetectsLanguage = true
+        request.usesLanguageCorrection = false
+        request.recognitionLanguages = [Locale.Language(identifier: "tr"), Locale.Language(identifier: "en")]
+        request.automaticallyDetectsLanguage = false
         return try await request.perform(on: image)
     }
 

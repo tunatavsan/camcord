@@ -37,6 +37,14 @@ struct TextLayoutTests {
         #expect(TextLayout.assemble(lines) == "first line\nsecond line")
     }
 
+    @Test("a sidebar does not indent the next block and emitted indentation is capped")
+    func sidebarIndentationUsesContiguousBlock() {
+        let lines = [line("Sidebar", y: 0), line("func capture() {", x: 300, y: 25),
+                     line("return image", x: 340, y: 50), line("next()", x: 700, y: 110),
+                     line("tail", x: 800, y: 135)]
+        #expect(TextLayout.assemble(lines) == "Sidebar\nfunc capture() {\n    return image\n\nnext()\n        tail")
+    }
+
     @Test("side-by-side observations on one row are spaced by their gap (columns/tables)")
     func columnsSpacing() {
         let lines = [line("Name", x: 0, y: 0, w: 40), line("Value", x: 100, y: 0, w: 40)]

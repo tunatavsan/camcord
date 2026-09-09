@@ -39,6 +39,7 @@ enum AccessibilityPermission {
 final class EventTapEngine: NSObject {
     private let coordinator: CaptureCoordinator
     private let recordingController: RecordingController
+    private let buttonIsDown: (Int64) -> Bool
     private let logger = Logger(subsystem: "dev.tavsan.camcord", category: "event-tap-engine")
 
     private var bindings = TapBindings()
@@ -54,9 +55,16 @@ final class EventTapEngine: NSObject {
     private(set) var isTapHealthy = false
     private var tapHolder: EventTapHolder?
 
-    init(coordinator: CaptureCoordinator, recordingController: RecordingController) {
+    init(coordinator: CaptureCoordinator, recordingController: RecordingController,
+         bindings: TapBindings = TapBindings(),
+         buttonIsDown: @escaping (Int64) -> Bool = { button in
+             guard let mouseButton = CGMouseButton(rawValue: UInt32(button)) else { return false }
+             return CGEventSource.buttonState(.combinedSessionState, button: mouseButton)
+         }) {
         self.coordinator = coordinator
         self.recordingController = recordingController
+        self.bindings = bindings
+        self.buttonIsDown = buttonIsDown
         super.init()
         registerWorkspaceNotifications()
         startWatchdog()
@@ -206,19 +214,18 @@ final class EventTapEngine: NSObject {
         watchdogTimer = timer
     }
 
-    private func watchdogTick() {
+    func watchdogTick() {
+        if let button = activeHoldButton, !buttonIsDown(button) {
+            activeHoldButton = nil
+            activeHoldDragged = false
+            coordinator.cancelHoldRegionSelection()
+        }
         // Backstop for the one "must be impossible" failure: if the modifier is armed but
         // its button is NOT physically down, a button-up was lost while the tap stayed
         // enabled — force-disarm so left/right clicks can't stay swallowed. Closes the
         // hole within one watchdog interval regardless of how the up was lost.
         if modifierArmed, let cgButton = captureModifierButton {
-            let isDown: Bool
-            if let mouseButton = CGMouseButton(rawValue: UInt32(cgButton)) {
-                isDown = CGEventSource.buttonState(.combinedSessionState, button: mouseButton)
-            } else {
-                isDown = (NSEvent.pressedMouseButtons & (1 << cgButton)) != 0
-            }
-            if !isDown {
+            if !buttonIsDown(cgButton) {
                 logger.notice("Watchdog: capture-modifier armed but its button is up; force-disarming")
                 resetModifierState(cancelChord: true)
             }
@@ -270,7 +277,7 @@ final class EventTapEngine: NSObject {
 
     /// Classifies and dispatches one event given its already-extracted primitive
     /// fields. Returns `true` when the callback should swallow the event.
-    fileprivate func handle(
+    func handle(
         type: CGEventType,
         button: Int64,
         keycode: Int64,
@@ -286,9 +293,9 @@ final class EventTapEngine: NSObject {
         case .leftMouseDown, .rightMouseDown:
             return handleChordDown(isRight: type == .rightMouseDown, location: location)
         case .leftMouseDragged, .rightMouseDragged:
-            return handleChordDragged(location: location)
+            return handleChordDragged(isRight: type == .rightMouseDragged, location: location)
         case .leftMouseUp, .rightMouseUp:
-            return handleChordUp(location: location)
+            return handleChordUp(isRight: type == .rightMouseUp, location: location)
         case .flagsChanged:
             handleFlagsChanged(keycode: keycode, isRightCommandDown: isRightCommandDown, timestamp: timestamp)
             return false
@@ -304,7 +311,7 @@ final class EventTapEngine: NSObject {
 
     /// The button currently driving a hold-to-capture session, if any, and whether it
     /// has produced a drag yet (a no-drag release is a tap → arms the next hold for OCR).
-    private var activeHoldButton: Int64?
+    var activeHoldButton: Int64?
     private var activeHoldDragged = false
     private var pendingHoldLocation: CGPoint?
     private var holdUpdateScheduled = false
@@ -312,6 +319,7 @@ final class EventTapEngine: NSObject {
     /// Capture-modifier state: whether its button is held, and whether a left/right
     /// capture chord was used during this hold (so a plain tap can open the overlay).
     private var modifierArmed = false
+    private var buttonsDownAtArm: UInt8 = 0
     private var chordActive = false
     private var chordUsedThisArm = false
     private var lastChordLocation: CGPoint = .zero
@@ -381,6 +389,7 @@ final class EventTapEngine: NSObject {
     private func handleModifierButton(type: CGEventType, location: CGPoint) -> Bool {
         switch type {
         case .otherMouseDown:
+            buttonsDownAtArm = (buttonIsDown(0) ? 1 : 0) | (buttonIsDown(1) ? 2 : 0)
             modifierArmed = true
             chordActive = false
             chordUsedThisArm = false
@@ -407,6 +416,7 @@ final class EventTapEngine: NSObject {
     // MARK: - Capture-modifier chord (left/right mouse while the modifier is held)
 
     private func handleChordDown(isRight: Bool, location: CGPoint) -> Bool {
+        buttonsDownAtArm &= ~(isRight ? 2 : 1)
         lastChordLocation = location
         // A hold-to-capture is in progress → this click must NOT act on the app underneath
         // (the reported bug: a left click mid-hold closing an open menu).
@@ -423,7 +433,8 @@ final class EventTapEngine: NSObject {
         return true
     }
 
-    private func handleChordDragged(location: CGPoint) -> Bool {
+    private func handleChordDragged(isRight: Bool, location: CGPoint) -> Bool {
+        if buttonsDownAtArm & (isRight ? 2 : 1) != 0 { return false }
         lastChordLocation = location
         if activeHoldButton != nil { return true }   // swallow left/right drags during a hold
         guard modifierArmed else { return swallowChordTail }
@@ -447,7 +458,12 @@ final class EventTapEngine: NSObject {
         return true
     }
 
-    private func handleChordUp(location: CGPoint) -> Bool {
+    private func handleChordUp(isRight: Bool, location: CGPoint) -> Bool {
+        let button: UInt8 = isRight ? 2 : 1
+        if buttonsDownAtArm & button != 0 {
+            buttonsDownAtArm &= ~button
+            return false
+        }
         lastChordLocation = location
         if activeHoldButton != nil { return true }   // swallow the click's release during a hold
         if swallowChordTail {
@@ -472,6 +488,7 @@ final class EventTapEngine: NSObject {
             coordinator.cancelHoldRegionSelection()
         }
         modifierArmed = false
+        buttonsDownAtArm = 0
         chordActive = false
         chordUsedThisArm = false
         swallowChordTail = false

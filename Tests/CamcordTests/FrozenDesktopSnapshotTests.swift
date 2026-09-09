@@ -51,28 +51,28 @@ struct FrozenDesktopSnapshotTests {
         #expect(pixel(crop.image, x: 0, y: 1).b > 200)
     }
 
-    @Test("cross-display native crop composites exact frozen pixels at the highest scale")
-    func crossDisplayCropWithMixedScalesAndNegativeOrigin() throws {
-        let left = image(width: 2, height: 2) { _, _ in (230, 15, 20, 255) }
-        let right = image(width: 4, height: 4) { _, _ in (20, 40, 235, 255) }
+    @Test("single-display crop clamps to the frozen display and ignores connected peers")
+    func singleDisplayCropClampsAndMatchesWithOtherDisplays() throws {
+        let source = image(width: 4, height: 4) { x, _ in (UInt8(20 + x * 50), 10, 0, 255) }
+        let frame = CGRect(x: 100, y: 50, width: 2, height: 2)
         let snapshot = FrozenDesktopSnapshot(
-            displays: [
-                .init(id: 1, cgFrame: CGRect(x: -2, y: 0, width: 2, height: 2), image: left),
-                .init(id: 2, cgFrame: CGRect(x: 0, y: 0, width: 2, height: 2), image: right),
-            ],
+            displays: [.init(id: 1, cgFrame: frame, image: source)],
             windows: []
         )
 
         let crop = try #require(snapshot.crop(
-            cgRect: CGRect(x: -1, y: 0, width: 2, height: 2),
+            cgRect: CGRect(x: 101, y: 50, width: 2, height: 2),
             resolutionScale: .native
         ))
 
-        #expect(crop.image.width == 4)
+        #expect(crop.image.width == 2)
         #expect(crop.image.height == 4)
-        #expect(crop.pointSize == CGSize(width: 2, height: 2))
-        #expect(pixel(crop.image, x: 0, y: 1).r > 200)
-        #expect(pixel(crop.image, x: 3, y: 1).b > 200)
+        #expect(crop.pointSize == CGSize(width: 1, height: 2))
+        #expect(pixel(crop.image, x: 0, y: 0) == Pixel(120, 10, 0, 255))
+        #expect(snapshot.matches(displayFramesByID: [
+            1: frame,
+            2: CGRect(x: 0, y: 0, width: 50, height: 50),
+        ]))
     }
 
     @Test("frozen window hit testing uses immutable trigger-time z order")

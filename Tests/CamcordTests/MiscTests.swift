@@ -1,8 +1,36 @@
 import AVFoundation
 import Foundation
+import os
 import Testing
 
 @testable import Camcord
+
+@Test("retry cannot begin after the single wall-clock budget is exhausted")
+func retryStaysInsideOneBudget() async {
+    let state = OSAllocatedUnfairLock(initialState: (now: UInt64(100), attempts: 0))
+    let deadline: UInt64 = 2_000_000_100
+
+    do {
+        _ = try await ScreenshotService.withRetry(
+            deadlineNanoseconds: deadline,
+            nowNanoseconds: { state.withLock { $0.now } }
+        ) { () async throws -> Int in
+            state.withLock {
+                $0.attempts += 1
+                $0.now = deadline
+            }
+            throw CaptureError.noDisplay
+        }
+        Issue.record("Expected the exhausted retry budget to time out")
+    } catch CaptureError.timeout {
+        // Expected: the failed attempt consumed the one shared budget.
+    } catch {
+        Issue.record("Expected CaptureError.timeout, got \(error)")
+    }
+
+    #expect(state.withLock { $0.attempts } == 1)
+    #expect(state.withLock { $0.now } == deadline)
+}
 
 @Suite("FormatElapsed")
 struct FormatElapsedTests {

@@ -49,13 +49,17 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
 
     private var panels: [SelectionPanel] = []
     private var views: [SelectionView] = []
+    private var presentedScreens: [NSScreen] = []
     private var continuation: CheckedContinuation<(SelectionResult, HoldCaptureMode)?, Never>?
-    private var frozenContinuation: CheckedContinuation<(CGRect, HoldCaptureMode)?, Never>?
+    private var frozenContinuation: CheckedContinuation<(SelectionResult, HoldCaptureMode)?, Never>?
     /// Non-nil while a HOLD session (mouse side button held; events driven by the
     /// CGEventTap, not by the panels) is active. Every exit path funnels through
     /// `finish(_:)`, which fires this exactly once.
     private var holdEndHandler: ((SelectionResult?) -> Void)?
     private var frozenSnapshot: FrozenDesktopSnapshot?
+    /// Frozen screenshot and hold sessions are bound to the display selected at trigger time.
+    /// This exists before a hold snapshot arrives, so dragging can be clamped immediately.
+    private var constrainedCGFrame: CGRect?
     private var isPresenting = false
 
     // Global = AppKit screen space (bottom-left origin, Y up).
@@ -107,12 +111,13 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         }
     }
 
-    /// Screenshot/OCR selector backed entirely by pixels and window geometry captured before this
-    /// panel exists. A click resolves to the frozen window frame; a drag resolves to its rect.
-    func selectFrozen(snapshot: FrozenDesktopSnapshot) async -> (CGRect, HoldCaptureMode)? {
+    /// Screenshot/OCR selector backed by pixels and window geometry captured before this panel
+    /// exists. A click retains the corresponding SCWindow; a drag resolves to a frozen crop rect.
+    func selectFrozen(snapshot: FrozenDesktopSnapshot) async -> (SelectionResult, HoldCaptureMode)? {
         guard !isPresenting else { return nil }
         isPresenting = true
         frozenSnapshot = snapshot
+        constrainedCGFrame = snapshot.displays.first?.cgFrame
         rightClickWholeScreen = false
         accent = .screenshot
         return await withCheckedContinuation { continuation in
@@ -140,12 +145,14 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         atCGPoint cgPoint: CGPoint,
         mode: HoldCaptureMode,
         frozenSnapshot: FrozenDesktopSnapshot? = nil,
+        constrainedToCGFrame constrainedCGFrame: CGRect? = nil,
         onEnd: @escaping (SelectionResult?) -> Void
     ) -> Bool {
         guard !isPresenting else { return false }
         isPresenting = true
         holdEndHandler = onEnd
         self.frozenSnapshot = frozenSnapshot
+        self.constrainedCGFrame = constrainedCGFrame ?? frozenSnapshot?.displays.first?.cgFrame
         holdIsText = mode == .text
         accent = .screenshot   // hold-to-capture is always a screenshot → blue
         activeIsRight = false   // chord mode comes from `mode` alone, not a stale right-drag
@@ -156,9 +163,27 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         return true
     }
 
+    /// Supplies trigger-time pixels to a hold overlay that was already presented at the drag
+    /// threshold. Geometry remains bound to the display chosen when the hold began.
+    func setFrozenDesktopSnapshot(_ snapshot: FrozenDesktopSnapshot) {
+        guard isPresenting else { return }
+        guard snapshotMatchesCurrentDisplays(snapshot) else {
+            finish(nil)
+            return
+        }
+        frozenSnapshot = snapshot
+        for ((screen, panel), view) in zip(zip(presentedScreens, panels), views) {
+            panel.configureForPresentation(displaysFrozenDesktop: true)
+            guard let id = screen.cgDirectDisplayID,
+                let frozenDisplay = snapshot.display(id: id)
+            else { continue }
+            view.setFrozenDesktopImage(frozenDisplay.image, scale: frozenDisplay.scaleX)
+        }
+    }
+
     func updateHoldSelection(toCGPoint cgPoint: CGPoint) {
         guard isPresenting, holdEndHandler != nil, let anchor = dragAnchor else { return }
-        let point = cgToAppKitPoint(cgPoint)
+        let point = clampedAppKitPoint(cgToAppKitPoint(cgPoint))
         dragCurrent = point
         if !isDragging {
             let movement = hypot(point.x - anchor.x, point.y - anchor.y)
@@ -183,7 +208,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
             finish(nil)
             return
         }
-        let point = cgToAppKitPoint(cgPoint)
+        let point = clampedAppKitPoint(cgToAppKitPoint(cgPoint))
         let globalRect = Geometry.normalizedRect(from: anchor, to: point)
         guard globalRect.width >= 1, globalRect.height >= 1 else {
             finish(nil)
@@ -214,27 +239,29 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
             finish(nil)
             return
         }
-        if let frozenSnapshot,
-            let primaryHeight = NSScreen.screens.first?.frame.height
-        {
-            let frames = Dictionary(uniqueKeysWithValues: NSScreen.screens.compactMap { screen in
-                screen.cgDirectDisplayID.map {
-                    ($0, Geometry.appKitToCG(screen.frame, primaryScreenHeight: primaryHeight))
-                }
-            })
-            guard frozenSnapshot.matches(displayFramesByID: frames) else {
+        guard let primaryHeight = NSScreen.screens.first?.frame.height else {
+            finish(nil)
+            return
+        }
+        if let frozenSnapshot {
+            guard snapshotMatchesCurrentDisplays(frozenSnapshot) else {
                 finish(nil)
                 return
             }
         }
 
+        let sessionScreens = screensForCurrentSession(primaryScreenHeight: primaryHeight)
+        guard !sessionScreens.isEmpty else {
+            finish(nil)
+            return
+        }
+        presentedScreens = sessionScreens
+
         NSCursor.crosshair.push()
         cursorPushed = true
         // Kick off a refresh so window-snap has something reasonably fresh; mouseMoved
         // itself only ever reads the last-known snapshot, never blocks on a fetch.
-        if frozenSnapshot == nil {
-            Task { await shareableContentCache.refreshInBackground() }
-        }
+        Task { await shareableContentCache.refreshInBackground() }
 
         // The panel/view arrays are built from this instant's NSScreen.screens and
         // are index-paired with it in updateRendering -- if the display set changes
@@ -253,7 +280,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         let mouseLocation = NSEvent.mouseLocation
         var keyPanel: SelectionPanel?
 
-        for screen in NSScreen.screens {
+        for screen in sessionScreens {
             let panel = SelectionPanel(
                 contentRect: screen.frame,
                 styleMask: [.borderless, .nonactivatingPanel],
@@ -332,12 +359,14 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         }
         panels.removeAll()
         views.removeAll()
+        presentedScreens.removeAll()
         dragAnchor = nil
         dragCurrent = nil
         isDragging = false
         highlightedWindow = nil
         highlightedFrozenWindow = nil
         frozenSnapshot = nil
+        constrainedCGFrame = nil
         rightClickWholeScreen = false
         accent = .screenshot   // next session defaults to the screenshot (blue) accent
         holdIsText = false
@@ -357,19 +386,14 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         let holdHandler = holdEndHandler
         holdEndHandler = nil
         continuation?.resume(returning: result.map { ($0, mode) })
-        let frozenRect: CGRect? = result.flatMap {
-            switch $0 {
-            case .region(let rect): return rect
-            case .window(let window): return window.frame
-            }
-        }
-        frozenContinuation?.resume(returning: frozenRect.map { ($0, mode) })
+        frozenContinuation?.resume(returning: result.map { ($0, mode) })
         holdHandler?(result)
     }
 
     // MARK: - SelectionViewDelegate
 
     func selectionViewMouseDown(at globalPoint: CGPoint, isRight: Bool) {
+        let globalPoint = clampedAppKitPoint(globalPoint)
         // A new gesture orphans any still-pending click resolution from a previous
         // click (see selectionViewMouseUp) — without this, a slow lookup could commit
         // its window mid-way through THIS gesture.
@@ -386,6 +410,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
 
     func selectionViewMouseDragged(to globalPoint: CGPoint, isRight: Bool) {
         guard let anchor = dragAnchor else { return }
+        let globalPoint = clampedAppKitPoint(globalPoint)
         dragCurrent = globalPoint
 
         if !isDragging {
@@ -398,6 +423,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
 
     func selectionViewMouseUp(at globalPoint: CGPoint, isRight: Bool) {
         guard let anchor = dragAnchor else { return }
+        let globalPoint = clampedAppKitPoint(globalPoint)
         let wasDragging = isDragging
         let mode: HoldCaptureMode = activeIsRight ? .text : .screenshot
         dragAnchor = nil
@@ -422,12 +448,21 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
                     globalPoint,
                     primaryScreenHeight: NSScreen.screens.first?.frame.height ?? 0
                 )
-                let window = frozenSnapshot.window(atCGPoint: cgPoint) ?? highlightedFrozenWindow
-                if let window {
-                    NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
-                    finish(.region(window.frame), mode: mode)
-                } else {
+                guard let frozenWindow = frozenSnapshot.window(atCGPoint: cgPoint) ?? highlightedFrozenWindow else {
                     finish(nil)
+                    return
+                }
+                let generation = snapGeneration
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let resolved = await self.resolveFrozenWindow(id: frozenWindow.id)
+                    guard generation == self.snapGeneration, self.isPresenting else { return }
+                    guard let resolved else {
+                        self.finish(nil)
+                        return
+                    }
+                    NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+                    self.finish(.window(resolved), mode: mode)
                 }
                 return
             }
@@ -472,6 +507,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
 
     func selectionViewMouseMoved(to globalPoint: CGPoint) {
         guard !isDragging else { return }
+        let globalPoint = clampedAppKitPoint(globalPoint)
         // Newest-wins: bumping per spawn also drops a slower, older lookup that
         // would otherwise overwrite a fresher highlight out of order.
         snapGeneration &+= 1
@@ -559,6 +595,19 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         return fresh?.windows.first { $0.windowID == id }
     }
 
+    private func resolveFrozenWindow(id: CGWindowID) async -> SCWindow? {
+        if let known = await shareableContentCache.lastKnownContent()?.windows.first(where: { $0.windowID == id }) {
+            return known
+        }
+        if let current = try? await shareableContentCache.content(),
+            let window = current.windows.first(where: { $0.windowID == id })
+        {
+            return window
+        }
+        let fresh = try? await shareableContentCache.content(forceRefresh: true)
+        return fresh?.windows.first { $0.windowID == id }
+    }
+
     /// Converts a single AppKit-space point via `Geometry.appKitToCG` (a zero-size
     /// rect's origin) rather than hand-flipping Y here.
     private func appKitPointToCG(_ point: CGPoint, primaryScreenHeight: CGFloat) -> CGPoint {
@@ -574,7 +623,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
             return Geometry.normalizedRect(from: dragAnchor, to: dragCurrent)
         }()
 
-        for (screen, view) in zip(NSScreen.screens, views) {
+        for (screen, view) in zip(presentedScreens, views) {
             // OCR mode from either a right-button drag (activeIsRight) or a .text hold/chord —
             // but NOT while recording, where the right button means "whole screen", not OCR.
             view.selectionIsText = (activeIsRight || holdIsText) && !rightClickWholeScreen
@@ -582,7 +631,6 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
                 view.selectionRect = nil
                 view.highlightRect = nil
                 view.badge = nil
-                view.needsDisplay = true
                 continue
             }
 
@@ -611,7 +659,6 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
                 view.selectionRect = nil
                 view.badge = nil
             }
-            view.needsDisplay = true
         }
     }
 
@@ -622,5 +669,46 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
             width: globalRect.width,
             height: globalRect.height
         )
+    }
+
+    private func screensForCurrentSession(primaryScreenHeight: CGFloat) -> [NSScreen] {
+        guard let constrainedCGFrame else { return NSScreen.screens }
+        return NSScreen.screens.filter { screen in
+            let frame = Geometry.appKitToCG(screen.frame, primaryScreenHeight: primaryScreenHeight)
+            return Self.framesMatch(frame, constrainedCGFrame)
+        }
+    }
+
+    private func snapshotMatchesCurrentDisplays(_ snapshot: FrozenDesktopSnapshot) -> Bool {
+        guard !snapshot.displays.isEmpty else { return false }
+        guard let primaryHeight = NSScreen.screens.first?.frame.height else { return false }
+        let currentFrames = Dictionary(uniqueKeysWithValues: NSScreen.screens.compactMap { screen in
+            screen.cgDirectDisplayID.map {
+                ($0, Geometry.appKitToCG(screen.frame, primaryScreenHeight: primaryHeight))
+            }
+        })
+        return snapshot.displays.allSatisfy { display in
+            guard let current = currentFrames[display.id] else { return false }
+            return Self.framesMatch(current, display.cgFrame)
+                && constrainedCGFrame.map { Self.framesMatch($0, display.cgFrame) } != false
+        }
+    }
+
+    private func clampedAppKitPoint(_ point: CGPoint) -> CGPoint {
+        guard let constrainedCGFrame,
+            let primaryHeight = NSScreen.screens.first?.frame.height
+        else { return point }
+        let frame = Geometry.cgToAppKit(constrainedCGFrame, primaryScreenHeight: primaryHeight)
+        return CGPoint(
+            x: min(max(point.x, frame.minX), frame.maxX),
+            y: min(max(point.y, frame.minY), frame.maxY)
+        )
+    }
+
+    private static func framesMatch(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
+        abs(lhs.minX - rhs.minX) < 0.01
+            && abs(lhs.minY - rhs.minY) < 0.01
+            && abs(lhs.width - rhs.width) < 0.01
+            && abs(lhs.height - rhs.height) < 0.01
     }
 }

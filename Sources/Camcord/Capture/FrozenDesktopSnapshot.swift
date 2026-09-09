@@ -60,7 +60,7 @@ struct FrozenDesktopSnapshot: @unchecked Sendable {
     }
 
     var desktopBounds: CGRect {
-        displays.reduce(.null) { $0.union($1.cgFrame) }
+        displays.first?.cgFrame ?? .null
     }
 
     func display(id: CGDirectDisplayID) -> Display? {
@@ -68,7 +68,6 @@ struct FrozenDesktopSnapshot: @unchecked Sendable {
     }
 
     func matches(displayFramesByID current: [CGDirectDisplayID: CGRect]) -> Bool {
-        guard current.count == displays.count else { return false }
         return displays.allSatisfy { display in
             guard let frame = current[display.id] else { return false }
             return abs(frame.minX - display.cgFrame.minX) < 0.01
@@ -98,35 +97,22 @@ struct FrozenDesktopSnapshot: @unchecked Sendable {
         ).crop(cgRect: frame)?.image
     }
 
-    /// Crops/composites a CG-space selection from the frozen source images.
-    ///
-    /// A cross-display image needs one PNG density. Native mode uses the highest participating
-    /// source scale so Retina pixels remain intact; lower-density screens are scaled into that
-    /// canvas. One-X always emits one pixel per point. Transparent pixels represent physical gaps
-    /// between irregularly arranged displays.
+    /// Crops a CG-space selection from the one frozen display, clamping at its edges.
+    /// Native mode preserves the source bytes; one-X emits one pixel per point.
     func crop(cgRect requestedRect: CGRect, resolutionScale requestedScale: ResolutionScale? = nil) -> Crop? {
-        guard requestedRect.width >= 1, requestedRect.height >= 1, !displays.isEmpty else {
+        guard requestedRect.width >= 1, requestedRect.height >= 1, let display = displays.first else {
             return nil
         }
-        let target = requestedRect.intersection(desktopBounds)
+        let target = requestedRect.intersection(display.cgFrame)
         guard !target.isNull, target.width >= 1, target.height >= 1 else { return nil }
-        let participating = displays.filter {
-            let intersection = $0.cgFrame.intersection(target)
-            return !intersection.isNull && intersection.width > 0 && intersection.height > 0
-        }
-        guard !participating.isEmpty else { return nil }
 
         let mode = requestedScale ?? resolutionScale
-        let outputScale: CGFloat = mode == .oneX
-            ? 1
-            : participating.map { max($0.scaleX, $0.scaleY) }.max() ?? 1
+        let outputScale: CGFloat = mode == .oneX ? 1 : max(display.scaleX, display.scaleY)
         let outputWidth = max(1, Int((target.width * outputScale).rounded()))
         let outputHeight = max(1, Int((target.height * outputScale).rounded()))
 
-        // The common single-display/native case can preserve bytes exactly and avoids a full-size
-        // composite allocation beyond the crop itself.
-        if participating.count == 1, let display = participating.first,
-            abs(display.scaleX - outputScale) < 0.001,
+        // Preserve native source bytes and their color profile when no resampling is needed.
+        if abs(display.scaleX - outputScale) < 0.001,
             abs(display.scaleY - outputScale) < 0.001,
             display.cgFrame.contains(target)
         {
@@ -149,37 +135,21 @@ struct FrozenDesktopSnapshot: @unchecked Sendable {
             height: outputHeight,
             bitsPerComponent: 8,
             bytesPerRow: outputWidth * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
+            space: display.image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!,
             bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue
                 | CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return nil }
-        context.clear(CGRect(x: 0, y: 0, width: outputWidth, height: outputHeight))
-        context.interpolationQuality = mode == .oneX ? .high : .none
+        context.interpolationQuality = .high
         // Bitmap rows and the CG/SCK global coordinates used here are both top-to-bottom.
 
-        for display in participating {
-            let intersection = display.cgFrame.intersection(target)
-            guard !intersection.isNull, intersection.width > 0, intersection.height > 0 else { continue }
-            let sourceRect = pixelRect(
-                globalRect: intersection,
-                relativeTo: display.cgFrame,
-                scaleX: display.scaleX,
-                scaleY: display.scaleY
-            )
-            guard let source = display.image.cropping(to: sourceRect) else { continue }
-
-            let minX = Int(((intersection.minX - target.minX) * outputScale).rounded())
-            let minY = Int(((intersection.minY - target.minY) * outputScale).rounded())
-            let maxX = Int(((intersection.maxX - target.minX) * outputScale).rounded())
-            let maxY = Int(((intersection.maxY - target.minY) * outputScale).rounded())
-            let destination = CGRect(
-                x: minX,
-                y: minY,
-                width: max(1, maxX - minX),
-                height: max(1, maxY - minY)
-            )
-            context.draw(source, in: destination)
-        }
+        let sourceRect = pixelRect(
+            globalRect: target,
+            relativeTo: display.cgFrame,
+            scaleX: display.scaleX,
+            scaleY: display.scaleY
+        )
+        guard let source = display.image.cropping(to: sourceRect) else { return nil }
+        context.draw(source, in: CGRect(x: 0, y: 0, width: outputWidth, height: outputHeight))
 
         guard let image = context.makeImage() else { return nil }
         return Crop(image: image, pointSize: target.size)

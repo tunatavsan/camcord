@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 
@@ -5,6 +6,38 @@ import Testing
 
 @Suite("TapBindings")
 struct TapBindingsTests {
+
+    @Test("a lost hold release is cleared by the physical-button watchdog")
+    @MainActor func watchdogReleasesLostHold() {
+        let coordinator = CaptureCoordinator()
+        let engine = EventTapEngine(
+            coordinator: coordinator, recordingController: RecordingController(coordinator: coordinator),
+            bindings: TapBindings(mouseButton3: nil, mouseButton4: nil, mouseButton5: nil, doubleTapRightCommand: nil),
+            buttonIsDown: { _ in false }
+        )
+        engine.activeHoldButton = 4
+        engine.watchdogTick()
+        #expect(engine.activeHoldButton == nil)
+        #expect(!engine.handle(type: .leftMouseUp, button: 0, keycode: 0,
+                              isRightCommandDown: false, timestamp: 0, location: .zero))
+    }
+
+    @Test("arming the capture modifier during an existing drag passes its drag and release through")
+    @MainActor func modifierPreservesExistingDragRelease() {
+        let coordinator = CaptureCoordinator()
+        let engine = EventTapEngine(
+            coordinator: coordinator, recordingController: RecordingController(coordinator: coordinator),
+            buttonIsDown: { $0 == 0 }
+        )
+        #expect(!engine.handle(type: .leftMouseDown, button: 0, keycode: 0,
+                              isRightCommandDown: false, timestamp: 0, location: .zero))
+        #expect(engine.handle(type: .otherMouseDown, button: 4, keycode: 0,
+                             isRightCommandDown: false, timestamp: 1, location: .zero))
+        #expect(!engine.handle(type: .leftMouseDragged, button: 0, keycode: 0,
+                              isRightCommandDown: false, timestamp: 2, location: .zero))
+        #expect(!engine.handle(type: .leftMouseUp, button: 0, keycode: 0,
+                              isRightCommandDown: false, timestamp: 3, location: .zero))
+    }
 
     /// A uniquely-named suite per test so tests never see each other's state or the
     /// user's real defaults.

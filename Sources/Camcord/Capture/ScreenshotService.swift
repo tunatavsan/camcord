@@ -14,12 +14,16 @@ enum CaptureError: Error {
 enum ScreenshotService {
     private static let logger = Logger(subsystem: "dev.tavsan.camcord", category: "screenshot-service")
     private static let fetchTimeout: Duration = .seconds(2)
+    private static let fetchTimeoutNanoseconds: UInt64 = 2_000_000_000
 
-    /// Captures every attached display before any selection panel is presented. Each display is
-    /// independent and runs concurrently; the immutable result is the sole pixel source for a
-    /// later frozen region/window selection.
+    /// Captures only the display under the trigger pointer. Camcord is excluded at the application
+    /// level so an immediately-visible dim/selection overlay cannot bleed into the frozen pixels.
     @MainActor
-    static func captureFrozenDesktop(resolutionScale: ResolutionScale) async throws -> FrozenDesktopSnapshot {
+    static func captureFrozenDesktop(
+        resolutionScale: ResolutionScale,
+        atCGPoint anchor: CGPoint? = nil
+    ) async throws -> FrozenDesktopSnapshot {
+        try Task.checkCancellation()
         guard let primaryHeight = NSScreen.screens.first?.frame.height else {
             throw CaptureError.noDisplay
         }
@@ -28,10 +32,16 @@ enum ScreenshotService {
             return (id, Geometry.appKitToCG(screen.frame, primaryScreenHeight: primaryHeight))
         }
         guard !descriptors.isEmpty else { throw CaptureError.noDisplay }
+        let cgAnchor = anchor ?? {
+            let mouse = NSEvent.mouseLocation
+            return CGPoint(x: mouse.x, y: primaryHeight - mouse.y)
+        }()
+        guard let descriptor = descriptors.first(where: { $0.1.contains(cgAnchor) }) else {
+            throw CaptureError.noDisplay
+        }
 
-        // Sample z-order before capture and before our overlay exists. Screen pixels and window
-        // metadata cannot be sampled atomically by public APIs, but both belong to this bounded
-        // trigger-time phase.
+        // Screen pixels and window metadata cannot be sampled atomically by public APIs, but both
+        // belong to this bounded trigger-time phase.
         let ownPID = ProcessInfo.processInfo.processIdentifier
         let windows = WindowSnapper.currentCandidates()
             .filter {
@@ -39,45 +49,60 @@ enum ScreenshotService {
                     && $0.layer == 0
                     && $0.bounds.width >= WindowSnapper.minimumSize
                     && $0.bounds.height >= WindowSnapper.minimumSize
+                    && $0.bounds.intersects(descriptor.1)
             }
             .map { FrozenDesktopSnapshot.Window(id: $0.windowID, frame: $0.bounds) }
 
-        let displays = try await withThrowingTaskGroup(of: FrozenDesktopSnapshot.Display.self) { group in
-            for (id, frame) in descriptors {
-                group.addTask {
-                    let image = try await captureRegion(cgRect: frame)
-                    return FrozenDesktopSnapshot.Display(id: id, cgFrame: frame, image: image)
+        let image = try await captureWithRetry {
+            do {
+                let content = try await SCShareableContent.current
+                try Task.checkCancellation()
+                guard let display = content.displays.first(where: { $0.displayID == descriptor.0 }) else {
+                    throw CaptureError.displayConfigurationChanged
                 }
+                let ownApplications = content.applications.filter {
+                    $0.processID == ownPID || $0.bundleIdentifier == Bundle.main.bundleIdentifier
+                }
+                let filter = SCContentFilter(
+                    display: display,
+                    excludingApplications: ownApplications,
+                    exceptingWindows: []
+                )
+                let configuration = SCStreamConfiguration()
+                configuration.showsCursor = false
+                configuration.captureResolution = .best
+                let scale = resolutionScale == .native ? CGFloat(filter.pointPixelScale) : 1
+                configuration.width = max(1, Int((descriptor.1.width * scale).rounded()))
+                configuration.height = max(1, Int((descriptor.1.height * scale).rounded()))
+                let box = FilterConfigurationBox(filter: filter, configuration: configuration)
+                return try await SCScreenshotManager.captureImage(
+                    contentFilter: box.filter,
+                    configuration: box.configuration
+                )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as CaptureError {
+                throw error
+            } catch {
+                throw CaptureError.sckFailure(error)
             }
-            var captured: [FrozenDesktopSnapshot.Display] = []
-            captured.reserveCapacity(descriptors.count)
-            for try await display in group {
-                captured.append(display)
-            }
-            return captured
         }
+        try Task.checkCancellation()
 
-        // A hot-plug while capture was in flight invalidates every coordinate mapping. Cancel the
-        // session rather than drawing one screen's pixels on another.
+        // Other displays may be attached or removed while this one is captured; only the selected
+        // display's frame affects the frozen coordinate mapping.
         let currentFrames = Dictionary(uniqueKeysWithValues: NSScreen.screens.compactMap { screen in
             screen.cgDirectDisplayID.map {
                 ($0, Geometry.appKitToCG(screen.frame, primaryScreenHeight: primaryHeight))
             }
         })
-        let expectedFrames = Dictionary(uniqueKeysWithValues: descriptors)
-        guard currentFrames.count == expectedFrames.count,
-            expectedFrames.allSatisfy({ id, frame in
-                guard let current = currentFrames[id] else { return false }
-                return abs(current.minX - frame.minX) < 0.01
-                    && abs(current.minY - frame.minY) < 0.01
-                    && abs(current.width - frame.width) < 0.01
-                    && abs(current.height - frame.height) < 0.01
-            })
-        else { throw CaptureError.displayConfigurationChanged }
+        let (id, frame) = descriptor
+        guard let current = currentFrames[id], framesMatch(current, frame) else {
+            throw CaptureError.displayConfigurationChanged
+        }
 
-        let order = Dictionary(uniqueKeysWithValues: descriptors.enumerated().map { ($0.element.0, $0.offset) })
         return FrozenDesktopSnapshot(
-            displays: displays.sorted { order[$0.id, default: .max] < order[$1.id, default: .max] },
+            displays: [.init(id: id, cgFrame: frame, image: image)],
             windows: windows,
             resolutionScale: resolutionScale
         )
@@ -88,13 +113,13 @@ enum ScreenshotService {
     /// which is bound to a single display and returns an empty image for cross-display rects.
     /// Does not touch `ShareableContentCache` -- region capture needs no shareable content.
     static func captureRegion(cgRect: CGRect) async throws -> CGImage {
-        try await withRetry {
-            try await withTimeout {
-                do {
-                    return try await SCScreenshotManager.captureImage(in: cgRect)
-                } catch {
-                    throw CaptureError.sckFailure(error)
-                }
+        try await captureWithRetry {
+            do {
+                return try await SCScreenshotManager.captureImage(in: cgRect)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw CaptureError.sckFailure(error)
             }
         }
     }
@@ -114,13 +139,13 @@ enum ScreenshotService {
         configuration.height = max(1, Int((filter.contentRect.height * scale).rounded()))
         let box = FilterConfigurationBox(filter: filter, configuration: configuration)
 
-        return try await withRetry {
-            try await withTimeout {
-                do {
-                    return try await SCScreenshotManager.captureImage(contentFilter: box.filter, configuration: box.configuration)
-                } catch {
-                    throw CaptureError.sckFailure(error)
-                }
+        return try await captureWithRetry {
+            do {
+                return try await SCScreenshotManager.captureImage(contentFilter: box.filter, configuration: box.configuration)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw CaptureError.sckFailure(error)
             }
         }
     }
@@ -139,13 +164,13 @@ enum ScreenshotService {
         configuration.height = max(2, Int((contentRect.height * scale).rounded()))
         let box = FilterConfigurationBox(filter: filter, configuration: configuration)
 
-        return try await withRetry {
-            try await withTimeout {
-                do {
-                    return try await SCScreenshotManager.captureImage(contentFilter: box.filter, configuration: box.configuration)
-                } catch {
-                    throw CaptureError.sckFailure(error)
-                }
+        return try await captureWithRetry {
+            do {
+                return try await SCScreenshotManager.captureImage(contentFilter: box.filter, configuration: box.configuration)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw CaptureError.sckFailure(error)
             }
         }
     }
@@ -166,32 +191,69 @@ enum ScreenshotService {
         configuration.height = max(1, Int((CGFloat(display.height) * scale).rounded()))
         let box = FilterConfigurationBox(filter: filter, configuration: configuration)
 
-        return try await withRetry {
-            try await withTimeout {
-                do {
-                    return try await SCScreenshotManager.captureImage(contentFilter: box.filter, configuration: box.configuration)
-                } catch {
-                    throw CaptureError.sckFailure(error)
-                }
+        return try await captureWithRetry {
+            do {
+                return try await SCScreenshotManager.captureImage(contentFilter: box.filter, configuration: box.configuration)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw CaptureError.sckFailure(error)
             }
         }
     }
 
     // MARK: - Timeout + retry
 
-    private static func withRetry(_ operation: @escaping @Sendable () async throws -> CGImage) async throws -> CGImage {
+    static func withRetry<T: Sendable>(
+        deadlineNanoseconds: UInt64,
+        nowNanoseconds: @escaping @Sendable () -> UInt64,
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try Task.checkCancellation()
         do {
             return try await operation()
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
+            try Task.checkCancellation()
+            guard nowNanoseconds() < deadlineNanoseconds else { throw CaptureError.timeout }
             logger.error("Capture failed, retrying once: \(String(describing: error), privacy: .public)")
             return try await operation()
         }
     }
 
-    /// Hard wall-clock bound: a hung SCK call is abandoned, not awaited (see
-    /// `withHardTimeout` — task-group cancellation can't bound non-cooperative calls).
-    private static func withTimeout(_ operation: @escaping @Sendable () async throws -> CGImage) async throws -> CGImage {
-        try await withHardTimeout(fetchTimeout, onTimeout: CaptureError.timeout, operation: operation)
+    /// One hard wall-clock bound wraps both attempts. A hung first attempt cannot receive a second
+    /// independent timeout budget.
+    private static func captureWithRetry<T: Sendable>(
+        _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try Task.checkCancellation()
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        let (deadline, overflow) = startedAt.addingReportingOverflow(fetchTimeoutNanoseconds)
+        let attempt = Task {
+            try await withRetry(
+                deadlineNanoseconds: overflow ? UInt64.max : deadline,
+                nowNanoseconds: { DispatchTime.now().uptimeNanoseconds },
+                operation: operation
+            )
+        }
+        return try await withTaskCancellationHandler {
+            defer { attempt.cancel() }
+            let result = try await withHardTimeout(fetchTimeout, onTimeout: CaptureError.timeout) {
+                try await attempt.value
+            }
+            try Task.checkCancellation()
+            return result
+        } onCancel: {
+            attempt.cancel()
+        }
+    }
+
+    private static func framesMatch(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
+        abs(lhs.minX - rhs.minX) < 0.01
+            && abs(lhs.minY - rhs.minY) < 0.01
+            && abs(lhs.width - rhs.width) < 0.01
+            && abs(lhs.height - rhs.height) < 0.01
     }
 }
 
