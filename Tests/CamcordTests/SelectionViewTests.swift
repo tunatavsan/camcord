@@ -108,18 +108,19 @@ struct SelectionViewTests {
         return bitmap
     }
 
-    @Test("A covered overlay is blind; a visible one and a hold session are not")
+    @Test("A covered cursor display is blind, whatever the other monitors show")
     func blindPresentationDecision() {
-        // Fullscreen game: panels ordered, nothing on screen.
-        #expect(SelectionOverlayController.presentationIsBlind(ordered: 1, visible: 0, isHoldSession: false))
-        #expect(SelectionOverlayController.presentationIsBlind(ordered: 2, visible: 0, isHoldSession: false))
-        // Normal desktop: at least one panel made it.
-        #expect(!SelectionOverlayController.presentationIsBlind(ordered: 2, visible: 1, isHoldSession: false))
-        #expect(!SelectionOverlayController.presentationIsBlind(ordered: 1, visible: 1, isHoldSession: false))
+        // Fullscreen game on the cursor's display.
+        #expect(SelectionOverlayController.presentationIsBlind(orderedPanels: 1, targetVisible: false, isHoldSession: false))
+        // Two monitors: the desktop one is visible, the game one is not — still blind,
+        // because the gesture would have happened on the game's display.
+        #expect(SelectionOverlayController.presentationIsBlind(orderedPanels: 2, targetVisible: false, isHoldSession: false))
+        // Normal desktop: the panel under the cursor made it on screen.
+        #expect(!SelectionOverlayController.presentationIsBlind(orderedPanels: 2, targetVisible: true, isHoldSession: false))
         // A hold session shows nothing until the drag threshold — never a fallback.
-        #expect(!SelectionOverlayController.presentationIsBlind(ordered: 1, visible: 0, isHoldSession: true))
+        #expect(!SelectionOverlayController.presentationIsBlind(orderedPanels: 1, targetVisible: false, isHoldSession: true))
         // Nothing was ordered (no screens): the existing early-out already finished.
-        #expect(!SelectionOverlayController.presentationIsBlind(ordered: 0, visible: 0, isHoldSession: false))
+        #expect(!SelectionOverlayController.presentationIsBlind(orderedPanels: 0, targetVisible: false, isHoldSession: false))
     }
 
     private func selectionPanel() -> SelectionPanel {

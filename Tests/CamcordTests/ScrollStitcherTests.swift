@@ -431,6 +431,25 @@ struct ScrollStitcherTests {
         expectPageRows(final, startingAt: 0)
     }
 
+    @Test("the tail-duplicate flag describes the last frame, not an old commit")
+    func tailRepeatedIsNotALatch() {
+        let page = 240, h = 120, block = 24
+        let stitcher = stitchRepeatedTail(pageHeight: page, viewport: h, block: block, times: 2)
+        #expect(stitcher.tailRepeated)
+
+        // A later frame that commits nothing (the resting page, then a lost alignment) must
+        // clear it: as a latch it would end the NEXT auto-scroll run on its first frame and
+        // leave "Sayfa sonu" on screen for a page that had only just grown.
+        stitcher.add(
+            repeatedTailViewport(contentOffset: page - h, height: h, pageHeight: page,
+                                 block: block, times: 2),
+            predictedOffset: 0
+        )
+        #expect(!stitcher.tailRepeated)
+        stitcher.add(periodicViewport(contentOffset: 5_000, height: h), predictedOffset: 0)
+        #expect(!stitcher.tailRepeated)
+    }
+
     @Test("a page end stitched three times drops both repeats")
     func repeatedTailTwiceIsDropped() {
         let page = 240, h = 120, block = 24

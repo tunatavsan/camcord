@@ -322,13 +322,13 @@ struct CameraInteractionTests {
         let wasStarting = monitor.isStarting
         let wasRunning = monitor.isRunning
         defer {
-            overlay.previewVisible = false
+            overlay.setPreviewVisibleForTesting(false)
             overlay.recordingEnded()
-            overlay.previewVisible = oldPreviewVisible
+            overlay.setPreviewVisibleForTesting(oldPreviewVisible)
             overlay.hide()
         }
 
-        overlay.previewVisible = false
+        overlay.setPreviewVisibleForTesting(false)
         overlay.hide()
         overlay.prepareRecording(
             cgRect: CGRect(x: -10_000, y: -10_000, width: 640, height: 360),
@@ -347,7 +347,7 @@ struct CameraInteractionTests {
         #expect(monitor.isStarting == wasStarting)
         #expect(monitor.isRunning == wasRunning)
 
-        overlay.previewVisible = true
+        overlay.setPreviewVisibleForTesting(true)
         overlay.prepareRecording(
             cgRect: CGRect(x: -10_000, y: -10_000, width: 640, height: 360),
             options: CameraOptions(enabled: false)
@@ -370,7 +370,7 @@ struct CameraInteractionTests {
         defer {
             overlay.onPlacementChange = nil
             if let savedData { defaults.set(savedData, forKey: key) } else { defaults.removeObject(forKey: key) }
-            overlay.previewVisible = savedPreview
+            overlay.setPreviewVisibleForTesting(savedPreview)
             overlay.hide()
             overlay.onPlacementChange = savedCallback
         }
@@ -397,12 +397,12 @@ struct CameraInteractionTests {
         let overlay = CameraOverlayController.shared
         let savedPreview = overlay.previewVisible
         defer {
-            overlay.previewVisible = false
+            overlay.setPreviewVisibleForTesting(false)
             overlay.recordingEnded()
-            overlay.previewVisible = savedPreview
+            overlay.setPreviewVisibleForTesting(savedPreview)
             overlay.hide()
         }
-        overlay.previewVisible = false
+        overlay.setPreviewVisibleForTesting(false)
         let options = CameraOptions(widthFraction: 0.6, position: CameraPosition(x: 1, y: 1))
         let initial = CGRect(x: 100, y: 120, width: 800, height: 500)
         let moved = CGRect(x: 700, y: 260, width: 420, height: 280)
@@ -455,16 +455,16 @@ struct CameraInteractionTests {
         let overlay = CameraOverlayController.shared
         let savedPreview = overlay.previewVisible
         defer {
-            overlay.previewVisible = false
+            overlay.setPreviewVisibleForTesting(false)
             overlay.recordingEnded()
-            overlay.previewVisible = savedPreview
+            overlay.setPreviewVisibleForTesting(savedPreview)
             overlay.hide()
         }
 
         let options = CameraOptions(enabled: true, widthFraction: 0.3, position: CameraPosition(x: 1, y: 0))
         let window = CGRect(x: 140, y: 160, width: 700, height: 420)
         let moved = CGRect(x: 620, y: 300, width: 700, height: 420)
-        overlay.previewVisible = true
+        overlay.setPreviewVisibleForTesting(true)
         overlay.prepareRecording(cgRect: window, options: options)
         let nativePanel = try #require(NSApp.windows.first { $0.contentView is FloatingCameraView })
         let confined = nativePanel.frame
@@ -472,7 +472,7 @@ struct CameraInteractionTests {
         // Ending a recording that composited no camera must drop the recording bounds,
         // or the dead window rect keeps framing the free preview for the rest of the
         // session and every later drag normalizes against it.
-        overlay.previewVisible = false
+        overlay.setPreviewVisibleForTesting(false)
         overlay.recordingEnded()
         overlay.updateRecordingBounds(cgRect: moved)
         #expect(nativePanel.frame == confined)
@@ -490,9 +490,9 @@ struct CameraInteractionTests {
         let savedCallback = overlay.onPlacementChange
         defer {
             overlay.onPlacementChange = nil
-            overlay.previewVisible = false
+            overlay.setPreviewVisibleForTesting(false)
             overlay.recordingEnded()
-            overlay.previewVisible = savedPreview
+            overlay.setPreviewVisibleForTesting(savedPreview)
             overlay.hide()
             overlay.onPlacementChange = savedCallback
             if let savedData { defaults.set(savedData, forKey: key) } else { defaults.removeObject(forKey: key) }
@@ -501,16 +501,17 @@ struct CameraInteractionTests {
         // Everything the compositor draws into the file comes through this funnel.
         var composited: [CameraOptions] = []
         overlay.onPlacementChange = { composited.append($0) }
-        overlay.previewVisible = false
+        overlay.setPreviewVisibleForTesting(false)
         overlay.hide()
 
-        // arm(): the placement rect goes up, the preview does not. `show()` is the only
-        // thing that claims the device, so an unobserved monitor means zero camera starts.
+        // arm(): the placement rect goes up, the preview does not. The device itself is the
+        // witness — `isRunning`/`isStarting` cover the deleted arm-time `monitor.start()`,
+        // which claimed the camera without ever registering a visible owner.
         let window = CGRect(x: -10_000, y: -10_000, width: 1280, height: 720)
         overlay.prepareRecording(cgRect: window, options: CameraOptions(enabled: true))
         #expect(!overlay.previewVisible)
         #expect(!overlay.isVisible)
-        #expect(!monitor.isObserved)
+        #expect(!monitor.isRunning && !monitor.isStarting)
 
         // begin(): the same rect the file is composited against.
         overlay.prepareRecording(cgRect: window, options: CameraOptions(enabled: true))
@@ -520,18 +521,17 @@ struct CameraInteractionTests {
         overlay.applyPlacement(placed, source: .settings)
         #expect(!overlay.previewVisible)
         #expect(!overlay.isVisible)
-        #expect(!monitor.isObserved)
+        #expect(!monitor.isRunning && !monitor.isStarting)
 
         // The file's camera rect is exactly the placement.
         #expect(composited.last == placed.resolved())
-        #expect(composited.last?.rect(in: window.size) == placed.resolved().rect(in: window.size))
         #expect(RecordingSettings.load(from: defaults).camera == placed.resolved())
 
         // stop(): the confinement goes, the owner's "closed" survives.
         overlay.recordingEnded()
         #expect(!overlay.previewVisible)
         #expect(!overlay.isVisible)
-        #expect(!monitor.isObserved)
+        #expect(!monitor.isRunning && !monitor.isStarting)
     }
 
     @Test("only the chip and the menu item change the preview's visibility")
@@ -540,9 +540,9 @@ struct CameraInteractionTests {
         let overlay = CameraOverlayController.shared
         let savedPreview = overlay.previewVisible
         defer {
-            overlay.previewVisible = false
+            overlay.setPreviewVisibleForTesting(false)
             overlay.recordingEnded()
-            overlay.previewVisible = savedPreview
+            overlay.setPreviewVisibleForTesting(savedPreview)
             overlay.hide()
         }
 
@@ -551,7 +551,7 @@ struct CameraInteractionTests {
         let placed = CameraOptions(enabled: true, widthFraction: 0.28,
                                    position: CameraPosition(x: 0.1, y: 0.9))
         for ownerWantsPreview in [false, true] {
-            overlay.previewVisible = ownerWantsPreview
+            overlay.setPreviewVisibleForTesting(ownerWantsPreview)
             overlay.prepareRecording(cgRect: window, options: CameraOptions(enabled: true))  // arm() / begin()
             #expect(overlay.previewVisible == ownerWantsPreview)
             // Open or closed, the preview is confined to the recorded rect and follows it.
@@ -562,7 +562,7 @@ struct CameraInteractionTests {
             #expect(overlay.previewVisible == ownerWantsPreview)
             // Closed before the teardown: recordingEnded() with the preview still open
             // restarts the camera device, which a unit test must not do.
-            overlay.previewVisible = false
+            overlay.setPreviewVisibleForTesting(false)
             overlay.recordingEnded()                                                         // stop()
             #expect(!overlay.previewVisible)
             #expect(!overlay.isVisible)
@@ -570,7 +570,7 @@ struct CameraInteractionTests {
 
         // The chip does change it. Only the closing direction is safe to drive here:
         // opening asks the device for permission.
-        overlay.previewVisible = true
+        overlay.setPreviewVisibleForTesting(true)
         overlay.togglePreview()
         #expect(!overlay.previewVisible)
     }
@@ -585,16 +585,16 @@ struct CameraInteractionTests {
         let savedPreview = overlay.previewVisible
         defer {
             overlay.applyPlacement(CameraOptions(), source: .settings)
-            overlay.previewVisible = false
+            overlay.setPreviewVisibleForTesting(false)
             overlay.recordingEnded()
-            overlay.previewVisible = savedPreview
+            overlay.setPreviewVisibleForTesting(savedPreview)
             overlay.hide()
             if let savedData { defaults.set(savedData, forKey: key) } else { defaults.removeObject(forKey: key) }
         }
 
         let seated = CameraOptions(enabled: true, widthFraction: 0.25,
                                    position: CameraPosition(x: 0.5, y: 0.5)).resolved()
-        overlay.previewVisible = true
+        overlay.setPreviewVisibleForTesting(true)
         overlay.prepareRecording(cgRect: CGRect(x: 200, y: 200, width: 1200, height: 800), options: seated)
         overlay.applyPlacement(seated, source: .settings)
         let panel = try #require(NSApp.windows.first { $0.contentView is FloatingCameraView })
@@ -618,13 +618,13 @@ struct CameraInteractionTests {
         let savedPreview = overlay.previewVisible
         defer {
             overlay.applyPlacement(CameraOptions(), source: .settings)
-            overlay.previewVisible = false
+            overlay.setPreviewVisibleForTesting(false)
             overlay.recordingEnded()
-            overlay.previewVisible = savedPreview
+            overlay.setPreviewVisibleForTesting(savedPreview)
             overlay.hide()
         }
 
-        overlay.previewVisible = true
+        overlay.setPreviewVisibleForTesting(true)
         overlay.prepareRecording(cgRect: CGRect(x: 200, y: 200, width: 1200, height: 800),
                                  options: CameraOptions(enabled: true, widthFraction: 0.25))
         let panel = try #require(NSApp.windows.first { $0.contentView is FloatingCameraView })
@@ -645,20 +645,20 @@ struct CameraInteractionTests {
         let monitor = CameraPreviewMonitor.shared
         let savedPreview = overlay.previewVisible
         defer {
-            overlay.previewVisible = false
+            overlay.setPreviewVisibleForTesting(false)
             overlay.recordingEnded()
-            overlay.previewVisible = savedPreview
+            overlay.setPreviewVisibleForTesting(savedPreview)
             overlay.hide()
         }
 
         let window = CGRect(x: 200, y: 200, width: 1200, height: 800)
-        overlay.previewVisible = true
+        overlay.setPreviewVisibleForTesting(true)
         overlay.prepareRecording(cgRect: window, options: CameraOptions(enabled: true))
         let panel = try #require(NSApp.windows.first { $0.contentView is FloatingCameraView })
         #expect(monitor.isObserved)
         overlay.hide(animated: true)
         guard !CameraOverlayController.reducesMotion else {
-            #expect(!monitor.isObserved)
+            #expect(!monitor.isRunning && !monitor.isStarting)
             return
         }
         // The device is released by the fade's completion, not before it: dropping it

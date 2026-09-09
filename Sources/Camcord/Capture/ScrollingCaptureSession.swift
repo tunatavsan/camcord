@@ -278,8 +278,13 @@ final class ScrollingCaptureSession {
         }
     }
 
-    private func stopAutoScroll(reachedEnd: Bool) {
+    private func stopAutoScroll(reachedEnd: Bool, reason: String = "manual") {
         guard autoScrolling else { return }
+        // The owner reads the file log to explain a run that ended early, so the reason the
+        // end-of-page rules fired has to be in it — the per-capture line cannot show it.
+        let line = "scroll auto-stop reason=\(reason) end=\(reachedEnd) sections=\(stitcher.sectionCount)"
+        logger.notice("\(line, privacy: .public)")
+        DiagnosticsLog.append(line)
         if reachedEnd { autoEnded = true }
         autoScrolling = false
         calibrating = false
@@ -400,18 +405,21 @@ final class ScrollingCaptureSession {
             finish(keep: true)
             return nil
         }
-        if autoScrolling, !calibrating, capturedGeneration == autoGeneration {
+        // A lost alignment (`.ignored`) is neither an advance nor a stall: the stitcher
+        // re-baselines itself after two of them, and counting them as stalls would end the
+        // run mid-page at exactly the count where that recovery starts.
+        if autoScrolling, !calibrating, capturedGeneration == autoGeneration, outcome != .ignored {
             let motion = stitcher.lastMotion
             if case .down = motion { autoScroller?.confirmDirection() }
             // A strip that merely repeats the band above it means the page bottom was just
             // stitched twice — the end, however the motion happened to classify.
             if stitcher.tailRepeated {
-                stopAutoScroll(reachedEnd: true)
+                stopAutoScroll(reachedEnd: true, reason: "tail-dup")
             } else {
                 switch autoProgress.record(motion) {
                 case .keepScrolling: break
                 case .flipDirection: autoScroller?.flipDirection()
-                case .reachedEnd: stopAutoScroll(reachedEnd: true)
+                case .reachedEnd: stopAutoScroll(reachedEnd: true, reason: autoProgress.endReason)
                 }
             }
         }

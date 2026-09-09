@@ -207,10 +207,15 @@ final class RecordingController: NSObject {
         // opens one. begin() composites against this very rect, so a placement the owner
         // makes with the preview open lands in the file, and one made with it closed does
         // too. Opening the preview is the owner's move alone (panel chip / status menu).
-        CameraOverlayController.shared.prepareRecording(
-            cgRect: CaptureAreaIndicator.windowBounds(window.windowID) ?? window.frame,
-            options: settings.camera
-        )
+        // Only when the camera is actually recorded: begin() releases the confinement when
+        // it is not, and confining here anyway would visibly snap an open preview into the
+        // window at arm and back out at Başlat.
+        if settings.camera.enabled {
+            CameraOverlayController.shared.prepareRecording(
+                cgRect: CaptureAreaIndicator.windowBounds(window.windowID) ?? window.frame,
+                options: settings.camera
+            )
+        }
         // The frame is the placement frame, not the window glow, so it is always drawn.
         indicator.showRecordingWindow(window.windowID, initialCGRect: window.frame, showsBorder: true,
                                       title: "Başlat", glyph: .play, color: .systemRed,

@@ -13,8 +13,10 @@ final class CameraOverlayController: NSObject {
     var isVisible: Bool { panel.isVisible }
     /// Only the chip and the status-menu item change `previewVisible`: the preview belongs
     /// to the owner. Arming and recording may CONFINE it (`prepareRecording`), never open
-    /// it -- a placement made with it closed lands in the file just the same.
-    var previewVisible = false
+    /// it -- a placement made with it closed lands in the file just the same. `private(set)`
+    /// is what enforces that: no arming, recording or panel-visible path can even compile a
+    /// write to it, which is the regression this whole phase exists to bury.
+    private(set) var previewVisible = false
 
     private let panel: NSPanel
     private let cameraView = FloatingCameraView()
@@ -98,6 +100,12 @@ final class CameraOverlayController: NSObject {
         }
         onPlacementChange?(self.options)
     }
+
+    #if DEBUG
+    /// Test seam: places the owner's switch without `togglePreview()`'s device side effects
+    /// (opening it asks for camera permission, which a unit test must never do).
+    func setPreviewVisibleForTesting(_ value: Bool) { previewVisible = value }
+    #endif
 
     /// One of the two writers of `previewVisible`; the status-menu item is the other.
     func togglePreview() {

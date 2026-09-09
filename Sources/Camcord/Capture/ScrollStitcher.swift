@@ -130,6 +130,10 @@ final class ScrollStitcher {
     /// last accepted frame, in the image's PIXELS (0 = unknown → full search).
     @discardableResult
     func add(_ image: CGImage, predictedOffset: Int) -> Outcome {
+        // Describes THIS frame only. As a latch it would outlive the commit that set it and
+        // end the next auto-scroll run on its first frame (a capture that commits nothing
+        // never refreshes it), so auto would be dead for the rest of the session.
+        tailRepeated = false
         guard let f = Self.makeFrame(image) else {
             // Never leave a stale `.down` behind: the session reads `lastMotion` to decide
             // whether an auto-scroll is still advancing.

@@ -12,12 +12,23 @@ enum DiagnosticsLog {
     private nonisolated(unsafe) static let stamp = ISO8601DateFormatter()
     private nonisolated(unsafe) static var handle: FileHandle?
     private nonisolated(unsafe) static var opened = false
+    private nonisolated(unsafe) static var written: UInt64 = 0
+
     /// Appends `line` prefixed with an ISO8601 timestamp. Never throws, never blocks the caller.
     static func append(_ line: String) {
         let now = Date()
         queue.async {
             guard let handle = open() else { return }
-            try? handle.write(contentsOf: Data("\(stamp.string(from: now)) \(line)\n".utf8))
+            let data = Data("\(stamp.string(from: now)) \(line)\n".utf8)
+            // The bound holds DURING the run too: this app sits in the menu bar for weeks,
+            // so a launch-only check would let the file grow without limit.
+            if written + UInt64(data.count) > maxBytes {
+                try? handle.truncate(atOffset: 0)
+                try? handle.seek(toOffset: 0)
+                written = 0
+            }
+            try? handle.write(contentsOf: data)
+            written += UInt64(data.count)
         }
     }
 
@@ -33,7 +44,7 @@ enum DiagnosticsLog {
             manager.createFile(atPath: url.path, contents: nil)
         }
         handle = try? FileHandle(forWritingTo: url)
-        _ = try? handle?.seekToEnd()
+        written = (try? handle?.seekToEnd()) ?? 0
         return handle
     }
 }

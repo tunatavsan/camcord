@@ -174,8 +174,12 @@ final class WindowPickerPanel: NSObject, NSWindowDelegate {
               )
         else { return nil }
 
+        // Resolve the covering app itself: clicking our panel makes Camcord frontmost, which
+        // is the reason `covering()` exists — so frontmost is only a last-resort name.
+        let covering = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first
         let frontmost = NSWorkspace.shared.frontmostApplication
         let name = content.applications.first { $0.bundleIdentifier == bundleID }?.applicationName
+            ?? covering?.localizedName
             ?? frontmost?.localizedName
             ?? "Uygulama"
         DiagnosticsLog.append("picker fullscreen-card app=\(name) bundle=\(bundleID) display=\(context.displayID)")
@@ -186,7 +190,7 @@ final class WindowPickerPanel: NSObject, NSWindowDelegate {
             frame: display.frame,
             appName: name,
             title: "\(name) — tam ekran",
-            appIcon: frontmost?.icon,
+            appIcon: covering?.icon ?? frontmost?.icon,
             aspect: display.frame.height > 0 ? display.frame.width / display.frame.height : 16.0 / 9.0
         )
     }

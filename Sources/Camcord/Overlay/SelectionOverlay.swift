@@ -329,6 +329,10 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
 
         // Make key WITHOUT activating the app (no NSApp.activate call).
         (keyPanel ?? panels.first)?.makeKey()
+        // The gesture happens on the cursor's display, so that panel — not the set — is
+        // what "the overlay is on screen" means. On a second monitor an unaffected desktop
+        // panel stays visible while the game display draws nothing.
+        let probed = keyPanel ?? panels.first
 
         // Phase G.1: a trigger can arrive and still draw nothing — a fullscreen game sits
         // above .screenSaver. Report whether the panels actually made it on screen.
@@ -338,11 +342,12 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(50))
             let visible = ordered.filter { $0.occlusionState.contains(.visible) }.count
-            TriggerLog.overlay("visible=\(visible)/\(ordered.count)")
+            let targetVisible = probed?.occlusionState.contains(.visible) ?? false
+            TriggerLog.overlay("visible=\(visible)/\(ordered.count) cursorDisplay=\(targetVisible)")
             // The probe outlives its session (a pick or Esc can land inside the 50 ms), so
             // only the presentation it was started for may be abandoned.
             guard self.isPresenting, self.panels.first === ordered.first,
-                Self.presentationIsBlind(ordered: ordered.count, visible: visible, isHoldSession: isHoldSession)
+                Self.presentationIsBlind(orderedPanels: ordered.count, targetVisible: targetVisible, isHoldSession: isHoldSession)
             else { return }
             TriggerLog.overlay("blind=1 falling back to a UI-less capture")
             self.presentationWasBlind = true
@@ -400,11 +405,12 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         activeIsRight = false   // never let a prior right-drag leak into the next session's mode/visual
     }
 
-    /// Pure decision behind the G.3 adaptive fallback: panels were ordered front, none of
-    /// them is on screen 50 ms later, and this is not a hold session (whose panels appear
-    /// only once the drag crosses the movement threshold, so "not visible" is normal).
-    static func presentationIsBlind(ordered: Int, visible: Int, isHoldSession: Bool) -> Bool {
-        ordered > 0 && visible == 0 && !isHoldSession
+    /// Pure decision behind the G.3 adaptive fallback: panels were ordered front, the one on
+    /// the cursor's display is not on screen 50 ms later, and this is not a hold session
+    /// (whose panels appear only once the drag crosses the movement threshold, so "not
+    /// visible" is normal there).
+    static func presentationIsBlind(orderedPanels: Int, targetVisible: Bool, isHoldSession: Bool) -> Bool {
+        orderedPanels > 0 && !targetVisible && !isHoldSession
     }
 
     /// True once per blind presentation: the caller falls back to a UI-less capture.

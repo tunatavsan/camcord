@@ -14,6 +14,8 @@ struct AutoScrollProgress: Equatable {
     private var advancedEver = false
     private var flipped = false
     private var stallStreak = 0
+    /// Why the run ended, for the diagnostics file the owner reads when a capture stops early.
+    private(set) var endReason = "running"
     mutating func record(_ motion: ScrollStitcher.Motion) -> Decision {
         switch motion {
         case .down:
@@ -24,15 +26,15 @@ struct AutoScrollProgress: Equatable {
             // Once the run has advanced, an upward frame is the rubber band springing back
             // off the bottom — the page end, not a wrong direction. Stop immediately, or the
             // next posted ticks stitch that bottom a second and third time.
-            if advancedEver { return .reachedEnd }
+            if advancedEver { endReason = "spring-back"; return .reachedEnd }
         case .none:
             stallStreak += 1
             // Two stalled frames are enough: the direction is measured at calibration, so a
             // stall after advancing can only mean the page stopped moving.
             guard stallStreak >= 2 else { return .keepScrolling }
-            if advancedEver { return .reachedEnd }
+            if advancedEver { endReason = "stalled"; return .reachedEnd }
         }
-        if flipped { return .reachedEnd }
+        if flipped { endReason = "no-direction"; return .reachedEnd }
         flipped = true
         stallStreak = 0
         return .flipDirection
