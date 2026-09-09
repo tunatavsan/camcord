@@ -37,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let settingsWindowController = SettingsWindowController(eventTapEngine: eventTapEngine)
         self.settingsWindowController = settingsWindowController
+        installMainMenu()
 
         let statusItemController = StatusItemController(
             coordinator: coordinator,
@@ -58,6 +59,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 recordingStateModel?.finishedURL = nil
                 recordingStateModel?.isFinishing = false
             }
+        }
+        recordingController.onStartingChange = { [weak self, weak recordingStateModel, weak statusItemController] starting in
+            recordingStateModel?.isStarting = starting
+            if starting {
+                recordingStateModel?.finishedURL = nil
+                self?.panelController?.keepOpenForRecording()
+            }
+            statusItemController?.setPreparing(starting)
+        }
+        recordingController.onHealthChange = { [weak recordingStateModel] health in
+            recordingStateModel?.health = health
         }
         recordingController.onFinishing = { [weak recordingStateModel] finishing in
             recordingStateModel?.isFinishing = finishing
@@ -108,6 +120,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             screenshotPreviewCard?.show(image: image, fileURL: url)
         }
 
+        coordinator.onScreenshotSaved = { [weak screenshotPreviewCard] image, url in
+            screenshotPreviewCard?.saved(image: image, to: url)
+        }
+
         // macOS Services: "Camcord ile Metni Çıkar" on any image selection.
         let servicesProvider = ServicesProvider(coordinator: coordinator)
         self.servicesProvider = servicesProvider
@@ -118,12 +134,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let panelController = PanelController(model: recordingStateModel, actions: panelActions)
         self.panelController = panelController
 
+        statusItemController.onShowPanel = { [weak panelController, weak statusItemController] in
+            guard let button = statusItemController?.anchorButton, panelController?.isShown != true else { return }
+            panelController?.toggle(relativeTo: button)
+        }
         statusItemController.onPrimaryClick = { [weak panelController, weak statusItemController] in
+            // The status item always opens the same control surface. Recording exposes
+            // its mixer and explicit pause/stop controls without an accidental stop.
             guard let button = statusItemController?.anchorButton else { return }
             panelController?.toggle(relativeTo: button)
         }
 
         registerLoginItemOnFirstRun()
+    }
+
+    /// Finder/Spotlight opens the actual capture controls, including when macOS has
+    /// crowded the status item out of the menu bar. Settings remains a separate action.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        panelController?.presentDetached()
+        return true
+    }
+
+    private func installMainMenu() {
+        let menu = NSMenu()
+        let applicationItem = NSMenuItem()
+        let applicationMenu = NSMenu(title: "Camcord")
+        let controls = applicationMenu.addItem(withTitle: "Kontrol Paneli", action: #selector(showControlPanel(_:)), keyEquivalent: "")
+        controls.target = self
+        let settings = applicationMenu.addItem(withTitle: "Ayarlar…", action: #selector(showSettings(_:)), keyEquivalent: ",")
+        settings.target = self
+        applicationMenu.addItem(.separator())
+        applicationMenu.addItem(withTitle: "Camcord’dan Çık", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        applicationItem.submenu = applicationMenu
+        menu.addItem(applicationItem)
+        menu.addItem(AppMenus.editingMenuItem())
+        NSApp.mainMenu = menu
+    }
+
+    @objc private func showSettings(_ sender: Any?) {
+        settingsWindowController?.show()
+    }
+
+    @objc private func showControlPanel(_ sender: Any?) {
+        panelController?.presentDetached()
     }
 
     /// Panel actions: overlay-opening flows close the panel first and give the
@@ -154,42 +207,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         actions.captureScroll = {
             afterClosingPanel { await coordinator.captureScrollingInteractive() }
         }
-        actions.toggleRecording = { [weak recordingController] in
-            let isIdle = recordingController?.uiState == .idle
-            if isIdle {
-                // Starting opens the selection overlay -- close the panel first.
-                afterClosingPanel { await recordingController?.toggleRecording() }
-            } else {
-                // Stopping is instant; keep the panel up so the row morphs back.
-                Task { await recordingController?.toggleRecording() }
-            }
+        actions.toggleRecording = { [weak self, weak recordingController] in
+            self?.panelController?.keepOpenForRecording()
+            Task { await recordingController?.toggleRecording() }
         }
-        actions.recordWindow = { [weak recordingController] in
-            afterClosingPanel { await recordingController?.recordWindow() }
+        actions.recordWindow = { [weak self, weak recordingController] in
+            self?.panelController?.keepOpenForRecording()
+            Task { await recordingController?.recordWindow() }
         }
-        actions.recordFullScreen = { [weak recordingController] in
-            afterClosingPanel { await recordingController?.recordFullScreen() }
+        actions.recordFullScreen = { [weak self, weak recordingController] in
+            self?.panelController?.keepOpenForRecording()
+            Task { await recordingController?.recordFullScreen() }
         }
         actions.pauseResume = { [weak recordingController] in
             recordingController?.pauseResume()
         }
         actions.revealRecording = { [weak self] url in
-            self?.panelController?.close()
-            NSWorkspace.shared.activateFileViewerSelecting([url])
+            self?.performLibraryAction(url, open: false)
         }
         actions.revealScreenshot = { [weak self] url in
-            self?.panelController?.close()
-            NSWorkspace.shared.activateFileViewerSelecting([url])
+            self?.performLibraryAction(url, open: false)
         }
         actions.openRecording = { [weak self] url in
-            self?.panelController?.close()
-            NSWorkspace.shared.open(url)
+            self?.performLibraryAction(url, open: true)
+        }
+        actions.reportError = { [weak self] message in
+            self?.hudToast?.show(text: message, systemSymbol: "exclamationmark.triangle", tint: .systemOrange, respectsSetting: false)
         }
         actions.openSettings = { [weak self] in
             self?.panelController?.close()
             self?.settingsWindowController?.show()
         }
         return actions
+    }
+
+    /// A deleted/moved capture should leave a useful error rather than dismissing
+    /// the recovery card first. File-system access and application launch are async.
+    private func performLibraryAction(_ url: URL, open: Bool) {
+        Task { @MainActor [weak self] in
+            let reachable = await Task.detached(priority: .userInitiated) {
+                (try? url.checkResourceIsReachable()) == true
+            }.value
+            guard let self else { return }
+            guard reachable else {
+                self.hudToast?.show(
+                    text: "Dosya bulunamadı · taşınmış veya silinmiş olabilir",
+                    systemSymbol: "exclamationmark.triangle", tint: .systemOrange, respectsSetting: false
+                )
+                return
+            }
+            // Empty-library destinations are directory URLs: open their contents,
+            // matching the panel's “Klasörü aç” action. Saved files are selected.
+            if open || url.hasDirectoryPath {
+                do {
+                    _ = try await NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration())
+                } catch {
+                    self.hudToast?.show(
+                        text: "Dosya veya klasör açılamadı · Finder’dan tekrar deneyebilirsin",
+                        systemSymbol: "exclamationmark.triangle", tint: .systemOrange, respectsSetting: false
+                    )
+                    return
+                }
+            } else {
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            }
+            self.panelController?.close()
+        }
     }
 
     /// The whole point of the app is being resident from login -- register the login
@@ -221,12 +304,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `.idle` alone is not "nothing in flight": a recording may be mid-start
         // (isStarting) or its file still finalizing after stop (isFinalizing) — `isBusy`
         // covers all three so quitting never kills a half-open or half-written file.
-        guard let recordingController, recordingController.isBusy else {
+        guard recordingController?.isBusy == true || ClipboardWriter.isSaving else {
             return .terminateNow
         }
         isTerminating = true
         Task { @MainActor in
-            await recordingController.stopForTermination()
+            await recordingController?.stopForTermination()
+            await ClipboardWriter.waitForPendingSaves()
             self.replyToTerminationOnce(sender)
         }
         // Failsafe: if the finalize wedges (hung replayd/disk), still answer Cmd-Q

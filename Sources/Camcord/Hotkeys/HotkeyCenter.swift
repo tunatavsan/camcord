@@ -12,6 +12,7 @@ extension KeyboardShortcuts.Name {
     static let captureActiveWindow = Self("captureActiveWindow")
     static let captureFullScreen = Self("captureFullScreen")
     static let captureTextRegion = Self("captureTextRegion")
+    static let captureScrolling = Self("captureScrolling")
     /// Starts an interactive recording when idle (region drag, window click, or
     /// right-click = whole screen), and finishes the active one otherwise.
     static let toggleRecording = Self("toggleRecording")
@@ -38,6 +39,9 @@ final class HotkeyCenter {
         }
         KeyboardShortcuts.onKeyDown(for: .captureTextRegion) { [coordinator] in
             Task { await coordinator.captureTextRegionInteractive() }
+        }
+        KeyboardShortcuts.onKeyDown(for: .captureScrolling) { [coordinator] in
+            Task { await coordinator.captureScrollingInteractive() }
         }
         KeyboardShortcuts.onKeyDown(for: .toggleRecording) { [recordingController] in
             Task { await recordingController.toggleRecording() }

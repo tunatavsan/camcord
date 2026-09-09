@@ -6,36 +6,51 @@ import Testing
 
 @Suite("AudioTrackMixer")
 struct AudioTrackMixerTests {
-
     private func tempURL(ext: String) -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("camcord-mixer-\(UUID().uuidString)")
             .appendingPathExtension(ext)
     }
 
-    /// Builds a `.mov` with one video track and `audioTrackCount` audio tracks, each a
-    /// constant tone, ~`seconds` long. Returns the URL (caller deletes).
-    private func makeMovie(audioTrackCount: Int, seconds: Double, to url: URL) async throws {
+    /// Builds a real movie whose audio tracks contain constant stereo PCM before AAC
+    /// encoding. Each video track carries a distinct transform and title metadata.
+    private func makeMovie(
+        audioValues: [Double],
+        videoTransforms: [CGAffineTransform] = [.identity],
+        seconds: Double,
+        to url: URL
+    ) async throws {
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
         let fps: Int32 = 30
-        let width = 160, height = 120
+        let width = 160
+        let height = 120
 
-        let videoSettings: [String: Any] = [
-            AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: width,
-            AVVideoHeightKey: height,
-        ]
-        let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
-        videoInput.expectsMediaDataInRealTime = false
-        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
-            assetWriterInput: videoInput,
-            sourcePixelBufferAttributes: [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-                kCVPixelBufferWidthKey as String: width,
-                kCVPixelBufferHeightKey as String: height,
+        var videoInputs: [(AVAssetWriterInput, AVAssetWriterInputPixelBufferAdaptor)] = []
+        for (index, transform) in videoTransforms.enumerated() {
+            let settings: [String: Any] = [
+                AVVideoCodecKey: AVVideoCodecType.h264,
+                AVVideoWidthKey: width,
+                AVVideoHeightKey: height,
             ]
-        )
-        writer.add(videoInput)
+            let input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
+            input.expectsMediaDataInRealTime = false
+            input.transform = transform
+            let title = AVMutableMetadataItem()
+            title.identifier = .commonIdentifierTitle
+            title.value = "video-\(index)" as NSString
+            input.metadata = [title]
+            let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+                assetWriterInput: input,
+                sourcePixelBufferAttributes: [
+                    kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                    kCVPixelBufferWidthKey as String: width,
+                    kCVPixelBufferHeightKey as String: height,
+                ]
+            )
+            guard writer.canAdd(input) else { throw MixerTestError.writerSetup }
+            writer.add(input)
+            videoInputs.append((input, adaptor))
+        }
 
         let audioSettings: [String: Any] = [
             AVFormatIDKey: kAudioFormatMPEG4AAC,
@@ -44,142 +59,229 @@ struct AudioTrackMixerTests {
             AVEncoderBitRateKey: 128_000,
         ]
         var audioInputs: [AVAssetWriterInput] = []
-        for _ in 0..<audioTrackCount {
+        for _ in audioValues {
             let input = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
             input.expectsMediaDataInRealTime = false
+            guard writer.canAdd(input) else { throw MixerTestError.writerSetup }
             writer.add(input)
             audioInputs.append(input)
         }
 
-        #expect(writer.startWriting())
+        guard writer.startWriting() else { throw MixerTestError.writer(writer.error) }
         writer.startSession(atSourceTime: .zero)
 
-        // Video: a handful of solid frames.
         let frameCount = Int(Double(fps) * seconds)
-        for i in 0..<frameCount {
-            while !videoInput.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(2)) }
-            let pts = CMTime(value: CMTimeValue(i), timescale: fps)
-            if let buffer = Self.pixelBuffer(width: width, height: height) {
-                adaptor.append(buffer, withPresentationTime: pts)
+        for (trackIndex, pair) in videoInputs.enumerated() {
+            for frame in 0..<frameCount {
+                while !pair.0.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(2)) }
+                let pts = CMTime(value: CMTimeValue(frame), timescale: fps)
+                guard let buffer = Self.pixelBuffer(width: width, height: height, fill: UInt8(0x22 + trackIndex * 0x33)),
+                      pair.1.append(buffer, withPresentationTime: pts)
+                else { throw MixerTestError.append }
             }
+            pair.0.markAsFinished()
         }
-        videoInput.markAsFinished()
 
-        // Audio: constant tone chunks per track.
         let sampleRate = 48_000.0
-        let chunkFrames = 1024
+        let chunkFrames = 1_024
         let totalFrames = Int(sampleRate * seconds)
-        for (index, input) in audioInputs.enumerated() {
+        for (trackIndex, input) in audioInputs.enumerated() {
             var frame = 0
-            let tone: Float = index == 0 ? 0.2 : 0.15
             while frame < totalFrames {
                 while !input.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(2)) }
                 let count = min(chunkFrames, totalFrames - frame)
-                if let sample = Self.audioSampleBuffer(startFrame: frame, frames: count, sampleRate: sampleRate, value: tone) {
-                    input.append(sample)
-                }
+                let value = audioValues[trackIndex]
+                let sample = try AudioTestPCM.make(
+                    channels: [
+                        [Double](repeating: value, count: count),
+                        [Double](repeating: value, count: count),
+                    ],
+                    sampleRate: sampleRate,
+                    presentationTimeStamp: CMTime(value: CMTimeValue(frame), timescale: CMTimeScale(sampleRate))
+                )
+                guard input.append(sample) else { throw MixerTestError.append }
                 frame += count
             }
             input.markAsFinished()
         }
 
         await writer.finishWriting()
-        #expect(writer.status == .completed)
+        guard writer.status == .completed else { throw MixerTestError.writer(writer.error) }
     }
 
-    private static func pixelBuffer(width: Int, height: Int) -> CVPixelBuffer? {
-        var pb: CVPixelBuffer?
-        CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, nil, &pb)
-        guard let pb else { return nil }
-        CVPixelBufferLockBaseAddress(pb, [])
-        if let base = CVPixelBufferGetBaseAddress(pb) {
-            memset(base, 0x44, CVPixelBufferGetBytesPerRow(pb) * height)
+    private static func pixelBuffer(width: Int, height: Int, fill: UInt8) -> CVPixelBuffer? {
+        var pixelBuffer: CVPixelBuffer?
+        CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, nil, &pixelBuffer)
+        guard let pixelBuffer else { return nil }
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        if let base = CVPixelBufferGetBaseAddress(pixelBuffer) {
+            memset(base, Int32(fill), CVPixelBufferGetBytesPerRow(pixelBuffer) * height)
         }
-        CVPixelBufferUnlockBaseAddress(pb, [])
-        return pb
+        CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+        return pixelBuffer
     }
 
-    private static func audioSampleBuffer(startFrame: Int, frames: Int, sampleRate: Double, value: Float) -> CMSampleBuffer? {
-        let channels = 2
-        var asbd = AudioStreamBasicDescription(
-            mSampleRate: sampleRate,
-            mFormatID: kAudioFormatLinearPCM,
-            mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
-            mBytesPerPacket: UInt32(MemoryLayout<Float>.size * channels),
-            mFramesPerPacket: 1,
-            mBytesPerFrame: UInt32(MemoryLayout<Float>.size * channels),
-            mChannelsPerFrame: UInt32(channels),
-            mBitsPerChannel: 32,
-            mReserved: 0
-        )
-        var formatDesc: CMAudioFormatDescription?
-        guard CMAudioFormatDescriptionCreate(
-            allocator: kCFAllocatorDefault, asbd: &asbd, layoutSize: 0, layout: nil,
-            magicCookieSize: 0, magicCookie: nil, extensions: nil, formatDescriptionOut: &formatDesc
-        ) == noErr, let formatDesc else { return nil }
-
-        let byteCount = frames * channels * MemoryLayout<Float>.size
-        let samples = [Float](repeating: value, count: frames * channels)
-        var blockBuffer: CMBlockBuffer?
-        guard CMBlockBufferCreateWithMemoryBlock(
-            allocator: kCFAllocatorDefault, memoryBlock: nil, blockLength: byteCount,
-            blockAllocator: kCFAllocatorDefault, customBlockSource: nil, offsetToData: 0,
-            dataLength: byteCount, flags: 0, blockBufferOut: &blockBuffer
-        ) == kCMBlockBufferNoErr, let blockBuffer else { return nil }
-        let copied = samples.withUnsafeBytes { raw -> OSStatus in
-            CMBlockBufferReplaceDataBytes(with: raw.baseAddress!, blockBuffer: blockBuffer, offsetIntoDestination: 0, dataLength: byteCount)
+    private func decodedAudioLevels(at url: URL) async throws -> (rms: Double, peak: Double, finite: Bool) {
+        let asset = AVURLAsset(url: url)
+        guard let track = try await asset.loadTracks(withMediaType: .audio).first else {
+            throw MixerTestError.missingTrack
         }
-        guard copied == kCMBlockBufferNoErr else { return nil }
-
-        var sampleBuffer: CMSampleBuffer?
-        var timing = CMSampleTimingInfo(
-            duration: CMTime(value: 1, timescale: CMTimeScale(sampleRate)),
-            presentationTimeStamp: CMTime(value: CMTimeValue(startFrame), timescale: CMTimeScale(sampleRate)),
-            decodeTimeStamp: .invalid
+        let reader = try AVAssetReader(asset: asset)
+        let output = AVAssetReaderTrackOutput(
+            track: track,
+            outputSettings: [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: 48_000,
+                AVNumberOfChannelsKey: 2,
+                AVLinearPCMBitDepthKey: 32,
+                AVLinearPCMIsFloatKey: true,
+                AVLinearPCMIsNonInterleaved: false,
+                AVLinearPCMIsBigEndianKey: false,
+            ]
         )
-        var sampleSize = MemoryLayout<Float>.size * channels
-        guard CMSampleBufferCreateReady(
-            allocator: kCFAllocatorDefault, dataBuffer: blockBuffer, formatDescription: formatDesc,
-            sampleCount: frames, sampleTimingEntryCount: 1, sampleTimingArray: &timing,
-            sampleSizeEntryCount: 1, sampleSizeArray: &sampleSize, sampleBufferOut: &sampleBuffer
-        ) == noErr else { return nil }
-        return sampleBuffer
+        guard reader.canAdd(output) else { throw MixerTestError.reader }
+        reader.add(output)
+        guard reader.startReading() else { throw MixerTestError.reader }
+
+        var sumSquares = 0.0
+        var sampleCount = 0
+        var peak = 0.0
+        var finite = true
+        while let sampleBuffer = output.copyNextSampleBuffer() {
+            for value in try AudioTestPCM.decode(sampleBuffer).channels.flatMap({ $0 }) {
+                finite = finite && value.isFinite
+                if value.isFinite {
+                    sumSquares += value * value
+                    peak = max(peak, abs(value))
+                    sampleCount += 1
+                }
+            }
+        }
+        guard reader.status == .completed, sampleCount > 0 else { throw MixerTestError.reader }
+        return (sqrt(sumSquares / Double(sampleCount)), peak, finite)
     }
 
-    @Test("two audio tracks are collapsed into one, video and duration preserved")
-    func mixesTwoTracksIntoOne() async throws {
+    private func videoEvidence(
+        _ tracks: [AVAssetTrack]
+    ) async throws -> (titles: Set<String>, transforms: Set<TransformKey>, samples: Int) {
+        var titles: Set<String> = []
+        var transforms: Set<TransformKey> = []
+        var samples = 0
+        for track in tracks {
+            transforms.insert(TransformKey(try await track.load(.preferredTransform)))
+            let metadata = try await track.load(.metadata)
+            for item in AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .commonIdentifierTitle) {
+                if let title = try await item.load(.stringValue) { titles.insert(title) }
+            }
+
+            guard let asset = track.asset else { throw MixerTestError.missingTrack }
+            let reader = try AVAssetReader(asset: asset)
+            let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+            guard reader.canAdd(output) else { throw MixerTestError.reader }
+            reader.add(output)
+            guard reader.startReading() else { throw MixerTestError.reader }
+            if output.copyNextSampleBuffer() != nil { samples += 1 }
+            reader.cancelReading()
+        }
+        return (titles, transforms, samples)
+    }
+
+    private struct TransformKey: Hashable {
+        let values: [Int]
+        init(_ transform: CGAffineTransform) {
+            values = [transform.a, transform.b, transform.c, transform.d, transform.tx, transform.ty]
+                .map { Int(($0 * 1_000).rounded()) }
+        }
+    }
+
+    @Test("mix uses unity source volume and preserves every video track's transform, metadata, and samples")
+    func unityMixAndMultipleVideoTracks() async throws {
         let source = tempURL(ext: "mov")
         defer { try? FileManager.default.removeItem(at: source) }
-        try await makeMovie(audioTrackCount: 2, seconds: 1.0, to: source)
-
+        let transforms: [CGAffineTransform] = [
+            .identity,
+            CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: 120, ty: 0),
+        ]
+        try await makeMovie(audioValues: [0.20, 0.15], videoTransforms: transforms, seconds: 0.6, to: source)
         let before = AVURLAsset(url: source)
-        let beforeAudio = try await before.loadTracks(withMediaType: .audio)
-        #expect(beforeAudio.count == 2)
         let beforeDuration = try await before.load(.duration)
 
         try await AudioTrackMixer.mixInPlace(url: source, fileType: .mov)
 
         let after = AVURLAsset(url: source)
-        let afterAudio = try await after.loadTracks(withMediaType: .audio)
-        let afterVideo = try await after.loadTracks(withMediaType: .video)
-        #expect(afterAudio.count == 1)          // the two tracks became one
-        #expect(afterVideo.count == 1)          // video preserved
-        let afterDuration = try await after.load(.duration)
-        // Duration within ~0.2s (encoder priming / fragment rounding).
-        #expect(abs(afterDuration.seconds - beforeDuration.seconds) < 0.2)
+        let audioTracks = try await after.loadTracks(withMediaType: .audio)
+        let videoTracks = try await after.loadTracks(withMediaType: .video)
+        let evidence = try await videoEvidence(videoTracks)
+        let audio = try await decodedAudioLevels(at: source)
+        #expect(audioTracks.count == 1)
+        #expect(videoTracks.count == 2)
+        #expect(evidence.titles == ["video-0", "video-1"])
+        #expect(evidence.transforms == Set(transforms.map(TransformKey.init)))
+        #expect(evidence.samples == 2)
+        #expect(try await after.load(.duration) == beforeDuration)
+        #expect(audio.finite)
+        // 0.20 + 0.15 at unity is ~0.35; the former per-track 0.707 gain is ~0.247.
+        #expect(audio.rms > 0.30)
+        #expect(audio.rms < 0.40)
     }
 
-    @Test("a single-audio-track file is left untouched (notNeeded)")
+    @Test("near-full-scale summed tracks are finite and peak protected after real AAC decode")
+    func summedPeakProtection() async throws {
+        let source = tempURL(ext: "mov")
+        defer { try? FileManager.default.removeItem(at: source) }
+        try await makeMovie(audioValues: [0.75, 0.75], seconds: 0.5, to: source)
+
+        try await AudioTrackMixer.mixInPlace(url: source, fileType: .mov)
+        let levels = try await decodedAudioLevels(at: source)
+
+        #expect(levels.finite)
+        #expect(levels.rms > 0.70)
+        #expect(levels.rms < 0.96)
+        // AAC can overshoot the PCM ceiling slightly after decode, but must remain safe.
+        #expect(levels.peak < 1.02)
+    }
+
+    @Test("a failed mix leaves the original bytes untouched")
+    func failurePreservesOriginal() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("camcord-mixer-readonly-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let source = directory.appendingPathComponent("original.mov")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        try await makeMovie(audioValues: [0.2, 0.1], seconds: 0.3, to: source)
+        let before = try Data(contentsOf: source)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
+
+        do {
+            try await AudioTrackMixer.mixInPlace(url: source, fileType: .mov)
+            Issue.record("expected the read-only destination directory to reject the temporary mix")
+        } catch {
+            #expect(try Data(contentsOf: source) == before)
+        }
+    }
+
+    @Test("a single audio track reports that mixing is unnecessary")
     func singleTrackIsNotNeeded() async throws {
         let source = tempURL(ext: "mov")
         defer { try? FileManager.default.removeItem(at: source) }
-        try await makeMovie(audioTrackCount: 1, seconds: 0.5, to: source)
+        try await makeMovie(audioValues: [0.2], seconds: 0.3, to: source)
 
         do {
             try await AudioTrackMixer.mixInPlace(url: source, fileType: .mov)
             Issue.record("expected MixError.notNeeded for a single-audio-track file")
         } catch AudioTrackMixer.MixError.notNeeded {
-            // Expected: nothing to mix.
+            // Expected.
         }
+    }
+
+    private enum MixerTestError: Error {
+        case writerSetup
+        case writer(Error?)
+        case append
+        case missingTrack
+        case reader
     }
 }

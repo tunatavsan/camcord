@@ -1,77 +1,112 @@
 import CoreMedia
 
-/// Pure CMTime state machine implementing the recording pipeline's soft-pause.
-///
-/// While paused every buffer is dropped. On resume, the first video buffer re-anchors
-/// the timeline: the accumulated offset is chosen so that buffer lands exactly one
-/// frame duration after the last appended video frame, collapsing the pause gap.
-/// The same offset is applied to every track (video is the clock master).
-///
-/// Audio arriving between `resume()` and the anchoring video buffer is DROPPED, not
-/// retimed with the stale pre-pause offset: a stale-offset append would land a full
-/// pause-length in the future, and the next (re-anchored) audio buffer would then go
-/// BACKWARD on the same AVAssetWriterInput -- audio inputs require monotonically
-/// increasing PTS, so that single stray buffer can fail the whole writer. Dropping
-/// bounds the loss to under one video frame of audio.
-///
-/// The session starts on the first video buffer; anything arriving before it is
-/// dropped (`AVAssetWriter.startSession` must be anchored to video).
+/// Shared timeline for video, system audio and microphone. The first video starts
+/// the session. Explicit source-clock boundaries preserve active time while the screen
+/// is static; every source then shares the same pause offset. The no-argument pause /
+/// resume path retains lazy sample anchoring for callers that have no clock boundary.
 struct PauseClock {
     private let frameDuration: CMTime
-
     private var sessionStarted = false
     private var isPaused = false
-    /// Set by `resume()`; the next video buffer recomputes the offset.
     private var needsReanchor = false
-    /// Total source-clock time removed by pauses so far.
     private var offset: CMTime = .zero
-    /// The PTS of the last appended video buffer, in *output* (retimed) time.
-    private var lastAppendedVideoPTS: CMTime = .invalid
+    private var lastMediaEnd: CMTime = .invalid
+    /// Retimed timeline position at an explicit pause command. Unlike lastMediaEnd,
+    /// this advances through an active static interval even when SCK emitted no pixels.
+    private var pauseBoundary: CMTime = .invalid
+    /// A delayed callback captured before the new anchor may arrive afterwards. Drop
+    /// it instead of appending behind the already committed, pre-pause media interval.
+    private var resumeFloor: CMTime = .invalid
+    /// Start/resume cues can complete before the writer has accepted its first video.
+    /// In that case the resume boundary is still meaningful in the source timeline:
+    /// callbacks captured during the cue but delivered late must not start the movie.
+    private var sourceStartFloor: CMTime = .invalid
 
     init(frameDuration: CMTime) {
         self.frameDuration = frameDuration
     }
 
     mutating func pause() {
+        guard !isPaused else { return }
+        pauseBoundary = .invalid
+        isPaused = true
+    }
+
+    mutating func pause(atSourceTime sourceTime: CMTime) {
+        guard !isPaused else { return }
+        if sessionStarted, sourceTime.isNumeric {
+            let mapped = CMTimeSubtract(sourceTime, offset)
+            pauseBoundary = maximum(lastMediaEnd, mapped)
+            lastMediaEnd = pauseBoundary
+        } else {
+            pauseBoundary = .invalid
+        }
         isPaused = true
     }
 
     mutating func resume() {
+        guard isPaused else { return }
         isPaused = false
-        needsReanchor = true
+        needsReanchor = sessionStarted
     }
 
-    /// Returns the retimed PTS the buffer should be appended with, or nil to drop it.
-    mutating func shouldAppend(pts: CMTime, isVideo: Bool) -> CMTime? {
-        if isPaused { return nil }
+    mutating func resume(atSourceTime sourceTime: CMTime) {
+        guard isPaused else { return }
+        isPaused = false
+        guard sourceTime.isNumeric else {
+            needsReanchor = sessionStarted
+            return
+        }
+        guard sessionStarted else {
+            sourceStartFloor = sourceTime
+            needsReanchor = false
+            return
+        }
+        guard pauseBoundary.isValid else {
+            needsReanchor = true
+            return
+        }
+        offset = CMTimeSubtract(sourceTime, pauseBoundary)
+        resumeFloor = pauseBoundary
+        needsReanchor = false
+    }
 
+    /// Retimed writer-session boundary for a Stop command. Ending while paused holds
+    /// at the pause boundary; ending while active includes static time up to sourceTime.
+    func endTime(atSourceTime sourceTime: CMTime) -> CMTime? {
+        guard sessionStarted, sourceTime.isNumeric else { return nil }
+        if isPaused, pauseBoundary.isValid { return pauseBoundary }
+        return maximum(lastMediaEnd, CMTimeSubtract(sourceTime, offset))
+    }
+
+    mutating func shouldAppend(pts: CMTime, isVideo: Bool, duration: CMTime = .invalid) -> CMTime? {
+        guard !isPaused, pts.isNumeric else { return nil }
+        // Keep this raw-source floor after the first video is accepted as well:
+        // callbacks from the gated interval can arrive after that video and must
+        // still be rejected from both audio tracks.
+        if sourceStartFloor.isValid, pts < sourceStartFloor { return nil }
         if !sessionStarted {
             guard isVideo else { return nil }
             sessionStarted = true
-            // A pause/resume cycle completed before the first video buffer must not
-            // leave a re-anchor pending: this buffer IS the anchor, offset stays zero.
-            // Otherwise the next frame would recompute the offset against a gap that
-            // never existed and shift the whole timeline.
             needsReanchor = false
-            lastAppendedVideoPTS = pts
-            return pts
+            pauseBoundary = .invalid
         }
-
-        if isVideo {
-            if needsReanchor {
-                // Land this buffer exactly one frame after the last appended one.
-                let target = CMTimeAdd(lastAppendedVideoPTS, frameDuration)
-                offset = CMTimeSubtract(pts, target)
-                needsReanchor = false
-            }
-            let retimed = CMTimeSubtract(pts, offset)
-            lastAppendedVideoPTS = retimed
-            return retimed
+        if needsReanchor {
+            offset = CMTimeSubtract(pts, lastMediaEnd)
+            resumeFloor = lastMediaEnd
+            needsReanchor = false
         }
+        let retimed = CMTimeSubtract(pts, offset)
+        if resumeFloor.isValid, retimed < resumeFloor { return nil }
+        let span = duration.isNumeric && duration > .zero ? duration : (isVideo ? frameDuration : .zero)
+        let end = CMTimeAdd(retimed, span)
+        if !lastMediaEnd.isValid || end > lastMediaEnd { lastMediaEnd = end }
+        return retimed
+    }
 
-        // Audio while the offset is stale (post-resume, pre-anchor) must be dropped,
-        // never retimed with the old offset -- see the type comment (monotonic PTS).
-        if needsReanchor { return nil }
-        return CMTimeSubtract(pts, offset)
+    private func maximum(_ lhs: CMTime, _ rhs: CMTime) -> CMTime {
+        guard lhs.isValid else { return rhs }
+        guard rhs.isValid else { return lhs }
+        return CMTimeCompare(lhs, rhs) >= 0 ? lhs : rhs
     }
 }

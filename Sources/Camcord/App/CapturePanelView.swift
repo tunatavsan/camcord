@@ -1,5 +1,6 @@
 import AVFoundation
 import AppKit
+import KeyboardShortcuts
 import SwiftUI
 
 /// Shared recording state for SwiftUI surfaces (the panel). Pushed by
@@ -9,6 +10,7 @@ import SwiftUI
 final class RecordingStateModel: ObservableObject {
     @Published var state: RecordingController.UIState = .idle
     @Published var elapsed: String?
+    @Published var health: RecordingHealth?
     /// True from the moment Stop is pressed until the file is finalized on disk.
     @Published var isFinishing = false
     /// The just-finished recording, shown as a "done" card until dismissed / reopened.
@@ -17,6 +19,8 @@ final class RecordingStateModel: ObservableObject {
     /// retained across shows, so `@State` persists and `onAppear` fires only once —
     /// this token re-reads persisted toggles per open.
     @Published var panelOpenToken = 0
+    @Published var isPanelVisible = false
+    @Published var isStarting = false
 }
 
 /// The panel's actions, injected by AppDelegate. Each closure owns its own
@@ -39,37 +43,53 @@ struct PanelActions {
     /// Reveal the newest saved screenshot in Finder.
     var revealScreenshot: (URL) -> Void = { _ in }
     var openSettings: () -> Void = {}
+    var reportError: (String) -> Void = { _ in }
 }
 
-/// The menu-bar panel: one quiet page, 268pt wide. A capture grid (region / window /
-/// full-screen / text), a recording row that morphs into a live session bar, and a
-/// footer of quick toggles plus the gear that opens the full Settings window.
-/// Everything heavier (shortcuts, mouse bindings, quality) lives in Settings.
+/// The menu-bar capture palette: a stable 320-point native surface for capture,
+/// recording, live audio, and the two output libraries.
 struct CapturePanelView: View {
     @ObservedObject var model: RecordingStateModel
     let actions: PanelActions
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.camcordDesignPreview) private var designPreview
+    @ObservedObject private var microphoneMonitor = MicrophoneMonitor.shared
+    @State private var cameraEnabled = false
     @State private var recordSystemAudio = true
     @State private var recordMicrophone = true
+    @State private var systemGainDB: Double = 0
+    @State private var microphoneGainDB: Double = 0
     @State private var soundEnabled = true
     @State private var saveScreenshots = false
     @State private var isMicrophoneDenied = false
     @State private var lastRecordingURL: URL?
     @State private var lastScreenshotURL: URL?
+    @State private var shortcuts = PanelShortcuts()
+    @State private var recordingDirectoryURL = URL(
+        fileURLWithPath: RecordingSettings.defaultDirectoryPath(), isDirectory: true
+    )
+    @State private var screenshotDirectoryURL = URL(
+        fileURLWithPath: ScreenshotSettings.defaultDirectoryPath(), isDirectory: true
+    )
 
     /// One physical signature for every elastic transition in the panel.
-    static let panelSpring: Animation = .spring(response: 0.34, dampingFraction: 0.86)
+    static let panelSpring: Animation = .spring(response: 0.22, dampingFraction: 0.84)
 
     /// Fixed width; the height switches between the compact grid and the taller "done"
     /// card (which carries rename + metadata). A definite size per state keeps the
     /// popover beak anchored correctly under the status item.
-    static let panelWidth: CGFloat = 268
-    static let panelHeight: CGFloat = 178
-    static let finishedHeight: CGFloat = 306
+    static let panelWidth: CGFloat = 320
+    static let panelHeight: CGFloat = 458
+    static let activeHeight: CGFloat = 458
+    static let finishingHeight: CGFloat = 220
+    static let finishedHeight: CGFloat = 418
 
     private var currentHeight: CGFloat {
-        model.finishedURL != nil ? Self.finishedHeight : Self.panelHeight
+        if model.finishedURL != nil { return Self.finishedHeight }
+        if model.isFinishing { return Self.finishingHeight }
+        if model.state != .idle { return Self.activeHeight }
+        return Self.panelHeight
     }
 
     var body: some View {
@@ -79,56 +99,126 @@ struct CapturePanelView: View {
                     url: url,
                     reveal: actions.revealRecording,
                     open: actions.openRecording,
+                    renamed: { renamedURL in
+                        // An outside click or a recording shortcut can remove this
+                        // card while its file move awaits. Update matching ownership
+                        // only; never resurrect it over a newer live recording.
+                        let ownsCard = model.finishedURL == url
+                        if ownsCard { model.finishedURL = renamedURL }
+                        if ownsCard || lastRecordingURL == url { lastRecordingURL = renamedURL }
+                    },
                     dismiss: { model.finishedURL = nil }
                 )
-                .transition(.opacity)
+                .transition(panelTransition)
             } else if model.isFinishing {
                 FinishingCard()
-                    .transition(.opacity)
+                    .transition(panelTransition)
             } else {
                 mainContent
                     .frame(maxHeight: .infinity, alignment: .top)
-                    .transition(.opacity)
+                    .transition(panelTransition)
             }
         }
         .frame(width: Self.panelWidth, height: currentHeight)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: currentHeight)
-        // A near-opaque backdrop so the panel reads as a solid control surface, not a
-        // see-through pane of glass over whatever is behind it.
-        .background(PanelBackdrop())
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.finishedURL)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.isFinishing)
+        .animation(reduceMotion ? nil : Self.panelSpring, value: currentHeight)
+        .background {
+            CamcordMaterial()
+                .overlay(Color(nsColor: .windowBackgroundColor).opacity(0.18))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(CamcordStyle.innerBorder, lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .animation(reduceMotion ? nil : Self.panelSpring, value: model.finishedURL)
+        .animation(reduceMotion ? nil : Self.panelSpring, value: model.isFinishing)
         .onAppear(perform: reloadPersistedState)
         .onChange(of: model.panelOpenToken) { _, _ in
             // A fresh open always returns to the capture grid.
             model.finishedURL = nil
             reloadPersistedState()
         }
+        .onChange(of: model.finishedURL) { _, url in
+            guard let url else { return }
+            lastRecordingURL = url
+            recordingDirectoryURL = url.deletingLastPathComponent()
+        }
+        .task(id: shouldMonitorMicrophone) {
+            guard !designPreview else { return }
+            if shouldMonitorMicrophone {
+                let settings = RecordingSettings.load(from: .standard)
+                await microphoneMonitor.start(deviceID: settings.microphoneDeviceID, gainDB: settings.resolvedMicrophoneGainDB)
+            } else if !microphoneMonitor.recordingLocked {
+                await microphoneMonitor.stop()
+            }
+        }
+        .onChange(of: model.isPanelVisible) { _, visible in
+            if visible && !designPreview && cameraEnabled { CameraOverlayController.shared.showPreview() }
+        }
+        // The hosting controller is retained across opens, so key this task to the explicit
+        // open token. SwiftUI cancels the previous scan; the generation/path guards below
+        // also reject a synchronous directory read that finished after cancellation.
+        .task(id: model.panelOpenToken) {
+            guard !designPreview else { return }
+            await reloadCaptureLibrary(generation: model.panelOpenToken)
+        }
+    }
+
+    private var panelTransition: AnyTransition {
+        reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 4))
     }
 
     private var mainContent: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
+            header
             captureGrid
 
             recordRow
+                .frame(height: 84, alignment: .top)
                 .animation(reduceMotion ? nil : Self.panelSpring, value: model.state)
 
-            PanelDivider()
-                .padding(.vertical, 2)
+            VStack(spacing: 8) {
+                    AudioControlRow(title: "Sistem", symbol: "speaker.wave.2", health: model.health?.systemAudio ?? AudioSourceHealth(enabled: recordSystemAudio),
+                                    gainDB: $systemGainDB, range: -60...12, paused: model.state == .paused)
+                    AudioControlRow(title: "Mikrofon", symbol: "mic", health: microphoneHealth,
+                                    gainDB: $microphoneGainDB, range: -24...24, paused: model.state == .paused)
+                }
+                .onChange(of: systemGainDB) { _, value in saveGain(system: value, microphone: nil) }
+                .onChange(of: microphoneGainDB) { _, value in
+                    microphoneMonitor.updateGain(value)
+                    saveGain(system: nil, microphone: value)
+                }
 
-            footer
+            cameraRow
+
+            quickControls
+            libraryRow
         }
         .padding(12)
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "record.circle")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(CamcordStyle.recording)
+            Text("Camcord")
+                .font(.system(size: 16, weight: .semibold))
+            Spacer()
+            HeaderButton(symbol: "gearshape", title: "Ayarlar", action: actions.openSettings)
+        }
+        .frame(height: 28)
     }
 
     // MARK: - Capture grid
 
     private var captureGrid: some View {
         HStack(spacing: 6) {
-            CaptureTile(symbol: "rectangle.dashed", title: "Bölge", action: actions.captureRegion)
-            CaptureTile(symbol: "macwindow", title: "Pencere", action: actions.captureWindow)
-            CaptureTile(symbol: "display", title: "Ekran", action: actions.captureScreen)
-            CaptureTile(symbol: "doc.viewfinder", title: "Kaydır", action: actions.captureScroll)
+            CaptureTile(symbol: "rectangle.dashed", title: "Bölge", shortcut: shortcuts.region, action: actions.captureRegion)
+            CaptureTile(symbol: "macwindow", title: "Pencere", shortcut: shortcuts.window, action: actions.captureWindow)
+            CaptureTile(symbol: "display", title: "Ekran", shortcut: shortcuts.screen, action: actions.captureScreen)
+            CaptureTile(symbol: "rectangle.and.hand.point.up.left", title: "Kaydır", shortcut: shortcuts.scroll, action: actions.captureScroll)
         }
     }
 
@@ -138,34 +228,54 @@ struct CapturePanelView: View {
     private var recordRow: some View {
         switch model.state {
         case .idle:
-            HStack(spacing: 6) {
+            VStack(spacing: 6) {
                 HoverScaleButton(action: actions.toggleRecording) { hovering in
-                    HStack(spacing: 9) {
-                        ZStack {
-                            Circle().fill(.red.opacity(hovering ? 0.22 : 0)).frame(width: 18, height: 18)
-                            Circle().fill(.red).frame(width: 8, height: 8)
+                    ZStack {
+                        HStack(spacing: 8) {
+                            if model.isStarting {
+                                ProgressView().controlSize(.small).tint(.white)
+                            } else {
+                                Image(systemName: "record.circle")
+                                    .font(.system(size: 16, weight: .semibold))
+                            }
+                            Text(model.isStarting ? "Hazırlanıyor…" : "Kayıt başlat")
+                                .font(.system(size: 13, weight: .semibold))
                         }
-                        Text("Kayıt başlat")
-                            .font(.system(size: 13, weight: .medium))
-                        Spacer()
+                        .frame(maxWidth: .infinity)
+                        if let shortcut = shortcuts.record, !model.isStarting {
+                            HStack { Spacer(); ShortcutBadge(shortcut) }
+                        }
                     }
-                    .padding(.horizontal, 11)
-                    .frame(height: 40)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .frame(height: 44)
                     .background(
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(Color.primary.opacity(hovering ? 0.07 : 0.045))
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(CamcordStyle.recording.opacity(hovering ? 1 : 0.92))
                     )
                 }
-                RecordTargetButton(symbol: "macwindow", help: "Pencere kaydet", action: actions.recordWindow)
-                RecordTargetButton(symbol: "display", help: "Tüm ekranı kaydet", action: actions.recordFullScreen)
+                .disabled(model.isStarting)
+                .accessibilityLabel(model.isStarting ? "Kayıt hazırlanıyor" : "Kayıt başlat")
+                .accessibilityValue(shortcuts.record ?? "")
+
+                HStack(spacing: 6) {
+                    RecordTargetButton(symbol: "macwindow", title: "Pencere kaydet", action: actions.recordWindow)
+                    RecordTargetButton(
+                        symbol: "display",
+                        title: NSScreen.screens.count > 1 ? "İmleç ekranını kaydet" : "Ekranı kaydet",
+                        action: actions.recordFullScreen
+                    )
+                }
+                .disabled(model.isStarting)
             }
 
         case .recording, .paused:
             HStack(spacing: 9) {
                 PulsingDot(paused: model.state == .paused, reduceMotion: reduceMotion)
                 Text(model.elapsed ?? "0:00")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
                     .monospacedDigit()
+                    .frame(width: 58, alignment: .leading)
                     .contentTransition(.numericText())
                     .animation(reduceMotion ? nil : .default, value: model.elapsed)
                 if model.state == .paused {
@@ -181,16 +291,15 @@ struct CapturePanelView: View {
                 )
                 RoundIconButton(symbol: "stop.fill", tint: .red, help: "Kaydı bitir", action: actions.toggleRecording)
             }
-            .padding(.horizontal, 11)
-            .frame(height: 40)
+            .padding(.horizontal, 12)
+            .frame(height: 48)
             .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill((model.state == .paused ? Color.orange : .red).opacity(model.state == .paused ? 0.07 : 0.11))
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill((model.state == .paused ? Color.orange : CamcordStyle.recording).opacity(0.12))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 10)
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .strokeBorder(
-                                (model.state == .paused ? Color.orange : .red)
-                                    .opacity(model.state == .paused ? 0.12 : 0.2),
+                                (model.state == .paused ? Color.orange : CamcordStyle.recording).opacity(0.24),
                                 lineWidth: 1
                             )
                     )
@@ -198,28 +307,76 @@ struct CapturePanelView: View {
         }
     }
 
-    // MARK: - Footer
+    private var microphoneHealth: AudioSourceHealth {
+        if model.state != .idle, let health = model.health?.microphone { return health }
+        return AudioSourceHealth(enabled: recordMicrophone, levels: microphoneMonitor.levels)
+    }
 
-    private var footer: some View {
-        HStack(spacing: 5) {
+    private var shouldMonitorMicrophone: Bool {
+        !designPreview && model.isPanelVisible && model.state == .idle && !model.isStarting
+            && !model.isFinishing && recordMicrophone && !microphoneMonitor.recordingLocked
+    }
+
+    private var cameraRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: cameraEnabled ? "video.fill" : "video.slash")
+                .foregroundStyle(cameraEnabled ? Color.accentColor : Color.secondary)
+            Text("Kamera").font(.system(size: 12, weight: .medium))
+            Spacer()
+            if cameraEnabled {
+                Button("Önizleme") {
+                    if !designPreview { CameraOverlayController.shared.showPreview() }
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            }
+            Toggle("Kamera", isOn: $cameraEnabled)
+                .labelsHidden().toggleStyle(.switch).controlSize(.mini)
+                .disabled(model.state != .idle || model.isStarting)
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 34)
+        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 9))
+        .onChange(of: cameraEnabled) { _, enabled in
+            guard !designPreview else { return }
+            var settings = RecordingSettings.load(from: .standard)
+            if settings.camera.enabled != enabled {
+                settings.camera.enabled = enabled
+                settings.save(to: .standard)
+            }
+            if model.isPanelVisible || !enabled { CameraOverlayController.shared.showPreview() }
+        }
+    }
+
+    private var quickControls: some View {
+        HStack(spacing: 4) {
             ToggleChip(
+                title: "Sistem",
                 onSymbol: "speaker.wave.2.fill", offSymbol: "speaker.slash.fill",
-                help: "Sistem sesini kaydet", isOn: $recordSystemAudio
+                help: audioToggleHelp("Sistem sesini kaydet"),
+                isEnabled: model.state == .idle && !model.isStarting,
+                isOn: $recordSystemAudio
             ) {
                 saveRecordingSettings()
             }
             ToggleChip(
+                title: "Mikrofon",
                 onSymbol: "mic.fill", offSymbol: "mic.slash.fill",
-                help: isMicrophoneDenied ? "Mikrofonu kaydet — mikrofon İZNİ YOK" : "Mikrofonu kaydet",
+                help: audioToggleHelp(
+                    isMicrophoneDenied ? "Mikrofonu kaydet — mikrofon izni yok" : "Mikrofonu kaydet"
+                ),
                 warning: isMicrophoneDenied,
+                isEnabled: model.state == .idle && !model.isStarting,
                 isOn: $recordMicrophone
             ) {
                 saveRecordingSettings()
             }
-            ToggleChip(onSymbol: "bell.fill", offSymbol: "bell.slash.fill", help: "Geri bildirim sesleri", isOn: $soundEnabled) {
+            ToggleChip(title: "Bildirim", onSymbol: "bell.fill", offSymbol: "bell.slash.fill", help: "Geri bildirim sesleri", isOn: $soundEnabled) {
                 FeedbackSound.setEnabled(soundEnabled)
             }
             ToggleChip(
+                title: "Diske kaydet",
                 onSymbol: "square.and.arrow.down.fill", offSymbol: "square.and.arrow.down",
                 help: "Ekran görüntülerini diske de kaydet", isOn: $saveScreenshots
             ) {
@@ -228,72 +385,115 @@ struct CapturePanelView: View {
                 s.save(to: .standard)
             }
 
-            Spacer()
+        }
+    }
 
-            if let url = lastScreenshotURL {
-                FooterIconButton(symbol: "photo", help: "Son ekran görüntüsünü Finder'da göster") {
-                    actions.revealScreenshot(url)
-                }
+    private var libraryRow: some View {
+        HStack(spacing: 6) {
+            LibraryButton(
+                symbol: "photo",
+                title: "Görüntüler",
+                detail: lastScreenshotURL == nil ? "Klasörü aç" : "Son çekim",
+                help: lastScreenshotURL == nil
+                    ? "Ekran görüntüleri klasörünü Finder'da göster"
+                    : "Son ekran görüntüsünü Finder'da göster"
+            ) {
+                revealScreenshotDestination()
             }
-            if let url = lastRecordingURL {
-                FooterIconButton(symbol: "film", help: "Son kaydı Finder'da göster") {
-                    actions.revealRecording(url)
-                }
+            LibraryButton(
+                symbol: "film",
+                title: "Kayıtlar",
+                detail: lastRecordingURL == nil ? "Klasörü aç" : "Son kayıt",
+                help: lastRecordingURL == nil
+                    ? "Kayıt klasörünü Finder'da göster"
+                    : "Son kaydı Finder'da göster"
+            ) {
+                revealRecordingDestination()
             }
-            FooterIconButton(symbol: "gearshape.fill", help: "Ayarlar", action: actions.openSettings)
         }
     }
 
     // MARK: - Persistence
 
+    private func saveGain(system: Double?, microphone: Double?) {
+        guard !designPreview else { return }
+        var settings = RecordingSettings.load(from: .standard)
+        if let system { settings.systemAudioGainDB = system }
+        if let microphone { settings.microphoneGainDB = microphone }
+        settings.save(to: .standard)
+    }
+
     private func reloadPersistedState() {
+        let gainSettings = RecordingSettings.load(from: .standard)
+        systemGainDB = gainSettings.resolvedSystemAudioGainDB
+        microphoneGainDB = gainSettings.resolvedMicrophoneGainDB
         let settings = RecordingSettings.load(from: .standard)
+        let screenshotSettings = ScreenshotSettings.load(from: .standard)
         recordSystemAudio = settings.systemAudio
         recordMicrophone = settings.microphone
+        cameraEnabled = settings.camera.enabled
         soundEnabled = FeedbackSound.isEnabled()
-        saveScreenshots = ScreenshotSettings.load(from: .standard).saveToDisk
+        saveScreenshots = screenshotSettings.saveToDisk
+        shortcuts = PanelShortcuts.load()
         let micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
         isMicrophoneDenied = micStatus == .denied || micStatus == .restricted
-        // A single directory listing per open — cheap for a personal capture folder, and
-        // reliably synchronous so the reveal buttons always reflect the latest files
-        // (an async .task can be skipped by the retained popover hosting controller).
-        lastRecordingURL = Self.newestRecording()
-        lastScreenshotURL = Self.newestScreenshot()
+        let directories = CaptureLibrary.directories(
+            recordingSettings: settings, screenshotSettings: screenshotSettings
+        )
+        recordingDirectoryURL = directories.recording
+        screenshotDirectoryURL = directories.screenshot
     }
 
-    /// The most recently modified recording in the output folder, or nil. Matches ALL
-    /// container types the app can produce (mp4 is now the default, mov for ProRes) so
-    /// the reveal button appears regardless of the chosen codec/container.
-    private static func newestRecording() -> URL? {
+    private func reloadCaptureLibrary(generation: Int) async {
         let settings = RecordingSettings.load(from: .standard)
-        let dirPath = settings.outputDirectoryPath ?? RecordingSettings.defaultDirectoryPath()
-        return newestFile(inDirectory: dirPath, exts: ["mp4", "mov", "m4v"])
+        let screenshotSettings = ScreenshotSettings.load(from: .standard)
+        let directories = CaptureLibrary.directories(
+            recordingSettings: settings, screenshotSettings: screenshotSettings
+        )
+        recordingDirectoryURL = directories.recording
+        screenshotDirectoryURL = directories.screenshot
+        lastRecordingURL = nil
+        lastScreenshotURL = nil
+
+        let snapshot = await CaptureLibrary.scan(
+            recordingDirectory: directories.recording,
+            screenshotDirectory: directories.screenshot
+        )
+        guard !Task.isCancelled,
+              generation == model.panelOpenToken,
+              model.finishedURL == nil,
+              snapshot.recordingDirectory == recordingDirectoryURL,
+              snapshot.screenshotDirectory == screenshotDirectoryURL
+        else { return }
+        lastRecordingURL = snapshot.newestRecording
+        lastScreenshotURL = snapshot.newestScreenshot
     }
 
-    /// The most recently modified `.png` in the screenshot output folder, or nil.
-    /// (Region shots and scrolling captures both land here when disk-saving is on.)
-    private static func newestScreenshot() -> URL? {
-        let settings = ScreenshotSettings.load(from: .standard)
-        let dirPath = (settings.saveDirectoryPath?.isEmpty == false)
-            ? settings.saveDirectoryPath!
-            : ScreenshotSettings.defaultDirectoryPath()
-        return newestFile(inDirectory: dirPath, exts: ["png"])
+    private func audioToggleHelp(_ base: String) -> String {
+        model.state == .idle ? base : "\(base) — bir sonraki kayıt için kayıt bittikten sonra değiştir"
     }
 
-    /// The most recently modified file whose extension is in `exts`, in `dirPath`, or nil.
-    private static func newestFile(inDirectory dirPath: String, exts: Set<String>) -> URL? {
-        let dir = URL(fileURLWithPath: dirPath, isDirectory: true)
-        let key: [URLResourceKey] = [.contentModificationDateKey]
-        guard let urls = try? FileManager.default.contentsOfDirectory(
-            at: dir, includingPropertiesForKeys: key, options: [.skipsHiddenFiles]
-        ) else { return nil }
-        return urls
-            .filter { exts.contains($0.pathExtension.lowercased()) }
-            .max { a, b in
-                let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-                let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-                return da < db
+    private func revealScreenshotDestination() {
+        reveal(lastScreenshotURL, or: screenshotDirectoryURL, using: actions.revealScreenshot)
+    }
+
+    private func revealRecordingDestination() {
+        reveal(lastRecordingURL, or: recordingDirectoryURL, using: actions.revealRecording)
+    }
+
+    private func reveal(_ recent: URL?, or directory: URL, using action: @escaping (URL) -> Void) {
+        if let recent {
+            action(recent)
+            return
+        }
+        Task {
+            guard await CaptureLibrary.prepareDirectory(directory) else {
+                actions.reportError("Kayıt klasörü açılamadı — Ayarlar’dan konumu kontrol et")
+                return
             }
+            guard !Task.isCancelled else { return }
+            action(directory)
+        }
     }
 
     private func saveRecordingSettings() {
@@ -304,11 +504,22 @@ struct CapturePanelView: View {
     }
 }
 
-/// A near-solid, appearance-adaptive backdrop that sits over the popover's own
-/// translucent material so the panel reads as a solid surface rather than glass.
-private struct PanelBackdrop: View {
-    var body: some View {
-        Color(nsColor: .windowBackgroundColor)
+private struct PanelShortcuts {
+    var region: String?
+    var window: String?
+    var screen: String?
+    var scroll: String?
+    var record: String?
+
+    @MainActor
+    static func load() -> PanelShortcuts {
+        PanelShortcuts(
+            region: KeyboardShortcuts.getShortcut(for: .captureRegion)?.description,
+            window: KeyboardShortcuts.getShortcut(for: .captureActiveWindow)?.description,
+            screen: KeyboardShortcuts.getShortcut(for: .captureFullScreen)?.description,
+            scroll: KeyboardShortcuts.getShortcut(for: .captureScrolling)?.description,
+            record: KeyboardShortcuts.getShortcut(for: .toggleRecording)?.description
+        )
     }
 }
 
@@ -338,24 +549,34 @@ private struct FinishingCard: View {
 private struct FinishedCard: View {
     let reveal: (URL) -> Void
     let open: (URL) -> Void
+    let renamed: (URL) -> Void
     let dismiss: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var appeared = false
     @State private var currentURL: URL
     @State private var name: String
-    @State private var meta: RecordingMeta?
+    @State private var presentation: RecordingPresentation?
+    @State private var renameMessage: String?
+    @State private var isRenaming = false
 
-    init(url: URL, reveal: @escaping (URL) -> Void, open: @escaping (URL) -> Void, dismiss: @escaping () -> Void) {
+    init(
+        url: URL,
+        reveal: @escaping (URL) -> Void,
+        open: @escaping (URL) -> Void,
+        renamed: @escaping (URL) -> Void,
+        dismiss: @escaping () -> Void
+    ) {
         self.reveal = reveal
         self.open = open
+        self.renamed = renamed
         self.dismiss = dismiss
         _currentURL = State(initialValue: url)
         _name = State(initialValue: url.deletingPathExtension().lastPathComponent)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 ZStack {
                     Circle().fill(.green.opacity(0.14)).frame(width: 28, height: 28)
@@ -363,26 +584,58 @@ private struct FinishedCard: View {
                     Image(systemName: "checkmark").font(.system(size: 13, weight: .bold)).foregroundStyle(.green)
                         .scaleEffect(appeared ? 1 : 0.2).opacity(appeared ? 1 : 0)
                 }
-                Text("Kayıt bitti").font(.system(size: 14, weight: .semibold))
+                Text("Kayıt hazır").font(.system(size: 16, weight: .semibold))
                 Spacer()
+                HoverScaleButton(action: dismiss) { hovering in
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 30, height: 28)
+                        .background(Circle().fill(Color.primary.opacity(hovering ? 0.10 : 0.045)))
+                }
+                .disabled(isRenaming)
+                .help("Kapat")
+                .accessibilityLabel("Kapat")
             }
 
-            // Inline rename: edit the stem; the extension is fixed. Commits on Enter and
-            // when an action is taken.
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(CamcordStyle.quietFill)
+                if let thumbnail = presentation?.thumbnail {
+                    Image(nsImage: thumbnail)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .padding(4)
+                } else if presentation == nil {
+                    ProgressView().controlSize(.small).accessibilityLabel("Kayıt önizlemesi yükleniyor")
+                } else {
+                    Label("Önizleme yok", systemImage: "film")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(height: 144)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Kayıt önizlemesi")
+            .accessibilityValue(presentation?.thumbnail == nil ? "Kullanılamıyor" : "Hazır")
+
             HStack(spacing: 4) {
                 TextField("Ad", text: $name)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 12))
-                    .onSubmit { commitRename() }
+                    .font(.system(size: 13))
+                    .disabled(isRenaming)
+                    .onSubmit { Task { _ = await commitRename() } }
                 Text("." + currentURL.pathExtension)
                     .font(.system(size: 11)).monospaced()
                     .foregroundStyle(.secondary)
+                if isRenaming { ProgressView().controlSize(.mini) }
             }
 
             HStack(spacing: 12) {
-                MetaLabel(symbol: "internaldrive", text: meta?.size ?? "…")
-                MetaLabel(symbol: "clock", text: meta?.duration ?? "…")
-                if let dims = meta?.dimensions {
+                MetaLabel(symbol: "internaldrive", text: presentation?.size ?? "…")
+                MetaLabel(symbol: "clock", text: presentation?.duration ?? "…")
+                if let dims = presentation?.dimensions {
                     MetaLabel(symbol: "rectangle.ratio.16.to.9", text: dims)
                 }
                 Spacer()
@@ -390,51 +643,94 @@ private struct FinishedCard: View {
             .font(.system(size: 10.5))
             .foregroundStyle(.secondary)
 
+            if let renameMessage {
+                Label(renameMessage, systemImage: "exclamationmark.circle.fill")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(.red)
+                    .lineLimit(1)
+                    .accessibilityLabel(renameMessage)
+            }
+
+            Label {
+                Text((currentURL.deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            } icon: {
+                Image(systemName: "folder")
+            }
+            .font(.system(size: 10.5))
+            .foregroundStyle(.secondary)
+            .help(currentURL.deletingLastPathComponent().path)
+            .accessibilityLabel("Kayıt klasörü")
+            .accessibilityValue(currentURL.deletingLastPathComponent().path)
+
             Spacer(minLength: 2)
 
             HStack(spacing: 8) {
-                CardButton(title: "Finder'da Göster", symbol: "folder") { commitRename(); reveal(currentURL) }
-                CardButton(title: "Aç", symbol: "play.fill", prominent: true) { commitRename(); open(currentURL) }
+                CardButton(title: "Finder'da Göster", symbol: "folder") {
+                    Task { await performAfterRename(reveal) }
+                }
+                CardButton(title: "Aç", symbol: "play.fill", prominent: true) {
+                    Task { await performAfterRename(open) }
+                }
             }
+            .disabled(isRenaming)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(12)
-        .overlay(alignment: .topTrailing) {
-            HoverScaleButton(action: dismiss) { hovering in
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(hovering ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
-                    .frame(width: 22, height: 22)
-                    .background(Circle().fill(Color.primary.opacity(hovering ? 0.08 : 0)))
-            }
-            .padding(6)
-            .help("Kapat")
-        }
         .onAppear {
             if reduceMotion { appeared = true }
-            else { withAnimation(.spring(response: 0.5, dampingFraction: 0.58)) { appeared = true } }
+            else { withAnimation(CapturePanelView.panelSpring) { appeared = true } }
         }
-        .task(id: currentURL) { meta = await RecordingMeta.load(currentURL) }
+        .task(id: currentURL) {
+            let requestedURL = currentURL
+            presentation = nil
+            let loaded = await RecordingPresentation.load(requestedURL)
+            guard !Task.isCancelled, currentURL == requestedURL else { return }
+            presentation = loaded
+        }
     }
 
-    /// Renames the file on disk (sanitized, collision-safe). No-op if unchanged/taken/invalid.
-    /// Recordings are never placed on the clipboard, so a rename doesn't touch it either.
-    private func commitRename() {
-        let cleaned = name
-            .components(separatedBy: CharacterSet(charactersIn: "/\\:").union(.controlCharacters)).joined()
-            .trimmingCharacters(in: .whitespaces)
+    private func performAfterRename(_ action: @escaping (URL) -> Void) async {
+        guard let url = await commitRename() else { return }
+        action(url)
+    }
+
+    /// File-system validation and movement stay off the main actor. Actions wait for this
+    /// result, and a collision/failure remains visible instead of silently reverting text.
+    private func commitRename() async -> URL? {
+        guard !isRenaming else { return nil }
+        renameMessage = nil
+        let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let original = currentURL.deletingPathExtension().lastPathComponent
-        guard !cleaned.isEmpty, cleaned != original else { name = original; return }
+        guard !cleaned.isEmpty else {
+            renameMessage = "Dosya adı boş olamaz."
+            return nil
+        }
+        guard cleaned.rangeOfCharacter(from: CharacterSet(charactersIn: "/\\:").union(.controlCharacters)) == nil else {
+            renameMessage = "Dosya adında /, \\ veya : kullanılamaz."
+            return nil
+        }
+        if cleaned == original {
+            name = cleaned
+            return currentURL
+        }
         let target = currentURL.deletingLastPathComponent()
             .appendingPathComponent(cleaned).appendingPathExtension(currentURL.pathExtension)
-        guard !FileManager.default.fileExists(atPath: target.path) else { name = original; return }
-        do {
-            try FileManager.default.moveItem(at: currentURL, to: target)
+        isRenaming = true
+        defer { isRenaming = false }
+        switch await RecordingRename.move(from: currentURL, to: target) {
+        case .success:
             currentURL = target
             name = cleaned
-        } catch {
-            name = original
+            renamed(target)
+            return target
+        case .collision:
+            renameMessage = "Bu adda bir kayıt zaten var."
+        case .failure:
+            renameMessage = "Dosya yeniden adlandırılamadı. Klasör izinlerini kontrol et."
         }
+        return nil
     }
 }
 
@@ -450,31 +746,50 @@ private struct MetaLabel: View {
     }
 }
 
-/// Recording metadata for the finished card, loaded off the main thread via AVFoundation.
-private struct RecordingMeta {
+/// Poster frame and metadata are loaded asynchronously from the actual completed file.
+private struct RecordingPresentation: @unchecked Sendable {
+    let thumbnail: NSImage?
     let size: String
     let duration: String
     let dimensions: String?
 
-    static func load(_ url: URL) async -> RecordingMeta {
+    static func load(_ url: URL) async -> RecordingPresentation {
         let asset = AVURLAsset(url: url)
         var durationText = "—"
+        var previewTime = CMTime.zero
         if let duration = try? await asset.load(.duration) {
             let seconds = CMTimeGetSeconds(duration)
-            if seconds.isFinite, seconds >= 0 { durationText = timeString(seconds) }
+            if seconds.isFinite, seconds >= 0 {
+                durationText = timeString(seconds)
+                previewTime = CMTime(seconds: min(max(seconds * 0.15, 0), 1), preferredTimescale: 600)
+            }
         }
         var dims: String?
         if let track = try? await asset.loadTracks(withMediaType: .video).first,
             let natural = try? await track.load(.naturalSize) {
             dims = "\(Int(abs(natural.width)))×\(Int(abs(natural.height)))"
         }
-        return RecordingMeta(size: byteString(url), duration: durationText, dimensions: dims)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 592, height: 288)
+        let thumbnail: NSImage?
+        if let result = try? await generator.image(at: previewTime) {
+            thumbnail = NSImage(cgImage: result.image, size: .zero)
+        } else {
+            thumbnail = nil
+        }
+        return RecordingPresentation(
+            thumbnail: thumbnail,
+            size: byteString(url),
+            duration: durationText,
+            dimensions: dims
+        )
     }
 
     private static func byteString(_ url: URL) -> String {
         let bytes = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         let formatter = ByteCountFormatter()
-        formatter.allowedUnits = [.useMB, .useGB]
+        formatter.allowedUnits = [.useKB, .useMB, .useGB]
         formatter.countStyle = .file
         return formatter.string(fromByteCount: Int64(bytes))
     }
@@ -483,6 +798,62 @@ private struct RecordingMeta {
         let total = Int(seconds.rounded())
         let h = total / 3600, m = (total % 3600) / 60, s = total % 60
         return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
+    }
+}
+
+enum RecordingRename {
+    enum Outcome: Sendable, Equatable { case success, collision, failure }
+
+    static func move(from source: URL, to target: URL) async -> Outcome {
+        await Task.detached(priority: .userInitiated) {
+            let fileManager = FileManager.default
+            if fileManager.fileExists(atPath: target.path) {
+                // A case-insensitive volume reports a capitalization-only target as
+                // existing even though it is the source itself. Prove both paths name
+                // the same inode before asking the filesystem for an in-place rename;
+                // every other existing target remains a collision.
+                guard isSafeCaseOnlyRename(
+                    from: source,
+                    to: target,
+                    fileManager: fileManager
+                ) else { return .collision }
+                do {
+                    try fileManager.moveItem(at: source, to: target)
+                    return .success
+                } catch {
+                    return .failure
+                }
+            }
+            do {
+                try fileManager.moveItem(at: source, to: target)
+                return .success
+            } catch {
+                return fileManager.fileExists(atPath: target.path) ? .collision : .failure
+            }
+        }.value
+    }
+
+    private static func isSafeCaseOnlyRename(
+        from source: URL,
+        to target: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        let sourcePath = source.standardizedFileURL.path
+        let targetPath = target.standardizedFileURL.path
+        guard sourcePath != targetPath,
+              sourcePath.caseInsensitiveCompare(targetPath) == .orderedSame,
+              let supportsCaseSensitiveNames = try? source.deletingLastPathComponent()
+                .resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey])
+                .volumeSupportsCaseSensitiveNames,
+              supportsCaseSensitiveNames == false,
+              let sourceAttributes = try? fileManager.attributesOfItem(atPath: sourcePath),
+              let targetAttributes = try? fileManager.attributesOfItem(atPath: targetPath),
+              let sourceDevice = sourceAttributes[.systemNumber] as? NSNumber,
+              let targetDevice = targetAttributes[.systemNumber] as? NSNumber,
+              let sourceInode = sourceAttributes[.systemFileNumber] as? NSNumber,
+              let targetInode = targetAttributes[.systemFileNumber] as? NSNumber
+        else { return false }
+        return sourceDevice == targetDevice && sourceInode == targetInode
     }
 }
 
@@ -501,15 +872,17 @@ private struct CardButton: View {
             }
             .foregroundStyle(prominent ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
             .padding(.horizontal, 11)
-            .frame(height: 28)
+            .frame(maxWidth: .infinity)
+            .frame(height: 36)
             .background(
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(prominent
-                        ? AnyShapeStyle(Color.accentColor.opacity(hovering ? 0.95 : 0.85))
-                        : AnyShapeStyle(Color.primary.opacity(hovering ? 0.11 : 0.07)))
+                        ? AnyShapeStyle(CamcordStyle.accent.opacity(hovering ? 1 : 0.92))
+                        : AnyShapeStyle(Color.primary.opacity(hovering ? 0.10 : 0.06)))
             )
         }
         .help(title)
+        .accessibilityLabel(title)
     }
 }
 
@@ -520,29 +893,35 @@ private struct CardButton: View {
 private struct CaptureTile: View {
     let symbol: String
     let title: String
+    let shortcut: String?
     let action: () -> Void
 
     var body: some View {
         HoverScaleButton(action: action) { hovering in
-            VStack(spacing: 5) {
+            VStack(spacing: 3) {
                 Image(systemName: symbol)
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(hovering ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(hovering ? AnyShapeStyle(CamcordStyle.accent) : AnyShapeStyle(.secondary))
                     .frame(height: 20)
                 Text(title)
-                    .font(.system(size: 10, weight: .medium))
-                    // .secondary measures ~3.8:1 against the light-mode backdrop at
-                    // this size — a fixed 0.62 primary clears 4.5:1 in both schemes.
-                    .foregroundStyle(Color.primary.opacity(0.62))
+                    .font(.system(size: 11, weight: .medium))
+                Group {
+                    if let shortcut { Text(shortcut) } else { Text(" ").accessibilityHidden(true) }
+                }
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.tertiary)
+                .frame(height: 11)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 52)
+            .frame(height: 64)
             .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(Color.primary.opacity(hovering ? 0.11 : 0.045))
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.primary.opacity(hovering ? 0.10 : 0.055))
             )
         }
         .help(title)
+        .accessibilityLabel(title)
+        .accessibilityValue(shortcut ?? "")
     }
 }
 
@@ -577,7 +956,7 @@ private struct RoundIconButton: View {
             Image(systemName: symbol)
                 .font(.system(size: 10.5, weight: .bold))
                 .foregroundStyle(tint.map(AnyShapeStyle.init) ?? AnyShapeStyle(.primary))
-                .frame(width: 26, height: 26)
+                .frame(width: 30, height: 30)
                 .background(
                     Circle()
                         .fill((tint ?? Color.primary).opacity(
@@ -586,80 +965,145 @@ private struct RoundIconButton: View {
                 )
         }
         .help(help)
+        .accessibilityLabel(help)
     }
 }
 
 /// Secondary recording target next to the primary "Kayıt başlat" (e.g. full screen).
 private struct RecordTargetButton: View {
     let symbol: String
-    let help: String
+    let title: String
     let action: () -> Void
 
     var body: some View {
         HoverScaleButton(action: action) { hovering in
-            Image(systemName: symbol)
-                .font(.system(size: 13, weight: .medium))
+            Label(title, systemImage: symbol)
+                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(hovering ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-                .frame(width: 40, height: 40)
+                .frame(maxWidth: .infinity)
+                .frame(height: 34)
                 .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(Color.primary.opacity(hovering ? 0.07 : 0.045))
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.primary.opacity(hovering ? 0.09 : 0.05))
                 )
         }
-        .help(help)
+        .help(title)
+        .accessibilityLabel(title)
     }
 }
 
 /// Footer toggle: filled symbol when on, slashed + faint when off. `warning` tints the
 /// symbol orange (e.g. mic wanted but the OS permission is denied).
 private struct ToggleChip: View {
+    let title: String
     let onSymbol: String
     let offSymbol: String
     let help: String
     var warning: Bool = false
+    var isEnabled: Bool = true
     @Binding var isOn: Bool
     let onChange: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HoverScaleButton(action: {
             isOn.toggle()
             onChange()
         }) { hovering in
-            Image(systemName: isOn ? onSymbol : offSymbol)
-                .font(.system(size: 10.5, weight: .medium))
+            VStack(spacing: 3) {
+                Image(systemName: isOn ? onSymbol : offSymbol)
+                    .font(.system(size: 11, weight: .medium))
+                Text(title)
+                    .font(.system(size: 9, weight: .medium))
+                    .lineLimit(1)
+            }
                 .foregroundStyle(
                     warning && isOn
                         ? AnyShapeStyle(Color.orange)
-                        : isOn ? AnyShapeStyle(.primary) : AnyShapeStyle(.quaternary)
+                        : isOn ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary)
                 )
-                .frame(width: 26, height: 24)
+                .frame(maxWidth: .infinity)
+                .frame(height: 34)
                 .background(
-                    RoundedRectangle(cornerRadius: 7)
-                        .fill(Color.primary.opacity(isOn ? (hovering ? 0.12 : 0.08) : (hovering ? 0.05 : 0)))
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(Color.primary.opacity(isOn ? (hovering ? 0.11 : 0.07) : 0.025))
                 )
         }
         .help(help)
-        .animation(.easeOut(duration: 0.12), value: isOn)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.48)
+        .accessibilityLabel(help)
+        .accessibilityValue(isOn ? "Açık" : "Kapalı")
+        .accessibilityHint(isEnabled ? "Durumu değiştirir" : "Kayıt bittikten sonra değiştirilebilir")
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isOn)
     }
 }
 
-private struct FooterIconButton: View {
+private struct LibraryButton: View {
     let symbol: String
+    let title: String
+    let detail: String
     let help: String
     let action: () -> Void
 
     var body: some View {
         HoverScaleButton(action: action) { hovering in
-            Image(systemName: symbol)
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(hovering ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
-                .frame(width: 26, height: 24)
-                .background(
-                    RoundedRectangle(cornerRadius: 7)
-                        .fill(Color.primary.opacity(hovering ? 0.07 : 0))
-                )
+            HStack(spacing: 8) {
+                Image(systemName: symbol)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(CamcordStyle.accent)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.system(size: 11, weight: .medium))
+                    Text(detail).font(.system(size: 9)).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "arrow.up.forward.square")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity)
+            .frame(height: 40)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.primary.opacity(hovering ? 0.09 : 0.05))
+            )
         }
         .help(help)
+        .accessibilityLabel(help)
+    }
+}
+
+private struct HeaderButton: View {
+    let symbol: String
+    let title: String
+    let action: () -> Void
+
+    var body: some View {
+        HoverScaleButton(action: action) { hovering in
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .medium))
+                .frame(width: 30, height: 28)
+                .background(Circle().fill(Color.primary.opacity(hovering ? 0.10 : 0.045)))
+        }
+        .help(title)
+        .accessibilityLabel(title)
+    }
+}
+
+private struct ShortcutBadge: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10, weight: .semibold))
+            .monospaced()
+            .padding(.horizontal, 6)
+            .frame(height: 20)
+            .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.16)))
+            .accessibilityHidden(true)
     }
 }
 
@@ -704,6 +1148,9 @@ private struct PressScaleStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.965 : 1)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
+            .animation(
+                reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.84),
+                value: configuration.isPressed
+            )
     }
 }

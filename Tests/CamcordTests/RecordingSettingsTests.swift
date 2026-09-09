@@ -6,6 +6,40 @@ import Testing
 @Suite("RecordingSettings")
 struct RecordingSettingsTests {
 
+    @Test("camera defaults stay off for old preferences and options survive round-trip")
+    func cameraSettingsCompatibility() throws {
+        let old = try JSONDecoder().decode(RecordingSettings.self, from: Data("{\"microphone\":true}".utf8))
+        #expect(!old.camera.enabled)
+        var changed = old
+        changed.camera = CameraOptions(enabled: true, deviceID: "usb-camera", corner: .topLeft, widthFraction: 0.3, mirrored: false)
+        let decoded = try JSONDecoder().decode(RecordingSettings.self, from: JSONEncoder().encode(changed))
+        #expect(decoded.camera == changed.camera)
+        var otherEditor = old
+        otherEditor.microphoneGainDB = 9
+        let merged = changed.merging(from: old, into: otherEditor)
+        #expect(merged.camera == changed.camera)
+        #expect(merged.microphoneGainDB == 9)
+    }
+
+    @Test("legacy settings retain unity audio gain and gain controls round-trip independently")
+    func audioGainCompatibility() throws {
+        let legacy = try JSONDecoder().decode(RecordingSettings.self, from: Data("{\"microphone\":true,\"mixAudioTracks\":false}".utf8))
+        #expect(legacy.resolvedMicrophoneGainDB == 0)
+        #expect(legacy.resolvedSystemAudioGainDB == 0)
+        #expect(!legacy.mixAudioTracks)
+        var adjusted = legacy
+        adjusted.microphoneGainDB = 9
+        adjusted.systemAudioGainDB = -12
+        let encoded = try JSONEncoder().encode(adjusted)
+        let decoded = try JSONDecoder().decode(RecordingSettings.self, from: encoded)
+        #expect(decoded == adjusted)
+        var otherEditor = legacy
+        otherEditor.systemAudio = false
+        let merged = adjusted.merging(from: legacy, into: otherEditor)
+        #expect(!merged.systemAudio)
+        #expect(merged.microphoneGainDB == 9 && merged.systemAudioGainDB == -12)
+    }
+
     /// A uniquely-named suite per test so tests never see each other's state or the
     /// user's real defaults.
     private func makeTestDefaults() -> UserDefaults {

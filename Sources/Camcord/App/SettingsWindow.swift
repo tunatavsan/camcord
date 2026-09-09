@@ -32,17 +32,19 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     private func makeWindow() -> NSWindow {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 740, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 640),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         window.title = "Camcord Ayarları"
-        window.titlebarAppearsTransparent = false
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.toolbarStyle = .unified
         window.isReleasedWhenClosed = false
         window.delegate = self
-        window.setContentSize(NSSize(width: 740, height: 560))
-        window.minSize = NSSize(width: 680, height: 480)
+        window.setContentSize(NSSize(width: 800, height: 640))
+        window.minSize = NSSize(width: 720, height: 520)
         window.center()
         return window
     }
@@ -85,6 +87,16 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .permissions: "lock.shield"
         }
     }
+
+    var subtitle: String {
+        switch self {
+        case .general: "Camcord günlük akışına uyum sağlasın."
+        case .screenshot: "Anı yakala. Hemen kopyala, istersen sakla."
+        case .recording: "Görüntü, kamera ve sesin aynı yerde."
+        case .input: "Fareyle veya klavyeyle, bir hareket uzağında."
+        case .permissions: "Çekim için gereken macOS erişimleri."
+        }
+    }
 }
 
 struct SettingsRootView: View {
@@ -92,23 +104,68 @@ struct SettingsRootView: View {
     let defaultsSuite: UserDefaults
 
     @State private var selection: SettingsSection = .general
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(eventTapEngine: EventTapEngine, defaultsSuite: UserDefaults, selection: SettingsSection = .general) {
+        self.eventTapEngine = eventTapEngine
+        self.defaultsSuite = defaultsSuite
+        _selection = State(initialValue: selection)
+    }
 
     var body: some View {
         NavigationSplitView {
-            List(SettingsSection.allCases, selection: $selection) { section in
-                Label(section.title, systemImage: section.icon)
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(spacing: 9) {
+                    Image(systemName: "viewfinder")
+                        .font(.system(size: 21, weight: .medium))
+                        .foregroundStyle(CamcordStyle.accent)
+                    Text("Camcord")
+                        .font(.system(size: 17, weight: .semibold))
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 18)
+
+                List(SettingsSection.allCases, selection: $selection) { section in
+                    Label {
+                        Text(section.title).font(.system(size: 13, weight: .medium))
+                    } icon: {
+                        Image(systemName: section.icon)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(section == selection ? Color.primary : CamcordStyle.accent)
+                            .frame(width: 22)
+                    }
+                    .padding(.vertical, 5)
                     .tag(section)
+                }
+                .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
             }
-            .navigationSplitViewColumnWidth(196)
+            .background(CamcordMaterial(material: .sidebar))
+            .navigationSplitViewColumnWidth(min: 196, ideal: 210, max: 240)
         } detail: {
-            ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(selection.title)
+                        .font(.system(size: 25, weight: .semibold))
+                    Text(selection.subtitle)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 24)
+                .padding(.bottom, 16)
+
                 detail
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(24)
+                    .scrollContentBackground(.hidden)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .id(selection)
+                    .transition(.opacity)
             }
-            .navigationTitle(selection.title)
+            .background(Color(nsColor: .windowBackgroundColor).opacity(0.88))
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: selection)
         }
-        .frame(minWidth: 680, minHeight: 480)
+        .tint(CamcordStyle.accent)
+        .frame(minWidth: 720, minHeight: 520)
     }
 
     @ViewBuilder
@@ -124,6 +181,43 @@ struct SettingsRootView: View {
             InputSettingsView(eventTapEngine: eventTapEngine, defaultsSuite: defaultsSuite)
         case .permissions:
             PermissionsSettingsView(defaultsSuite: defaultsSuite)
+        }
+    }
+}
+
+/// Native asynchronous sheets keep capture shortcuts and recording controls responsive.
+@MainActor
+private enum SettingsFolderPicker {
+    private static let errorToast = HUDToast()
+
+    static func choose(path: String, completion: @escaping @MainActor (URL) -> Void) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Seç"
+        panel.directoryURL = URL(fileURLWithPath: path, isDirectory: true)
+        let finished: (NSApplication.ModalResponse) -> Void = { response in
+            guard response == .OK, let url = panel.url else { return }
+            completion(url)
+        }
+        if let window = NSApp.keyWindow {
+            panel.beginSheetModal(for: window, completionHandler: finished)
+        } else {
+            panel.begin(completionHandler: finished)
+        }
+    }
+
+    static func reveal(path: String) {
+        let directory = URL(fileURLWithPath: path, isDirectory: true)
+        Task {
+            guard await CaptureLibrary.prepareDirectory(directory), NSWorkspace.shared.open(directory) else {
+                errorToast.show(text: "Klasör açılamadı — Ayarlar’dan konumu kontrol et",
+                                systemSymbol: "folder.badge.questionmark", tint: .systemOrange,
+                                respectsSetting: false, duration: 3)
+                return
+            }
         }
     }
 }
@@ -165,7 +259,7 @@ struct GeneralSettingsView: View {
                     .onChange(of: toastEnabled) { _, newValue in
                         HUDToast.setEnabled(newValue, in: defaultsSuite)
                     }
-                Text("Bir çekim/OCR panoya düşünce küçük bir küçük-resim onayı belirir ve kaybolur.")
+                Text("Görüntü veya metin kopyalandığında kısa bir onay gösterir.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -204,22 +298,24 @@ struct ScreenshotSettingsView: View {
 
             Section("Diske Kaydetme") {
                 Toggle("Ekran görüntülerini diske de kaydet", isOn: $settings.saveToDisk)
-                if settings.saveToDisk {
-                    LabeledContent("Klasör") {
-                        HStack(spacing: 8) {
-                            Text(savePath)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .foregroundStyle(.secondary)
-                            Button("Değiştir…") { chooseFolder() }
-                            Button {
-                                NSWorkspace.shared.open(URL(fileURLWithPath: savePath, isDirectory: true))
-                            } label: {
-                                Image(systemName: "arrow.up.forward.app")
-                            }
-                            .help("Finder'da göster")
+                // The folder row (incl. reveal-in-Finder) stays visible regardless of the
+                // toggle — hiding it with saveToDisk is the recurring "disappearing button".
+                LabeledContent("Klasör") {
+                    HStack(spacing: 8) {
+                        Text(savePath)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .foregroundStyle(.secondary)
+                        Button("Değiştir…") { chooseFolder() }
+                        Button {
+                            SettingsFolderPicker.reveal(path: savePath)
+                        } label: {
+                            Image(systemName: "arrow.up.forward.app")
                         }
+                        .help("Finder'da göster")
                     }
+                }
+                if settings.saveToDisk {
                     Text("Panodakinin yanı sıra buraya da kaydedilir; videolardan ayrı bir klasör.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -233,13 +329,12 @@ struct ScreenshotSettingsView: View {
     }
 
     private func chooseFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Seç"
-        panel.directoryURL = URL(fileURLWithPath: savePath, isDirectory: true)
-        if panel.runModal() == .OK, let url = panel.url {
+        SettingsFolderPicker.choose(path: savePath) { url in
+            // Persist directly as well as updating the current view: a sheet may finish
+            // after this view is removed, and its result must not depend on @State lifetime.
+            var persisted = ScreenshotSettings.load(from: defaultsSuite)
+            persisted.saveDirectoryPath = url.path
+            persisted.save(to: defaultsSuite)
             settings.saveDirectoryPath = url.path
         }
     }
@@ -253,6 +348,9 @@ struct RecordingSettingsView: View {
     @State private var settings: RecordingSettings
     @State private var recents: [RecordingItem] = []
     @State private var audioInputs: [AVCaptureDevice] = []
+    @State private var cameraInputs: [AVCaptureDevice] = []
+    @ObservedObject private var cameraMonitor = CameraPreviewMonitor.shared
+    @ObservedObject private var microphoneMonitor = MicrophoneMonitor.shared
 
     init(defaultsSuite: UserDefaults) {
         self.defaultsSuite = defaultsSuite
@@ -338,12 +436,39 @@ struct RecordingSettingsView: View {
                     Text("Retina (tam)").tag(ResolutionScale.native)
                     Text("Standart (1x)").tag(ResolutionScale.oneX)
                 }
+                Picker("Dinamik Aralık", selection: $settings.dynamicRange) {
+                    Text("SDR (Standart) · uyumlu").tag(DynamicRange.sdr)
+                    Text("HDR (Geniş Renk) · 10-bit").tag(DynamicRange.hdr)
+                }
+                .disabled(settings.resolvedCodec == .h264)
+                if settings.dynamicRange == .hdr && settings.resolvedCodec == .h264 {
+                    Text("H.264 codec ile HDR kayıt kullanılamaz. HDR için HEVC veya ProRes seçin.")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+
                 Toggle("İmleci kaydet", isOn: $settings.showsCursor)
+                Toggle("Tam ekran kaydında geri sayım (3-2-1)", isOn: $settings.countdownEnabled)
             }
 
             Section("Ses") {
+                if microphoneMonitor.recordingLocked {
+                    Label("Kayıt sürüyor. Ses seviyelerini canlı değiştirebilirsin.", systemImage: "waveform")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
                 Toggle("Sistem sesini kaydet", isOn: $settings.systemAudio)
+                    .disabled(microphoneMonitor.recordingLocked)
+                if settings.systemAudio {
+                    HStack {
+                        Text("Oyun / sistem seviyesi")
+                        Slider(value: $settings.systemAudioGainDB, in: -60...12, step: 1)
+                            .accessibilityLabel("Sistem sesi kazancı")
+                        Text(String(format: "%+.0f dB", settings.systemAudioGainDB))
+                            .monospacedDigit().frame(width: 58, alignment: .trailing)
+                    }
+                }
                 Toggle("Mikrofonu kaydet", isOn: $settings.microphone)
+                    .disabled(microphoneMonitor.recordingLocked)
                 if settings.microphone {
                     Picker("Mikrofon", selection: $settings.microphoneDeviceID) {
                         Text("Varsayılan giriş").tag(String?.none)
@@ -351,14 +476,84 @@ struct RecordingSettingsView: View {
                             Text(device.localizedName).tag(String?.some(device.uniqueID))
                         }
                     }
+                    .disabled(microphoneMonitor.recordingLocked)
+                    HStack {
+                        Text("Mikrofon seviyesi")
+                        Slider(value: $settings.microphoneGainDB, in: -24...24, step: 1)
+                            .accessibilityLabel("Mikrofon kazancı")
+                        Text(String(format: "%+.0f dB", settings.microphoneGainDB))
+                            .monospacedDigit().frame(width: 58, alignment: .trailing)
+                    }
                 }
+                if settings.microphone {
+                    HStack(spacing: 12) {
+                        Button(microphoneMonitor.isRunning ? "Testi durdur" : "Mikrofonu test et") {
+                            Task {
+                                if microphoneMonitor.isRunning || microphoneMonitor.isStarting {
+                                    await microphoneMonitor.stop()
+                                } else {
+                                    await microphoneMonitor.start(deviceID: settings.microphoneDeviceID, gainDB: settings.resolvedMicrophoneGainDB)
+                                }
+                            }
+                        }
+                        .disabled(microphoneMonitor.recordingLocked || microphoneMonitor.isStarting)
+                        if microphoneMonitor.isRunning {
+                            AudioLevelMeter(levels: microphoneMonitor.levels)
+                                .frame(minWidth: 80, maxWidth: 170)
+                            Text("Konuşarak seviyeyi kontrol et")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else if microphoneMonitor.isStarting {
+                            ProgressView().controlSize(.small)
+                        }
+                    }
+                    if let message = microphoneMonitor.message {
+                        Text(message).font(.caption).foregroundStyle(.orange)
+                    }
+                }
+                Text("Sesin oyunun altında kalıyorsa sistem seviyesini azalt veya mikrofonu yükselt.")
+                    .font(.footnote).foregroundStyle(.secondary)
                 if settings.systemAudio && settings.microphone {
                     Toggle("Sistem sesi + mikrofonu tek parçada birleştir", isOn: $settings.mixAudioTracks)
+                        .disabled(microphoneMonitor.recordingLocked)
                     Text(settings.mixAudioTracks
                         ? "Tek ses parçası — mikrofon her oynatıcıda/platformda duyulur (varsayılan)."
                         : "İki ayrı ses parçası yazılır (düzenleme için ideal), ama çoğu oynatıcı yalnızca ilkini (sistem sesi) çalar; mikrofon duyulmayabilir.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Kamera") {
+                Toggle("Kamerayı kayda ekle", isOn: $settings.camera.enabled)
+                    .disabled(cameraMonitor.recordingLocked)
+                if settings.camera.enabled {
+                    Picker("Kamera", selection: $settings.camera.deviceID) {
+                        Text("Varsayılan kamera").tag(String?.none)
+                        ForEach(cameraInputs, id: \.uniqueID) { device in
+                            Text(device.localizedName).tag(String?.some(device.uniqueID))
+                        }
+                    }
+                    .disabled(cameraMonitor.recordingLocked)
+                    HStack {
+                        Picker("Konum", selection: $settings.camera.corner) {
+                            Text("Sol üst").tag(CameraCorner.topLeft)
+                            Text("Sağ üst").tag(CameraCorner.topRight)
+                            Text("Sol alt").tag(CameraCorner.bottomLeft)
+                            Text("Sağ alt").tag(CameraCorner.bottomRight)
+                        }
+                        Toggle("Aynala", isOn: $settings.camera.mirrored)
+                    }
+                    .disabled(cameraMonitor.recordingLocked)
+                    HStack {
+                        Text("Boyut")
+                        Slider(value: $settings.camera.widthFraction, in: CameraOptions.widthRange, step: 0.01)
+                            .accessibilityLabel("Kamera görüntüsünün genişliği")
+                        Text("%\(Int(settings.camera.widthFraction * 100))").monospacedDigit()
+                    }
+                    .disabled(cameraMonitor.recordingLocked)
+                    CameraPreviewView(options: settings.camera)
+                    Text("Kamera görüntüsü videoya gömülür. Ses, seçtiğin mikrofon ve sistem kanallarından gelir.")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
             }
 
@@ -388,7 +583,7 @@ struct RecordingSettingsView: View {
                 if settings.dndEnabled {
                     TextField("Açma kısayolu adı", text: $settings.dndShortcutOn)
                     TextField("Kapatma kısayolu adı", text: $settings.dndShortcutOff)
-                    Text("macOS'ta Focus'u açıp kapatmanın halka açık API'si yok. Kısayollar uygulamasında birer 'Odak Ayarla' kısayolu oluştur (ör. açma/kapatma), adlarını buraya yaz — Camcord kayıt başlar/biterken çalıştırır. Boş bırakılırsa atlanır.")
+                    Text("Kısayollar uygulamasında 'Odak Ayarla' ile açma ve kapatma kısayolları oluşturup adlarını buraya yaz. Camcord bunları kayıt başlarken ve biterken çalıştırır. Boş bırakılanlar atlanır.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -403,7 +598,7 @@ struct RecordingSettingsView: View {
                             .foregroundStyle(.secondary)
                         Button("Değiştir…") { chooseFolder() }
                         Button {
-                            NSWorkspace.shared.open(URL(fileURLWithPath: outputPath, isDirectory: true))
+                            SettingsFolderPicker.reveal(path: outputPath)
                         } label: {
                             Image(systemName: "arrow.up.forward.app")
                         }
@@ -430,7 +625,18 @@ struct RecordingSettingsView: View {
             newValue.merging(from: oldValue, into: RecordingSettings.load(from: defaultsSuite)).save(to: defaultsSuite)
         }
         .task(id: settings.outputDirectoryPath) { await loadRecents() }
+        .onDisappear { Task { await microphoneMonitor.stop() } }
+        .onChange(of: settings.microphoneDeviceID) { _, _ in Task { await microphoneMonitor.stop() } }
+        .onChange(of: settings.microphone) { _, enabled in
+            if !enabled { Task { await microphoneMonitor.stop() } }
+        }
+        .onChange(of: settings.camera.corner) { _, _ in settings.camera.position = nil }
+        .onChange(of: settings.microphoneGainDB) { _, gain in microphoneMonitor.updateGain(gain) }
         .onAppear {
+            cameraInputs = AVCaptureDevice.DiscoverySession(
+                deviceTypes: [.builtInWideAngleCamera, .external, .continuityCamera],
+                mediaType: .video, position: .unspecified
+            ).devices
             audioInputs = AVCaptureDevice.DiscoverySession(
                 deviceTypes: [.microphone, .external],
                 mediaType: .audio,
@@ -440,13 +646,10 @@ struct RecordingSettingsView: View {
     }
 
     private func chooseFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Seç"
-        panel.directoryURL = URL(fileURLWithPath: outputPath, isDirectory: true)
-        if panel.runModal() == .OK, let url = panel.url {
+        SettingsFolderPicker.choose(path: outputPath) { url in
+            var persisted = RecordingSettings.load(from: defaultsSuite)
+            persisted.outputDirectoryPath = url.path
+            persisted.save(to: defaultsSuite)
             settings.outputDirectoryPath = url.path
         }
     }
@@ -593,13 +796,14 @@ struct InputSettingsView: View {
             }
 
             Section("Klavye Kısayolları") {
-                Text("Hiçbiri varsayılan olarak atanmamıştır — istediğini buradan ata.")
+                Text("İstediğin tuş birleşimini kaydet; mevcut atamalarını buradan değiştirebilirsin.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 KeyboardShortcuts.Recorder("Bölge çek", name: .captureRegion)
                 KeyboardShortcuts.Recorder("Aktif pencere çek", name: .captureActiveWindow)
                 KeyboardShortcuts.Recorder("Tüm ekranı çek", name: .captureFullScreen)
                 KeyboardShortcuts.Recorder("Metni çek (OCR)", name: .captureTextRegion)
+                KeyboardShortcuts.Recorder("Kaydırmalı çekim", name: .captureScrolling)
                 KeyboardShortcuts.Recorder("Kayıt başlat / bitir", name: .toggleRecording)
                 KeyboardShortcuts.Recorder("Kaydı duraklat / sürdür", name: .pauseRecording)
             }
@@ -654,6 +858,7 @@ struct PermissionsSettingsView: View {
     @State private var screenGranted = CGPreflightScreenCaptureAccess()
     @State private var accessibilityTrusted = AccessibilityPermission.isTrusted()
     @State private var micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+    @State private var cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
 
     var body: some View {
         Form {
@@ -676,11 +881,23 @@ struct PermissionsSettingsView: View {
             Section("Mikrofon") {
                 permissionRow(
                     granted: micStatus == .authorized,
-                    grantedText: micStatus == .notDetermined ? "İlk kayıtta sorulacak" : "İzin verildi",
-                    pendingText: "İzin gerekli — mikrofonu kaydetmek için",
+                    grantedText: "İzin verildi",
+                    pendingText: micStatus == .notDetermined ? "Mikrofonu ilk açtığında sorulacak" : "İzin gerekli — mikrofonu kaydetmek için",
                     open: {
                         NSWorkspace.shared.open(
                             URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!
+                        )
+                    }
+                )
+            }
+            Section("Kamera") {
+                permissionRow(
+                    granted: cameraStatus == .authorized,
+                    grantedText: "İzin verildi",
+                    pendingText: cameraStatus == .notDetermined ? "Kamerayı ilk açtığında sorulacak" : "İzin gerekli — kamerayı kayda eklemek için",
+                    open: {
+                        NSWorkspace.shared.open(
+                            URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")!
                         )
                     }
                 )
@@ -694,6 +911,7 @@ struct PermissionsSettingsView: View {
                 screenGranted = CGPreflightScreenCaptureAccess()
                 accessibilityTrusted = AccessibilityPermission.isTrusted()
                 micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+                cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
             }
         }
     }

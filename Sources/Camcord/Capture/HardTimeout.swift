@@ -1,6 +1,11 @@
 import Foundation
 import os
 
+private struct HardTimeoutState {
+    var alreadyResumed = false
+    var timeoutTask: Task<Void, Never>? = nil
+}
+
 /// Races `operation` against a wall-clock deadline and returns whichever finishes
 /// first — WITHOUT waiting for the loser.
 ///
@@ -16,16 +21,20 @@ func withHardTimeout<T: Sendable>(
     onTimeout timeoutError: @autoclosure @escaping @Sendable () -> Error,
     operation: @escaping @Sendable () async throws -> T
 ) async throws -> T {
-    let resumed = OSAllocatedUnfairLock(initialState: false)
+    let stateLock = OSAllocatedUnfairLock(initialState: HardTimeoutState())
+
     return try await withCheckedThrowingContinuation { continuation in
         let finish: @Sendable (Result<T, Error>) -> Void = { result in
-            let isFirst = resumed.withLock { alreadyResumed in
-                if alreadyResumed { return false }
-                alreadyResumed = true
-                return true
+            let (isFirst, taskToCancel): (Bool, Task<Void, Never>?) = stateLock.withLock { state in
+                if state.alreadyResumed { return (false, nil) }
+                state.alreadyResumed = true
+                let task = state.timeoutTask
+                state.timeoutTask = nil
+                return (true, task)
             }
             if isFirst {
                 continuation.resume(with: result)
+                taskToCancel?.cancel()
             }
         }
         Task.detached {
@@ -35,9 +44,20 @@ func withHardTimeout<T: Sendable>(
                 finish(.failure(error))
             }
         }
-        Task.detached {
-            try? await Task.sleep(for: timeout)
-            finish(.failure(timeoutError()))
+        let task = Task.detached {
+            do {
+                try await Task.sleep(for: timeout)
+                finish(.failure(timeoutError()))
+            } catch {
+                // Task was cancelled, do nothing
+            }
+        }
+        stateLock.withLock { state in
+            if state.alreadyResumed {
+                task.cancel()
+            } else {
+                state.timeoutTask = task
+            }
         }
     }
 }

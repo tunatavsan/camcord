@@ -19,6 +19,7 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     private let videoInput: AVAssetWriterInput
     private let systemAudioInput: AVAssetWriterInput?
     private let microphoneInput: AVAssetWriterInput?
+    private let hostTimeProvider: @Sendable () -> CMTime
 
     private var pauseClock: PauseClock
     private var sessionStarted = false
@@ -26,6 +27,44 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     private var didLogWriterFailure = false
 
     let outputURL: URL
+    private let systemAudioProcessor = AudioSampleProcessor()
+    private let microphoneProcessor = AudioSampleProcessor()
+    private var systemGainDB: Double
+    private var microphoneGainDB: Double
+    private var health: RecordingHealth
+    private let cameraSource: (any CameraFrameSource)?
+    private var cameraOptions: CameraOptions
+    private var cameraCompositor: CameraCompositor?
+    private var cameraCompositingFailed = false
+    private var latestScreenSample: CMSampleBuffer?
+    /// Maps command-time host boundaries onto the SCK source timeline. The first
+    /// complete screen sample establishes the epoch; elapsed time comes from the same
+    /// monotonic host clock used for camera cadence.
+    private var sourceClockAnchor: (source: CMTime, host: CMTime)?
+    /// The latest complete screen received during the initial cue gate. Static
+    /// screens may emit no second complete frame, so resume retimes this one frame
+    /// to the exact release boundary instead of producing an empty recording.
+    private var initialGateFrame: CMSampleBuffer?
+    private var isAwaitingInitialRelease: Bool
+    private var lastCameraPTS: CMTime = .invalid
+    var onCameraFailure: (@Sendable () -> Void)?
+
+    func updateCameraOptions(_ options: CameraOptions) {
+        cameraOptions = options.resolved()
+    }
+
+    func updateAudioGains(systemDB: Double, microphoneDB: Double) {
+        systemGainDB = systemDB.isFinite ? min(12, max(-60, systemDB)) : 0
+        microphoneGainDB = microphoneDB.isFinite ? min(24, max(-24, microphoneDB)) : 0
+    }
+
+    func healthSnapshot() -> RecordingHealth { health }
+
+    /// True while the writer can still accept samples. The stream can die (display
+    /// reconfiguration) while the writer is perfectly healthy — that's the case the
+    /// engine's stream-restart path checks for. `AVAssetWriter.status` is documented
+    /// thread-safe to read.
+    var isWriting: Bool { writer.status == .writing }
 
     /// Fired at most once, on the sample queue, the moment the writer transitions to
     /// `.failed` mid-recording (disk full, quota). Without this, SCStream keeps
@@ -44,11 +83,35 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         pixelWidth: Int,
         pixelHeight: Int,
         frameDuration: CMTime,
+        dynamicRange: DynamicRange,
         includeSystemAudio: Bool,
-        includeMicrophone: Bool
+        includeMicrophone: Bool,
+        initiallyPaused: Bool = false,
+        systemAudioGainDB: Double = 0,
+        microphoneGainDB: Double = 0,
+        cameraSource: (any CameraFrameSource)? = nil,
+        cameraOptions: CameraOptions = CameraOptions(),
+        hostTimeProvider: @escaping @Sendable () -> CMTime = {
+            CMClockGetTime(CMClockGetHostTimeClock())
+        }
     ) throws {
+        // AVAssetWriterInput raises an Objective-C exception for zero dimensions;
+        // reject an unavailable window before creating a file or entering AVFoundation.
+        guard pixelWidth >= 2, pixelHeight >= 2 else { throw RecordingError.invalidVideoDimensions }
         self.outputURL = outputURL
-        pauseClock = PauseClock(frameDuration: frameDuration)
+        self.cameraSource = cameraOptions.enabled ? cameraSource : nil
+        self.cameraOptions = cameraOptions.resolved()
+        self.hostTimeProvider = hostTimeProvider
+        systemGainDB = systemAudioGainDB.isFinite ? min(12, max(-60, systemAudioGainDB)) : 0
+        self.microphoneGainDB = microphoneGainDB.isFinite ? min(24, max(-24, microphoneGainDB)) : 0
+        health = RecordingHealth(
+            systemAudio: AudioSourceHealth(enabled: includeSystemAudio),
+            microphone: AudioSourceHealth(enabled: includeMicrophone)
+        )
+        var initialClock = PauseClock(frameDuration: frameDuration)
+        if initiallyPaused { initialClock.pause() }
+        pauseClock = initialClock
+        isAwaitingInitialRelease = initiallyPaused
 
         writer = try AVAssetWriter(outputURL: outputURL, fileType: container.fileType)
         // Crash resilience: periodically flush a movie fragment (moof) to disk so a
@@ -58,17 +121,23 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         // pays off on the abnormal-exit path. 5s bounds the worst-case loss to the tail.
         writer.movieFragmentInterval = CMTime(seconds: 5, preferredTimescale: 600)
 
-        var videoSettings: [String: Any] = [
-            AVVideoCodecKey: codec.avCodec,
-            AVVideoWidthKey: pixelWidth,
-            AVVideoHeightKey: pixelHeight,
-        ]
-        // Capture-side colorSpaceName and these encode-side properties MUST stay
-        // matched (VideoCodecChoice owns both) or colors wash out (TN QA1839 / -12917).
-        videoSettings[AVVideoColorPropertiesKey] = codec.colorProperties
-        if let compressionProperties = codec.compressionProperties(bitrateMbps: bitrateMbps) {
-            videoSettings[AVVideoCompressionPropertiesKey] = compressionProperties
-        }
+        let videoSettings: [String: Any] = {
+            var settings: [String: Any] = [
+                AVVideoCodecKey: codec.avCodec,
+                AVVideoWidthKey: pixelWidth,
+                AVVideoHeightKey: pixelHeight,
+            ]
+            // nil for HDR (see colorProperties): the source buffers' own tags flow
+            // into the bitstream instead of being force-redeclared.
+            if let colorProperties = codec.colorProperties(dynamicRange: dynamicRange) {
+                settings[AVVideoColorPropertiesKey] = colorProperties
+            }
+            if let compressionProperties = codec.compressionProperties(bitrateMbps: bitrateMbps) {
+                settings[AVVideoCompressionPropertiesKey] = compressionProperties
+            }
+            return settings
+        }()
+
         videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
         videoInput.expectsMediaDataInRealTime = true
 
@@ -116,6 +185,12 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     // MARK: - SCStreamOutput (called on the shared sampleHandlerQueue)
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        consume(sampleBuffer, of: type)
+    }
+
+    /// The same sample-queue entry point for captured and synthetic media. Keeping the
+    /// writer independent of SCStream ownership makes its file lifecycle checkable.
+    func consume(_ sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         // A stray buffer that lands after markFinished() (most plausible on the
         // abrupt didStopWithError path, where nothing drained the stream) must not
         // reach an already-finished input — that's an uncaught NSException.
@@ -126,9 +201,9 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         case .screen:
             handleVideo(sampleBuffer)
         case .audio:
-            handleAudio(sampleBuffer, input: systemAudioInput)
+            handleAudio(sampleBuffer, input: systemAudioInput, microphone: false)
         case .microphone:
-            handleAudio(sampleBuffer, input: microphoneInput)
+            handleAudio(sampleBuffer, input: microphoneInput, microphone: true)
         @unknown default:
             break
         }
@@ -148,7 +223,41 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         }
 
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        guard let retimedPTS = pauseClock.shouldAppend(pts: pts, isVideo: true) else { return }
+        if sourceClockAnchor == nil, pts.isNumeric {
+            sourceClockAnchor = (pts, hostTimeProvider())
+        }
+
+        if isAwaitingInitialRelease {
+            if cameraSource != nil {
+                latestScreenSample = sampleBuffer
+            } else {
+                initialGateFrame = sampleBuffer
+            }
+            return
+        }
+
+        if cameraSource != nil {
+            latestScreenSample = sampleBuffer
+            return // The fixed-cadence camera clock owns all video appends in this mode.
+        }
+        appendVideoFrame(sampleBuffer)
+    }
+
+    /// SCK can emit only idle frames for a static desktop. A separate cadence reuses
+    /// the latest complete screen and composites the newest camera frame, keeping a
+    /// talking head moving while a slide or editor stays still.
+    func cameraTick(at hostTime: CMTime = CMClockGetTime(CMClockGetHostTimeClock())) {
+        guard !isFinished, let sample = latestScreenSample, let anchor = sourceClockAnchor else { return }
+        let pts = CMTimeAdd(anchor.source, CMTimeSubtract(hostTime, anchor.host))
+        guard !lastCameraPTS.isValid || pts > lastCameraPTS else { return }
+        guard let timed = retimed(sample, to: pts) else { return }
+        lastCameraPTS = pts
+        appendVideoFrame(timed)
+    }
+
+    private func appendVideoFrame(_ sampleBuffer: CMSampleBuffer) {
+        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        guard let retimedPTS = pauseClock.shouldAppend(pts: pts, isVideo: true, duration: CMSampleBufferGetDuration(sampleBuffer)) else { return }
 
         if !sessionStarted {
             // Video is the clock master: the session is anchored to the first video
@@ -157,31 +266,83 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
             sessionStarted = true
         }
 
-        append(sampleBuffer, retimedTo: retimedPTS, originalPTS: pts, input: videoInput)
-    }
-
-    private func handleAudio(_ sampleBuffer: CMSampleBuffer, input: AVAssetWriterInput?) {
-        guard let input, sessionStarted else { return }
-        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        guard let retimedPTS = pauseClock.shouldAppend(pts: pts, isVideo: false) else { return }
-        append(sampleBuffer, retimedTo: retimedPTS, originalPTS: pts, input: input)
-    }
-
-    private func append(_ sampleBuffer: CMSampleBuffer, retimedTo retimedPTS: CMTime, originalPTS: CMTime, input: AVAssetWriterInput) {
-        guard writer.status == .writing else {
-            if writer.status == .failed, !didLogWriterFailure {
-                didLogWriterFailure = true
-                logger.error("AVAssetWriter failed mid-recording: \(String(describing: self.writer.error), privacy: .public)")
-                onRuntimeFailure?()
-            }
+        health.video.delivered += 1
+        guard videoInput.isReadyForMoreMediaData else {
+            health.video.dropped += 1
             return
         }
+        var output = sampleBuffer
+        if !cameraCompositingFailed, let camera = cameraSource?.latestFrame() {
+            do {
+                if cameraCompositor == nil { cameraCompositor = CameraCompositor() }
+                output = try cameraCompositor!.composite(screen: sampleBuffer, camera: camera, options: cameraOptions)
+            } catch CameraCompositorError.poolExhausted {
+                // Encoder backpressure is temporary. Skip this video frame instead
+                // of permanently disabling the camera or flashing a camera-less frame.
+                health.video.dropped += 1
+                return
+            } catch {
+                cameraCompositingFailed = true
+                logger.error("Camera composition failed; screen capture continues: \(String(describing: error), privacy: .public)")
+                onCameraFailure?()
+            }
+        }
+        if append(output, retimedTo: retimedPTS, originalPTS: pts, input: videoInput) {
+            health.video.appended += 1
+        } else {
+            health.video.dropped += 1
+        }
+    }
+
+    private func handleAudio(_ sampleBuffer: CMSampleBuffer, input: AVAssetWriterInput?, microphone: Bool) {
+        guard let input, sessionStarted else { return }
+        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        guard let retimedPTS = pauseClock.shouldAppend(pts: pts, isVideo: false, duration: CMSampleBufferGetDuration(sampleBuffer)) else { return }
+        var source = microphone ? health.microphone : health.systemAudio
+        defer {
+            if microphone { health.microphone = source } else { health.systemAudio = source }
+        }
+        source.samples.delivered += 1
+        do {
+            let processor = microphone ? microphoneProcessor : systemAudioProcessor
+            let processed = try processor.process(sampleBuffer, gainDB: microphone ? microphoneGainDB : systemGainDB)
+            source.levels = processed.levels
+            source.lastSampleUptime = ProcessInfo.processInfo.systemUptime
+            if append(processed.sampleBuffer, retimedTo: retimedPTS, originalPTS: pts, input: input) {
+                source.samples.appended += 1
+            } else {
+                source.samples.dropped += 1
+            }
+        } catch {
+            source.samples.dropped += 1
+            if !source.processingFailed {
+                logger.error("Audio processing failed (microphone=\(microphone)): \(String(describing: error), privacy: .public)")
+            }
+            source.processingFailed = true
+        }
+    }
+
+    @discardableResult
+    private func append(_ sampleBuffer: CMSampleBuffer, retimedTo retimedPTS: CMTime, originalPTS: CMTime, input: AVAssetWriterInput) -> Bool {
+        guard writer.status == .writing else {
+            reportWriterFailureIfNeeded()
+            return false
+        }
         // Realtime rule: never block the capture queue waiting for the encoder.
-        guard input.isReadyForMoreMediaData else { return }
+        guard input.isReadyForMoreMediaData else { return false }
 
         let buffer = retimedPTS == originalPTS ? sampleBuffer : retimed(sampleBuffer, to: retimedPTS)
-        guard let buffer else { return }
-        input.append(buffer)
+        guard let buffer else { return false }
+        let accepted = input.append(buffer)
+        if !accepted { reportWriterFailureIfNeeded() }
+        return accepted
+    }
+
+    private func reportWriterFailureIfNeeded() {
+        guard writer.status == .failed, !didLogWriterFailure else { return }
+        didLogWriterFailure = true
+        logger.error("AVAssetWriter failed mid-recording: \(String(describing: self.writer.error), privacy: .public)")
+        onRuntimeFailure?()
     }
 
     private func retimed(_ sampleBuffer: CMSampleBuffer, to newPTS: CMTime) -> CMSampleBuffer? {
@@ -194,7 +355,12 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         // per-sample) and swap only the PTS.
         var timing = CMSampleTimingInfo()
         if CMSampleBufferGetSampleTimingInfo(sampleBuffer, at: 0, timingInfoOut: &timing) != noErr {
-            timing.duration = CMSampleBufferGetDuration(sampleBuffer)
+            let numSamples = CMSampleBufferGetNumSamples(sampleBuffer)
+            if numSamples > 0 {
+                timing.duration = CMTimeMultiplyByRatio(CMSampleBufferGetDuration(sampleBuffer), multiplier: 1, divisor: Int32(numSamples))
+            } else {
+                timing.duration = CMSampleBufferGetDuration(sampleBuffer)
+            }
         }
         timing.presentationTimeStamp = newPTS
         timing.decodeTimeStamp = .invalid
@@ -216,11 +382,45 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     // MARK: - Pause / finish (dispatched onto the sampleHandlerQueue by the engine)
 
     func pause() {
-        pauseClock.pause()
+        pause(atHostTime: hostTimeProvider())
+    }
+
+    /// Installs ScreenCaptureKit's authoritative source↔host clock mapping. The
+    /// engine calls this after startCapture succeeds; direct writer tests and older
+    /// fallback paths can still establish an approximate anchor from the first frame.
+    func synchronizeSourceClock(sourceTime: CMTime, hostTime: CMTime) {
+        guard !sessionStarted, sourceTime.isNumeric, hostTime.isNumeric else { return }
+        sourceClockAnchor = (sourceTime, hostTime)
+    }
+
+    func pause(atHostTime hostTime: CMTime) {
+        guard let sourceTime = sourceTime(atHostTime: hostTime) else {
+            pauseClock.pause()
+            return
+        }
+        pauseClock.pause(atSourceTime: sourceTime)
     }
 
     func resume() {
-        pauseClock.resume()
+        resume(atHostTime: hostTimeProvider())
+    }
+
+    func resume(atHostTime hostTime: CMTime) {
+        guard let sourceTime = sourceTime(atHostTime: hostTime) else {
+            pauseClock.resume()
+            isAwaitingInitialRelease = false
+            initialGateFrame = nil
+            return
+        }
+        pauseClock.resume(atSourceTime: sourceTime)
+        guard isAwaitingInitialRelease else { return }
+        isAwaitingInitialRelease = false
+        defer { initialGateFrame = nil }
+        guard cameraSource == nil,
+              let initialGateFrame,
+              let boundaryFrame = retimed(initialGateFrame, to: sourceTime)
+        else { return }
+        appendVideoFrame(boundaryFrame)
     }
 
     /// Marks all inputs finished. Runs on the sample queue (FIFO with the output
@@ -228,17 +428,40 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     /// so nothing can append past this point regardless of SCStream's delivery
     /// ordering guarantees.
     func markFinished() {
+        markFinished(atHostTime: hostTimeProvider())
+    }
+
+    func markFinished(atHostTime hostTime: CMTime) {
+        guard !isFinished else { return }
         isFinished = true
+        latestScreenSample = nil
+        initialGateFrame = nil
         guard writer.status == .writing else { return }
+        if sessionStarted,
+            let sourceTime = sourceTime(atHostTime: hostTime),
+            let endTime = pauseClock.endTime(atSourceTime: sourceTime)
+        {
+            // finishWriting alone truncates the movie at the latest appended sample.
+            // An explicit end retains elapsed static-screen time without encoding copies.
+            writer.endSession(atSourceTime: endTime)
+        }
         for input in [videoInput, systemAudioInput, microphoneInput].compactMap({ $0 }) {
             input.markAsFinished()
         }
+    }
+
+    private func sourceTime(atHostTime hostTime: CMTime) -> CMTime? {
+        guard hostTime.isNumeric, let anchor = sourceClockAnchor, anchor.host.isNumeric else { return nil }
+        return CMTimeAdd(anchor.source, CMTimeSubtract(hostTime, anchor.host))
     }
 
     /// Thread-safe by AVFoundation contract; called from the engine after the
     /// `markFinished` barrier has run on the sample queue (so `sessionStarted` reads
     /// here are ordered after every append).
     func finishWriting() async throws -> URL {
+        // Late stop/recovery paths may converge here. A completed file is immutable;
+        // repeat finalization must return it, never remove the user's recording.
+        if writer.status == .completed { return outputURL }
         guard sessionStarted else {
             // Zero complete frames were ever delivered (sub-frame recording, or the
             // stream only produced .idle frames). Finishing a session-less writer
@@ -252,17 +475,14 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
             try? FileManager.default.removeItem(at: outputURL)
             throw RecordingError.nothingCaptured
         }
-        // Every failure path below leaves a moov-less, unplayable file — remove it
-        // rather than leaving junk in ~/Movies/camcord (e.g. disk filled at the
-        // exact instant the user pressed stop).
+        // A failed tail does not prove earlier movie fragments are unreadable.
+        // Preserve the only copy for recovery and report an incomplete recording.
         guard writer.status == .writing else {
-            try? FileManager.default.removeItem(at: outputURL)
-            throw RecordingError.writerFailed(writer.error)
+            throw RecordingError.incompleteRecording(outputURL, writer.error)
         }
         await writer.finishWriting()
         guard writer.status == .completed else {
-            try? FileManager.default.removeItem(at: outputURL)
-            throw RecordingError.writerFailed(writer.error)
+            throw RecordingError.incompleteRecording(outputURL, writer.error)
         }
         return outputURL
     }
@@ -308,7 +528,8 @@ enum VideoCodecChoice: String, Codable, CaseIterable {
         }
     }
 
-    /// HEVC + ProRes capture 10-bit P3; H.264 stays 8-bit sRGB.
+    /// SDR capture: HEVC + ProRes capture 10-bit P3; H.264 stays 8-bit sRGB.
+    /// (HDR capture bypasses these — the engine uses the SCK HDR preset there.)
     var pixelFormat: OSType {
         self == .h264 ? kCVPixelFormatType_32BGRA : kCVPixelFormatType_ARGB2101010LEPacked
     }
@@ -317,17 +538,31 @@ enum VideoCodecChoice: String, Codable, CaseIterable {
         self == .h264 ? CGColorSpace.sRGB : CGColorSpace.displayP3
     }
 
-    var colorProperties: [String: Any] {
+    /// Writer-side color tags. CRITICAL: the declared transfer function must match the
+    /// curve the capture ACTUALLY carries — sRGB/displayP3 buffers hold the sRGB (IEC
+    /// 61966-2-1) curve, and declaring ITU_R_709_2 instead makes VideoToolbox silently
+    /// re-curve every frame to BT.709 and tag it so; players then decode per BT.1886
+    /// (~gamma 2.4) and the recording plays back darker/contrastier than the screen.
+    ///
+    /// HDR returns nil ON PURPOSE: the SCK HDR preset decides the real transfer (PQ or
+    /// HLG); redeclaring here force-retags the data (PQ-as-HLG = blown-out brightness).
+    /// Omission makes VideoToolbox propagate the source buffers' own tags losslessly —
+    /// the same choice every shipping SCK recorder makes for its HDR path.
+    func colorProperties(dynamicRange: DynamicRange) -> [String: Any]? {
+        if dynamicRange == .hdr, self != .h264 { return nil }
         if self == .h264 {
             return [
                 AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
-                AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+                AVVideoTransferFunctionKey: AVVideoTransferFunction_IEC_sRGB,
                 AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
             ]
         }
+        // SDR HEVC/ProRes: 10-bit Display P3 capture (P3 primaries, sRGB curve).
+        // The explicit set stays (an RGB source has no YCbCr matrix attachment to
+        // propagate) — only the transfer function differs from plain 709.
         return [
             AVVideoColorPrimariesKey: AVVideoColorPrimaries_P3_D65,
-            AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+            AVVideoTransferFunctionKey: AVVideoTransferFunction_IEC_sRGB,
             AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
         ]
     }
@@ -382,10 +617,13 @@ enum VideoContainer: String, Codable, CaseIterable {
 }
 
 enum RecordingError: Error {
+    case invalidVideoDimensions
     case writerRejectedInput
     case writerFailed(Error?)
     case alreadyRecording
     case notRecording
     /// The recording ended before a single complete video frame was written.
     case nothingCaptured
+    /// A failed recording is kept because completed movie fragments may be recoverable.
+    case incompleteRecording(URL, Error?)
 }

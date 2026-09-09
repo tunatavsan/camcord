@@ -36,7 +36,7 @@ enum AccessibilityPermission {
 /// timeout/user-input disables, tap re-creation on wake/session-active, and a 5s
 /// watchdog polling `tapIsEnabled`.
 @MainActor
-final class EventTapEngine {
+final class EventTapEngine: NSObject {
     private let coordinator: CaptureCoordinator
     private let recordingController: RecordingController
     private let logger = Logger(subsystem: "dev.tavsan.camcord", category: "event-tap-engine")
@@ -52,10 +52,12 @@ final class EventTapEngine {
     /// Health of the tap for the menu/Settings status line: `false` whenever bindings
     /// are enabled but the tap could not be created or is not currently enabled.
     private(set) var isTapHealthy = false
+    private var tapHolder: EventTapHolder?
 
     init(coordinator: CaptureCoordinator, recordingController: RecordingController) {
         self.coordinator = coordinator
         self.recordingController = recordingController
+        super.init()
         registerWorkspaceNotifications()
         startWatchdog()
     }
@@ -148,6 +150,7 @@ final class EventTapEngine {
         runLoopSource = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        tapHolder = EventTapHolder(tap: tap, source: source)
         isTapHealthy = true
     }
 
@@ -160,17 +163,10 @@ final class EventTapEngine {
             coordinator.cancelHoldRegionSelection()
         }
         resetModifierState(cancelChord: true)
-        if let tap = eventTap {
-            CGEvent.tapEnable(tap: tap, enable: false)
-        }
-        if let source = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
-        }
-        if let tap = eventTap {
-            // Documented teardown order: invalidate the mach port explicitly rather
-            // than relying on ARC release timing during frequent recreation.
-            CFMachPortInvalidate(tap)
-        }
+        pendingHoldLocation = nil
+        holdUpdateScheduled = false
+        // The tapHolder.deinit handles all CGEvent.tapEnable, CFRunLoopRemoveSource, and CFMachPortInvalidate
+        tapHolder = nil
         eventTap = nil
         runLoopSource = nil
         isTapHealthy = false
@@ -215,11 +211,17 @@ final class EventTapEngine {
         // its button is NOT physically down, a button-up was lost while the tap stayed
         // enabled — force-disarm so left/right clicks can't stay swallowed. Closes the
         // hole within one watchdog interval regardless of how the up was lost.
-        if modifierArmed, let cgButton = captureModifierButton,
-            let mouseButton = CGMouseButton(rawValue: UInt32(cgButton)),
-            !CGEventSource.buttonState(.combinedSessionState, button: mouseButton) {
-            logger.notice("Watchdog: capture-modifier armed but its button is up; force-disarming")
-            resetModifierState(cancelChord: true)
+        if modifierArmed, let cgButton = captureModifierButton {
+            let isDown: Bool
+            if let mouseButton = CGMouseButton(rawValue: UInt32(cgButton)) {
+                isDown = CGEventSource.buttonState(.combinedSessionState, button: mouseButton)
+            } else {
+                isDown = (NSEvent.pressedMouseButtons & (1 << cgButton)) != 0
+            }
+            if !isDown {
+                logger.notice("Watchdog: capture-modifier armed but its button is up; force-disarming")
+                resetModifierState(cancelChord: true)
+            }
         }
 
         guard bindings.anyEnabled else { return }
@@ -304,6 +306,8 @@ final class EventTapEngine {
     /// has produced a drag yet (a no-drag release is a tap → arms the next hold for OCR).
     private var activeHoldButton: Int64?
     private var activeHoldDragged = false
+    private var pendingHoldLocation: CGPoint?
+    private var holdUpdateScheduled = false
 
     /// Capture-modifier state: whether its button is held, and whether a left/right
     /// capture chord was used during this hold (so a plain tap can open the overlay).
@@ -423,13 +427,16 @@ final class EventTapEngine {
         lastChordLocation = location
         if activeHoldButton != nil { return true }   // swallow left/right drags during a hold
         guard modifierArmed else { return swallowChordTail }
+        // Swallow even when no chord is live: the matching down WAS swallowed
+        // (handleChordDown returns true whenever the modifier is armed), and an
+        // orphaned drag would confuse the app underneath.
         guard chordActive else { return true }
         // Coalesce: remember the latest position; one async redraw drains it per tick so
         // the tap callback never blocks on a synchronous overlay redraw mid-drag.
         pendingChordLocation = location
         if !chordUpdateScheduled {
             chordUpdateScheduled = true
-            DispatchQueue.main.async { [weak self] in
+            Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.chordUpdateScheduled = false
                 if self.chordActive, let loc = self.pendingChordLocation {
@@ -454,6 +461,7 @@ final class EventTapEngine {
             // exact regardless of any still-queued coalesced update.
             coordinator.finishHoldRegionSelection(atCGPoint: location)
         }
+        // Swallow the up unconditionally while armed — its down was swallowed too.
         return true
     }
 
@@ -469,6 +477,8 @@ final class EventTapEngine {
         swallowChordTail = false
         pendingChordLocation = nil
         chordUpdateScheduled = false
+        pendingHoldLocation = nil
+        holdUpdateScheduled = false
     }
 
     private func handleMouseDragged(button: Int64, location: CGPoint) -> Bool {
@@ -477,7 +487,17 @@ final class EventTapEngine {
         // hold is active the drag IS the hold's drag. No active hold -> pass through.
         guard activeHoldButton != nil else { return false }
         activeHoldDragged = true
-        coordinator.updateHoldRegionSelection(toCGPoint: location)
+        pendingHoldLocation = location
+        if !holdUpdateScheduled {
+            holdUpdateScheduled = true
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.holdUpdateScheduled = false
+                if self.activeHoldButton != nil, let loc = self.pendingHoldLocation {
+                    self.coordinator.updateHoldRegionSelection(toCGPoint: loc)
+                }
+            }
+        }
         // The matching down was swallowed; a drag without its down would only
         // confuse the app underneath.
         return true
@@ -641,4 +661,18 @@ private func eventTapCallback(
         )
     }
     return shouldSwallow ? nil : Unmanaged.passUnretained(event)
+}
+
+private final class EventTapHolder: @unchecked Sendable {
+    let tap: CFMachPort
+    let source: CFRunLoopSource
+    init(tap: CFMachPort, source: CFRunLoopSource) {
+        self.tap = tap
+        self.source = source
+    }
+    deinit {
+        CGEvent.tapEnable(tap: tap, enable: false)
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+        CFMachPortInvalidate(tap)
+    }
 }

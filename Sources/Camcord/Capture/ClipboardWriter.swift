@@ -11,6 +11,13 @@ import os
 enum ClipboardWriter {
     private static let logger = Logger(subsystem: "dev.tavsan.camcord", category: "clipboard")
 
+    private static var pendingWrites: [UUID: Task<Void, Never>] = [:]
+    static var isSaving: Bool { !pendingWrites.isEmpty }
+
+    static func waitForPendingSaves() async {
+        for task in Array(pendingWrites.values) { await task.value }
+    }
+
     /// Encodes `image` as PNG and copies it to `pasteboard` (defaults to the general
     /// pasteboard; tests pass a named pasteboard so they never touch the real clipboard).
     /// Uses `NSBitmapImageRep` -> `.png` representation, not `writeObjects`/TIFF (slower encode path).
@@ -24,7 +31,10 @@ enum ClipboardWriter {
         _ image: CGImage,
         pointSize: CGSize? = nil,
         to pasteboard: NSPasteboard = .general,
-        saveTo saveURL: URL? = nil
+        saveTo saveURL: URL? = nil,
+        saveSettings: ScreenshotSettings? = nil,
+        shouldPublish: @MainActor () -> Bool = { true },
+        onSaveComplete: (@MainActor (Result<URL, Error>) -> Void)? = nil
     ) async -> Bool {
         guard let png = await Task.detached(priority: .userInitiated, operation: {
             encodePNG(image, pointSize: pointSize)
@@ -32,23 +42,53 @@ enum ClipboardWriter {
             logger.error("Failed to encode captured image as PNG")
             return false
         }
-        let wrote = write(png: png, to: pasteboard)
-        if let saveURL {
-            // The disk write (often several MB) must NOT run on the main actor: the app's
-            // CGEventTap is serviced by the main run loop, so a slow write to an iCloud /
-            // network / pressured volume would stall system-wide input, not just our UI.
-            // png (Data) and saveURL are Sendable; log via a captured Sendable Logger.
-            let log = logger
-            Task.detached(priority: .utility) {
-                do {
-                    try png.write(to: saveURL)
-                } catch {
-                    log.error("Failed to save screenshot to \(saveURL.path, privacy: .public): \(String(describing: error), privacy: .public)")
+        // Encoding can finish after a newer capture/OCR has claimed the clipboard.
+        // The accepted screenshot may still be saved, but must not overwrite that result.
+        let wrote = shouldPublish() ? write(png: png, to: pasteboard) : false
+        if saveURL != nil || saveSettings?.saveToDisk == true {
+            let id = UUID()
+            let task = Task { @MainActor in
+                let result = await Task.detached(priority: .utility) {
+                    Result { try savePNG(png, to: saveURL, settings: saveSettings) }
+                }.value
+                if case .failure(let error) = result {
+                    logger.error("Screenshot save failed: \(String(describing: error), privacy: .public)")
                 }
+                onSaveComplete?(result)
+                pendingWrites[id] = nil
             }
+            pendingWrites[id] = task
         }
         return wrote
     }
+
+    /// Publish only a complete PNG. The temporary sibling is invisible to the capture
+    /// library and the final move refuses collisions, including concurrent saves.
+    nonisolated static func savePNG(_ png: Data, to requestedURL: URL? = nil, settings: ScreenshotSettings? = nil) throws -> URL {
+        let settings = settings ?? ScreenshotSettings(saveToDisk: true)
+        guard let first = requestedURL ?? settings.uniqueSaveURL(date: Date()) else {
+            throw SaveError.directoryUnavailable
+        }
+        let directory = first.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let temporary = directory.appendingPathComponent(".camcord-\(UUID().uuidString).pending")
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try png.write(to: temporary, options: .withoutOverwriting)
+        var destination = first
+        for attempt in 0..<100 {
+            do {
+                try FileManager.default.moveItem(at: temporary, to: destination)
+                return destination
+            } catch {
+                guard requestedURL == nil, FileManager.default.fileExists(atPath: destination.path) else { throw error }
+                let stem = first.deletingPathExtension().lastPathComponent
+                destination = directory.appendingPathComponent("\(stem) (\(attempt + 2)).png")
+            }
+        }
+        throw SaveError.nameUnavailable
+    }
+
+    enum SaveError: Error { case directoryUnavailable, nameUnavailable }
 
     /// PNG eagerly + TIFF as a lazily-provided second representation: some legacy
     /// paste targets only look for public.tiff, and the provider only pays the TIFF

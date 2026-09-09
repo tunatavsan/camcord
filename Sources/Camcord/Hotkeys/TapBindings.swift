@@ -68,14 +68,21 @@ struct TapBindings: Codable, Equatable {
     /// Returns the persisted bindings, or the defaults if the key is absent or
     /// undecodable.
     static func load(from defaults: UserDefaults) -> TapBindings {
+        let hasMigrated = defaults.bool(forKey: "hasMigratedV2")
         guard
             let data = defaults.data(forKey: defaultsKey),
             let decoded = try? JSONDecoder().decode(TapBindings.self, from: data)
         else {
+            defaults.set(true, forKey: "hasMigratedV2")
             return TapBindings()
         }
-        // Untouched old defaults → new defaults (the capture-modifier model).
-        return decoded == legacyDefault ? TapBindings() : decoded
+        if !hasMigrated {
+            defaults.set(true, forKey: "hasMigratedV2")
+            if decoded == legacyDefault {
+                return TapBindings()
+            }
+        }
+        return decoded
     }
 
     func save(to defaults: UserDefaults) {

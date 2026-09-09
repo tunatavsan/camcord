@@ -83,4 +83,67 @@ struct ClipboardWriterTests {
         #expect(rep.pixelsHigh == 8)
         #expect(rep.size == CGSize(width: 4, height: 4))
     }
+    @Test("save completion publishes a fully written PNG without delaying clipboard delivery")
+    @MainActor
+    func asynchronousSavePublishesCompleteFile() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("camcord-save-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pasteboard = NSPasteboard(name: .init("dev.tavsan.camcord.tests.save.\(UUID().uuidString)"))
+        let image = try #require(makeTestImage(width: 16, height: 12))
+        let settings = ScreenshotSettings(saveToDisk: true, saveDirectoryPath: directory.path)
+        var result: Result<URL, Error>?
+        #expect(await ClipboardWriter.copyPNG(image, to: pasteboard, saveSettings: settings, onSaveComplete: { result = $0 }))
+        let copied = try #require(pasteboard.data(forType: .png))
+        await ClipboardWriter.waitForPendingSaves()
+        let saved = try #require(result).get()
+        #expect(try Data(contentsOf: saved) == copied)
+        #expect(try #require(NSBitmapImageRep(data: Data(contentsOf: saved))).pixelsWide == 16)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).allSatisfy { !$0.hasSuffix(".pending") })
+    }
+
+    @Test("failed save preserves an existing file and the successful clipboard copy")
+    @MainActor
+    func failedSavePreservesClipboardAndExistingFile() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("camcord-save-failure-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let destination = directory.appendingPathComponent("existing.png")
+        let sentinel = Data("previous user file".utf8)
+        try sentinel.write(to: destination)
+        let pasteboard = NSPasteboard(name: .init("dev.tavsan.camcord.tests.save-failure.\(UUID().uuidString)"))
+        let image = try #require(makeTestImage())
+        var failed = false
+        #expect(await ClipboardWriter.copyPNG(image, to: pasteboard, saveTo: destination, onSaveComplete: {
+            if case .failure = $0 { failed = true }
+        }))
+        await ClipboardWriter.waitForPendingSaves()
+        #expect(failed)
+        #expect(try Data(contentsOf: destination) == sentinel)
+        #expect(pasteboard.data(forType: .png) != nil)
+    }
+
+    @Test("superseded image encoding preserves the newer clipboard result but still saves the screenshot")
+    @MainActor
+    func supersededPublicationStillSaves() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("camcord-superseded-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pasteboard = NSPasteboard(name: .init("dev.tavsan.camcord.tests.superseded.\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        pasteboard.setString("newer OCR result", forType: .string)
+        let originalChange = pasteboard.changeCount
+        let image = try #require(makeTestImage(width: 64, height: 48))
+        var saved: Result<URL, Error>?
+        let copied = await ClipboardWriter.copyPNG(
+            image, to: pasteboard,
+            saveSettings: ScreenshotSettings(saveToDisk: true, saveDirectoryPath: directory.path),
+            shouldPublish: { false }, onSaveComplete: { saved = $0 }
+        )
+        #expect(!copied)
+        #expect(pasteboard.changeCount == originalChange)
+        #expect(pasteboard.string(forType: .string) == "newer OCR result")
+        await ClipboardWriter.waitForPendingSaves()
+        let file = try #require(saved).get()
+        #expect(try #require(NSBitmapImageRep(data: Data(contentsOf: file))).pixelsWide == 64)
+    }
+
 }

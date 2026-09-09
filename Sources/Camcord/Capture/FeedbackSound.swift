@@ -1,17 +1,13 @@
 import AVFoundation
 import Foundation
 
-/// Distinct, instant, non-blocking audio feedback — one recognizable sound per action.
+/// Distinct in-process audio feedback using the original macOS system cues.
 ///
-/// Plays IN-PROCESS via `AVAudioPlayer` (a fresh instance per cue). Two reasons:
-///  • Rapid-fire safe — unlike `NSSound(named:)`, which hands back a SHARED instance
-///    whose `play()` is a no-op while it's still sounding (so a second capture within a
-///    cue's duration silently dropped), each cue here is its own player and always sounds.
-///  • Recording-clean — because the audio originates from THIS process, a recording's
-///    `SCStreamConfiguration.excludesCurrentProcessAudio` filters it out, so the beeps
-///    the user hears never bleed into the captured video. (System-sound APIs play from a
-///    system process and would leak into the recording.)
-enum FeedbackSound {
+/// A fresh `AVAudioPlayer` is used for every cue so rapid actions can overlap. The
+/// decoded AIFF bytes stay cached, and the bounded player pool retains each player
+/// only until it finishes. In-process playback also preserves ScreenCaptureKit's
+/// ability to exclude Camcord from the system-audio feed.
+enum FeedbackSound: CaseIterable, Sendable {
     case regionShot
     case windowShot
     case fullScreenShot
@@ -23,9 +19,9 @@ enum FeedbackSound {
     case paste
     case error
 
-    /// A built-in system sound (from `/System/Library/Sounds`) chosen to be
-    /// distinguishable by ear from its neighbours. Zero bundled assets.
-    fileprivate var systemSoundName: String {
+    /// Exact pre-overhaul action-to-cue mapping. These are the familiar files in
+    /// `/System/Library/Sounds`; playback uses their original content and volume.
+    var systemSoundName: String {
         switch self {
         case .regionShot: "Pop"
         case .windowShot: "Bottle"
@@ -40,6 +36,16 @@ enum FeedbackSound {
         }
     }
 
+    var systemSoundURL: URL {
+        URL(fileURLWithPath: "/System/Library/Sounds/\(systemSoundName).aiff")
+    }
+
+    /// All legacy cues on the supported macOS release are shorter than this. The
+    /// timeout prevents a broken route or missing completion callback from holding a
+    /// start/resume gate indefinitely.
+    static let maximumAwaitedPlaybackSeconds: TimeInterval = 2.5
+    private static let recordingGateTail: Duration = .milliseconds(75)
+
     /// The one preference: a master on/off for all feedback sounds (default on).
     /// Key kept stable across versions (was the v1 "capture sound" toggle).
     static let enabledDefaultsKey = "captureSoundEnabled"
@@ -52,79 +58,149 @@ enum FeedbackSound {
         defaults.set(enabled, forKey: enabledDefaultsKey)
     }
 
-    /// Plays the cue immediately (no-op when feedback is disabled). Non-blocking.
+    /// Plays immediately and returns. Callers are main-actor UX flows.
+    @MainActor
     func play(in defaults: UserDefaults = .standard) {
         guard Self.isEnabled(in: defaults) else { return }
         FeedbackPlayer.shared.play(systemSoundName)
     }
 
-    /// Warm the sound-data cache at launch so the first cue has zero disk latency.
+    /// Plays one recording-boundary cue and waits for it to finish. Cancellation
+    /// stops the player and returns promptly; failure to load/play is fail-open so a
+    /// missing optional cue can never prevent recording.
+    @MainActor
+    func playAndWait(in defaults: UserDefaults = .standard) async {
+        guard Self.isEnabled(in: defaults) else { return }
+        let played = await FeedbackPlayer.shared.playAndWait(
+            systemSoundName,
+            maximumDuration: .seconds(Self.maximumAwaitedPlaybackSeconds)
+        )
+        guard played, !Task.isCancelled else { return }
+        try? await Task.sleep(for: Self.recordingGateTail)
+    }
+
+    /// Warm the sound-data cache at launch so the first cue has no disk latency.
+    @MainActor
     static func preloadAll() {
-        for sound in [
-            regionShot, windowShot, fullScreenShot, textOCR,
-            recordStart, recordStop, recordPause, recordResume, paste, error,
-        ] {
+        for sound in Self.allCases {
             FeedbackPlayer.shared.warm(sound.systemSoundName)
         }
     }
+
+    /// Internal media seam for exact asset/decode regression tests.
+    @MainActor
+    var audioData: Data {
+        FeedbackPlayer.shared.data(for: systemSoundName) ?? Data()
+    }
 }
 
-/// Caches decoded sound data and plays each cue on a fresh `AVAudioPlayer`, retained
-/// until playback finishes. All playback is marshalled to the main run loop so the
-/// player's completion delegate fires (and the instance is released) reliably, no matter
-/// which thread — event tap, capture task, main — triggered the cue.
-private final class FeedbackPlayer: NSObject, AVAudioPlayerDelegate, @unchecked Sendable {
+/// Main-actor ownership matches `AVAudioPlayer`'s delegate lifecycle. Each action
+/// gets a fresh player; a strict cap prevents rapid-fire input retaining an
+/// unbounded number of overlapping cues.
+@MainActor
+private final class FeedbackPlayer: NSObject, AVAudioPlayerDelegate {
     static let shared = FeedbackPlayer()
+    private static let maximumActivePlayers = 8
 
-    private let lock = NSLock()
-    private var data: [String: Data] = [:]
-    /// Players are held here for the lifetime of their playback so ARC doesn't reclaim
-    /// them mid-sound; the completion delegate removes them.
-    private var active: Set<AVAudioPlayer> = []
+    private var payloads: [String: Data] = [:]
+    private var active: [AVAudioPlayer] = []
+    private var waiters: [ObjectIdentifier: CheckedContinuation<Bool, Never>] = [:]
+    private var timeouts: [ObjectIdentifier: Task<Void, Never>] = [:]
+
+    func data(for name: String) -> Data? {
+        if let cached = payloads[name] { return cached.isEmpty ? nil : cached }
+        let url = URL(fileURLWithPath: "/System/Library/Sounds/\(name).aiff")
+        // Cache misses as empty so a missing system file is not retried on every cue.
+        let loaded = (try? Data(contentsOf: url)) ?? Data()
+        payloads[name] = loaded
+        return loaded.isEmpty ? nil : loaded
+    }
+
+    func warm(_ name: String) {
+        _ = data(for: name)
+    }
 
     func play(_ name: String) {
-        guard let payload = soundData(for: name) else { return }
-        DispatchQueue.main.async { [self] in
-            guard let player = try? AVAudioPlayer(data: payload) else { return }
-            player.delegate = self
-            lock.lock()
-            active.insert(player)
-            lock.unlock()
-            player.prepareToPlay()
-            // If playback can't even start, the finish delegate never fires — release the
-            // retained player now so it can't linger in `active`.
-            if !player.play() {
-                lock.lock()
-                active.remove(player)
-                lock.unlock()
+        guard let player = makePlayer(name) else { return }
+        retain(player)
+        guard player.play() else { finish(player, stopping: false, played: false); return }
+    }
+
+    func playAndWait(_ name: String, maximumDuration: Duration) async -> Bool {
+        guard let player = makePlayer(name) else { return false }
+        let wrapper = SendablePlayerWrapper(player: player)
+
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                retain(player)
+                let id = ObjectIdentifier(player)
+                waiters[id] = continuation
+                guard player.play() else {
+                    finish(player, stopping: false, played: false)
+                    return
+                }
+                timeouts[id] = Task { @MainActor [weak self, weak player] in
+                    do {
+                        try await Task.sleep(for: maximumDuration)
+                    } catch {
+                        return
+                    }
+                    guard let self, let player else { return }
+                    self.finish(player, stopping: true, played: true)
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.finish(wrapper.player, stopping: true, played: false)
             }
         }
     }
 
-    func warm(_ name: String) {
-        _ = soundData(for: name)
+    private func makePlayer(_ name: String) -> AVAudioPlayer? {
+        guard let payload = data(for: name), let player = try? AVAudioPlayer(data: payload) else { return nil }
+        player.delegate = self
+        player.volume = 1
+        player.prepareToPlay()
+        return player
     }
 
-    private func soundData(for name: String) -> Data? {
-        lock.lock()
-        defer { lock.unlock() }
-        if let cached = data[name] { return cached }
-        let url = URL(fileURLWithPath: "/System/Library/Sounds/\(name).aiff")
-        // Cache the miss as empty too so a missing file can't retry on every call.
-        let loaded = (try? Data(contentsOf: url)) ?? Data()
-        data[name] = loaded
-        return loaded.isEmpty ? nil : loaded
+    private func retain(_ player: AVAudioPlayer) {
+        for stale in active.filter({ !$0.isPlaying }) {
+            finish(stale, stopping: false, played: true)
+        }
+        while active.count >= Self.maximumActivePlayers, let oldest = active.first {
+            finish(oldest, stopping: true, played: true)
+        }
+        active.append(player)
     }
 
-    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        lock.lock()
-        active.remove(player)
-        lock.unlock()
+    private func finish(_ player: AVAudioPlayer, stopping: Bool, played: Bool) {
+        let id = ObjectIdentifier(player)
+        if stopping { player.stop() }
+        timeouts.removeValue(forKey: id)?.cancel()
+        active.removeAll { $0 === player }
+        waiters.removeValue(forKey: id)?.resume(returning: played)
     }
 
-    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
-        lock.lock()
-        active.remove(player)
-        lock.unlock()
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        let wrapper = SendablePlayerWrapper(player: player)
+        Task { @MainActor [weak self] in
+            self?.finish(wrapper.player, stopping: false, played: true)
+        }
     }
+
+    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        let wrapper = SendablePlayerWrapper(player: player)
+        Task { @MainActor [weak self] in
+            self?.finish(wrapper.player, stopping: true, played: true)
+        }
+    }
+}
+
+private struct SendablePlayerWrapper: @unchecked Sendable {
+    let player: AVAudioPlayer
 }

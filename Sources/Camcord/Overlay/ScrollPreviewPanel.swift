@@ -3,9 +3,9 @@ import CoreGraphics
 
 /// A small floating HUD shown beside the scroll region during a manual scrolling
 /// capture. It displays the stitched image growing in real time (tailing the newest
-/// content at the bottom) plus a section count, an "Otomatik" auto-scroll toggle, and
-/// Done / Cancel controls. Living in its own nonactivating panel OUTSIDE the captured
-/// region, it never appears in the capture and never steals scroll focus from the target.
+/// content at the bottom) plus a section count and Done / Cancel controls. Living in
+/// its own nonactivating panel OUTSIDE the captured region, it never appears in the
+/// capture and never steals scroll focus from the target.
 @MainActor
 final class ScrollPreviewPanel {
     private var panel: NSPanel?
@@ -16,8 +16,7 @@ final class ScrollPreviewPanel {
     func show(
         near region: CGRect,
         onDone: @escaping () -> Void,
-        onCancel: @escaping () -> Void,
-        onToggleAuto: @escaping () -> Void
+        onCancel: @escaping () -> Void
     ) {
         hide()
         let frame = Self.placement(near: region)
@@ -37,7 +36,6 @@ final class ScrollPreviewPanel {
         let view = ScrollPreviewView(frame: CGRect(origin: .zero, size: frame.size))
         view.onDone = onDone
         view.onCancel = onCancel
-        view.onToggleAuto = onToggleAuto
         panel.contentView = view
         panel.orderFrontRegardless()
         self.panel = panel
@@ -48,14 +46,18 @@ final class ScrollPreviewPanel {
         content?.update(image: image, sections: sections)
     }
 
-    /// Reflects the auto-scroll state in the toggle button and the status line.
-    func setAuto(running: Bool, reachedEnd: Bool) {
-        content?.setAuto(running: running, reachedEnd: reachedEnd)
-    }
-
-    /// Shows a transient message in the status line (e.g. a missing-permission hint).
+    /// Shows a transient message in the status line (e.g. the scrolled-too-fast warning).
     func flashHint(_ message: String) {
         content?.flashHint(message)
+    }
+
+    /// A blocking continuity/cap warning stays visible until the stitcher proves recovery.
+    func setBlockingHint(_ message: String?) {
+        content?.setBlockingHint(message)
+    }
+
+    func setFinishing(_ finishing: Bool) {
+        content?.setFinishing(finishing)
     }
 
     func hide() {
@@ -91,27 +93,25 @@ final class ScrollPreviewPanel {
     }
 }
 
-/// The HUD's content: title, live status line, the tailing preview image, an auto-scroll
-/// toggle, and the Done / Cancel buttons drawn on a rounded dark card.
-private final class ScrollPreviewView: NSView {
+/// The HUD's content: title, live status line, the tailing preview image, and the
+/// Done / Cancel buttons drawn on a rounded dark card.
+final class ScrollPreviewView: NSView {
     var onDone: (() -> Void)?
     var onCancel: (() -> Void)?
-    var onToggleAuto: (() -> Void)?
 
     private let card = NSView()
     private let title = NSTextField(labelWithString: "Kaydırarak Çek")
     private let subtitle = NSTextField(labelWithString: "aşağı kaydır")
     private let imageView = TailingImageView()
-    private let autoButton = HUDButton(title: "⤓ Otomatik Kaydır", accent: false)
     private let doneButton = HUDButton(title: "✓ Bitti", accent: true)
     private let cancelButton = HUDButton(title: "İptal", accent: false)
 
-    // Status-line state (precedence: transient hint > auto-running > end-reached > sections).
     private var sections = 0
-    private var autoRunning = false
-    private var endReached = false
+    // Transient status-line hint (precedence over the section count while visible).
     private var hint: String?
+    private var blockingHint: String?
     private var hintGeneration = 0
+    private var isFinishing = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -148,19 +148,19 @@ private final class ScrollPreviewView: NSView {
         subtitle.backgroundColor = .clear
         subtitle.isBezeled = false
         subtitle.isEditable = false
-        subtitle.lineBreakMode = .byTruncatingTail
+        subtitle.lineBreakMode = .byWordWrapping
+        subtitle.usesSingleLineMode = false
+        subtitle.maximumNumberOfLines = 0
+        subtitle.cell?.wraps = true
+        subtitle.cell?.isScrollable = false
         card.addSubview(subtitle)
 
-        imageView.frame = CGRect(x: 12, y: 90, width: b.width - 24, height: (b.height - 56) - 90)
+        imageView.frame = CGRect(x: 12, y: 50, width: b.width - 24, height: (b.height - 56) - 50)
         imageView.wantsLayer = true
         imageView.layer?.backgroundColor = NSColor(calibratedWhite: 0.16, alpha: 1).cgColor
         imageView.layer?.cornerRadius = 8
         imageView.layer?.masksToBounds = true
         card.addSubview(imageView)
-
-        autoButton.frame = CGRect(x: 14, y: 54, width: b.width - 28, height: 30)
-        autoButton.onClick = { [weak self] in self?.onToggleAuto?() }
-        card.addSubview(autoButton)
 
         let bw: CGFloat = (b.width - 14 * 2 - 10) / 2
         cancelButton.frame = CGRect(x: 14, y: 14, width: bw, height: 30)
@@ -175,19 +175,7 @@ private final class ScrollPreviewView: NSView {
     func update(image: CGImage?, sections: Int) {
         imageView.cgImage = image
         imageView.needsDisplay = true
-        // Continued manual scrolling after a (possibly premature) "reached end" clears the
-        // stale end message so the live section count shows again.
-        if sections > self.sections { endReached = false }
         self.sections = sections
-        refreshStatus()
-    }
-
-    func setAuto(running: Bool, reachedEnd: Bool) {
-        autoRunning = running
-        endReached = reachedEnd
-        hint = nil   // a real state change clears any stale hint
-        autoButton.setTitle(running ? "⏸ Otomatiği Durdur" : "⤓ Otomatik Kaydır")
-        autoButton.setHighlighted(running)
         refreshStatus()
     }
 
@@ -196,27 +184,58 @@ private final class ScrollPreviewView: NSView {
         hintGeneration &+= 1
         let generation = hintGeneration
         refreshStatus()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) { [weak self] in
             guard let self, self.hintGeneration == generation else { return }
             self.hint = nil
             self.refreshStatus()
         }
     }
 
+    func setBlockingHint(_ message: String?) {
+        blockingHint = message
+        refreshStatus()
+    }
+
+    func setFinishing(_ finishing: Bool) {
+        isFinishing = finishing
+        doneButton.isEnabled = !finishing
+        doneButton.setTitle(finishing ? "Kontrol…" : "✓ Bitti")
+        refreshStatus()
+    }
+
     private func refreshStatus() {
-        if let hint {
+        if isFinishing {
+            subtitle.stringValue = "Son kare kontrol ediliyor…"
+        } else if let blockingHint {
+            subtitle.stringValue = blockingHint
+        } else if let hint {
             subtitle.stringValue = hint
-        } else if autoRunning {
-            subtitle.stringValue = "Otomatik kaydırılıyor…"
-        } else if endReached {
-            subtitle.stringValue = "Sona ulaşıldı · Bitti'ye bas"
         } else {
             switch sections {
-            case 0: subtitle.stringValue = "aşağı kaydır veya Otomatik"
+            case 0: subtitle.stringValue = "aşağı kaydır"
             case 1: subtitle.stringValue = "1 bölüm · aşağı kaydır"
             default: subtitle.stringValue = "\(sections) bölüm · Esc iptal"
             }
         }
+        subtitle.textColor = NSColor(calibratedWhite: 1, alpha: blockingHint == nil ? 0.7 : 0.9)
+        subtitle.toolTip = subtitle.stringValue
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        // Keep the card and controls still. Only the preview gives up the few pixels
+        // needed to show a complete recovery instruction above it.
+        let width = bounds.width - 28
+        let textHeight = subtitle.cell?.cellSize(forBounds: CGRect(
+            x: 0, y: 0, width: width, height: 1_000
+        )).height ?? 16
+        let height = max(16, ceil(textHeight))
+        subtitle.frame = CGRect(x: 14, y: bounds.height - 34 - height, width: width, height: height)
+        imageView.frame = CGRect(
+            x: 12, y: 50, width: bounds.width - 24,
+            height: max(0, subtitle.frame.minY - 6 - 50)
+        )
     }
 }
 
@@ -233,11 +252,30 @@ private final class TailingImageView: NSView {
         guard let cgImage, cgImage.width > 0 else { return }
         let s = bounds.width / CGFloat(cgImage.width)
         let drawnH = CGFloat(cgImage.height) * s
+
+        let croppedImage: CGImage
+        let finalDrawnH: CGFloat
+
+        if drawnH > bounds.height {
+            let scaleBack = 1.0 / s
+            let visiblePixelH = bounds.height * scaleBack
+            // CGImage coordinates are top-left origin; bottom is at the highest Y.
+            let cropRect = CGRect(x: 0, y: CGFloat(cgImage.height) - visiblePixelH, width: CGFloat(cgImage.width), height: visiblePixelH)
+            if let cropped = cgImage.cropping(to: cropRect) {
+                croppedImage = cropped
+                finalDrawnH = bounds.height
+            } else {
+                croppedImage = cgImage
+                finalDrawnH = drawnH
+            }
+        } else {
+            croppedImage = cgImage
+            finalDrawnH = drawnH
+        }
+
         NSBezierPath(rect: bounds).addClip()
-        let image = NSImage(cgImage: cgImage, size: NSSize(width: bounds.width, height: drawnH))
-        // Bottom-pinned: image bottom at y=0, top overflows above and is clipped → the
-        // newest (bottom) content stays in view.
-        image.draw(in: CGRect(x: 0, y: 0, width: bounds.width, height: drawnH))
+        let image = NSImage(cgImage: croppedImage, size: NSSize(width: bounds.width, height: finalDrawnH))
+        image.draw(in: CGRect(x: 0, y: 0, width: bounds.width, height: finalDrawnH))
     }
 }
 
@@ -245,6 +283,13 @@ private final class TailingImageView: NSView {
 /// the action directly, so it works without activating the app).
 private final class HUDButton: NSView {
     var onClick: (() -> Void)?
+    var isEnabled = true {
+        didSet {
+            alphaValue = isEnabled ? 1 : 0.45
+            setAccessibilityEnabled(isEnabled)
+            window?.invalidateCursorRects(for: self)
+        }
+    }
     private let accent: Bool
     private let label: NSTextField
 
@@ -261,21 +306,24 @@ private final class HUDButton: NSView {
         label.backgroundColor = .clear
         label.isBezeled = false
         label.isEditable = false
+        label.setAccessibilityElement(false)
         addSubview(label)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(title)
+        setAccessibilityEnabled(true)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
-    private var idleColor: CGColor {
-        accent ? NSColor.systemBlue.cgColor : NSColor(calibratedWhite: 1, alpha: 0.14).cgColor
+    func setTitle(_ title: String) {
+        label.stringValue = title
+        setAccessibilityLabel(title)
     }
 
-    func setTitle(_ t: String) { label.stringValue = t }
-
-    /// Toggles a highlighted (active) fill — used by the auto-scroll toggle when running.
-    func setHighlighted(_ on: Bool) {
-        layer?.backgroundColor = on ? NSColor.systemTeal.cgColor : idleColor
+    private var idleColor: CGColor {
+        accent ? NSColor.systemBlue.cgColor : NSColor(calibratedWhite: 1, alpha: 0.14).cgColor
     }
 
     override func layout() {
@@ -283,7 +331,18 @@ private final class HUDButton: NSView {
         label.frame = CGRect(x: 0, y: (bounds.height - 17) / 2, width: bounds.width, height: 17)
     }
 
-    override func mouseDown(with event: NSEvent) { onClick?() }
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        onClick?()
+    }
 
-    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+    override func accessibilityPerformPress() -> Bool {
+        guard isEnabled, let onClick else { return false }
+        onClick()
+        return true
+    }
+
+    override func resetCursorRects() {
+        if isEnabled { addCursorRect(bounds, cursor: .pointingHand) }
+    }
 }

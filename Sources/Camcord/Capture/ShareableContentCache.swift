@@ -102,7 +102,9 @@ actor ShareableContentCache {
     /// `withHardTimeout` — task-group cancellation can't bound non-cooperative calls).
     private static func fetchWithTimeout() async throws -> SCShareableContent {
         try await withHardTimeout(fetchTimeout, onTimeout: CaptureError.timeout) {
-            try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            // onScreenWindowsOnly: false — the window picker must list fullscreen windows
+            // living on other Spaces; consumers that need visibility filter isOnScreen.
+            try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         }
     }
 }

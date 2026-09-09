@@ -48,6 +48,7 @@ final class WindowPickerPanel: NSObject, NSWindowDelegate {
         window.standardWindowButton(.zoomButton)?.isHidden = true
         window.isMovableByWindowBackground = true
         window.level = .floating
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.delegate = self
         window.center()
         self.window = window
@@ -63,13 +64,25 @@ final class WindowPickerPanel: NSObject, NSWindowDelegate {
         thumbnailTask = Task { @MainActor [weak self] in
             // Sequential, front-to-back: the windows the user is most likely to pick fill in
             // first, and we never fan out many SCK grabs at once.
+            var batch: [(CGWindowID, NSImage)] = []
+
             for item in windows {
                 if Task.isCancelled { return }
                 let image = try? await ScreenshotService.captureWindowThumbnail(item.window, maxWidth: 480)
                 if Task.isCancelled { return }
+
                 if let image {
-                    self?.model.setThumbnail(NSImage(cgImage: image, size: .zero), for: item.id)
+                    batch.append((item.id, NSImage(cgImage: image, size: .zero)))
                 }
+
+                if batch.count >= 4 {
+                    self?.model.setThumbnails(batch)
+                    batch.removeAll()
+                }
+            }
+
+            if !batch.isEmpty {
+                self?.model.setThumbnails(batch)
             }
         }
     }
@@ -87,7 +100,9 @@ final class WindowPickerPanel: NSObject, NSWindowDelegate {
         continuation.resume(returning: result)
     }
 
-    /// The red close button (or Cmd-W) resolves as a cancel.
+    /// The red close button (or Cmd-W) resolves as a cancel. Clicking away is NOT a
+    /// dismiss — the class contract above promises an explicit panel (the user may
+    /// alt-tab to double-check the target window before picking it).
     nonisolated func windowWillClose(_ notification: Notification) {
         MainActor.assumeIsolated { finish(with: nil) }
     }
@@ -98,13 +113,30 @@ final class WindowPickerPanel: NSObject, NSWindowDelegate {
         let ownBundleID = Bundle.main.bundleIdentifier
         // content.windows is front-to-back, so the grid mirrors the on-screen z-order.
         return content.windows.compactMap { window in
-            guard window.isOnScreen,
-                  window.windowLayer == 0,
-                  window.owningApplication?.bundleIdentifier != ownBundleID,
+            // No title requirement: borderless/exclusive-fullscreen render windows (games)
+            // often report an empty title — the grid cell falls back to the app name.
+            guard window.owningApplication?.bundleIdentifier != ownBundleID,
                   window.frame.width >= 80, window.frame.height >= 80
             else { return nil }
+
             let pid = window.owningApplication?.processID
-            let icon = pid.flatMap { NSRunningApplication(processIdentifier: $0)?.icon }
+            let runningApp = pid.flatMap { NSRunningApplication(processIdentifier: $0) }
+
+            // Only allow windows that belong to a standard user-facing GUI application.
+            // This filters out menu bar apps, background daemons, tooltips, and the Desktop,
+            // preventing SCK from choking on hundreds of invisible/uncapturable windows.
+            guard let runningApp, runningApp.activationPolicy == .regular else {
+                return nil
+            }
+            // The cache queries with onScreenWindowsOnly: false so a fullscreen surface
+            // living on another Space stays pickable — but ordinary off-screen/minimized
+            // windows can't deliver frames, so only display-sized ones pass.
+            if !window.isOnScreen {
+                guard content.displays.contains(where: {
+                    window.frame.width >= $0.frame.width - 2 && window.frame.height >= $0.frame.height - 2
+                }) else { return nil }
+            }
+            let icon = runningApp.icon
             return PickableWindow(
                 id: window.windowID,
                 window: window,
@@ -136,6 +168,14 @@ final class WindowPickerModel: ObservableObject {
     func setThumbnail(_ image: NSImage, for id: CGWindowID) {
         guard let index = windows.firstIndex(where: { $0.id == id }) else { return }
         windows[index].thumbnail = image
+    }
+
+    func setThumbnails(_ items: [(CGWindowID, NSImage)]) {
+        for (id, image) in items {
+            if let index = windows.firstIndex(where: { $0.id == id }) {
+                windows[index].thumbnail = image
+            }
+        }
     }
 }
 
@@ -219,6 +259,7 @@ private struct WindowCell: View {
     let action: () -> Void
 
     @State private var hovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Button(action: action) {
@@ -254,9 +295,12 @@ private struct WindowCell: View {
             .contentShape(RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
-        .scaleEffect(hovering ? 1.02 : 1)
-        .animation(.easeOut(duration: 0.14), value: hovering)
+        .scaleEffect(hovering && !reduceMotion ? 1.02 : 1)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: hovering)
         .onHover { hovering = $0 }
+        .accessibilityLabel(item.title.isEmpty ? item.appName : item.title)
+        .accessibilityValue(item.title.isEmpty ? "" : item.appName)
+        .accessibilityHint("Bu pencereyi kaydetmek için seç")
     }
 
     private var thumbnail: some View {

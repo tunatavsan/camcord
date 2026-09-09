@@ -18,9 +18,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let captureActiveWindowItem = NSMenuItem(title: "Aktif Pencereyi Çek", action: nil, keyEquivalent: "")
     private let captureFullScreenItem = NSMenuItem(title: "Tüm Ekranı Çek", action: nil, keyEquivalent: "")
     private let captureTextItem = NSMenuItem(title: "Metni Çek (OCR)", action: nil, keyEquivalent: "")
+    private let captureScrollingItem = NSMenuItem(title: "Kaydırmalı Çekim…", action: nil, keyEquivalent: "")
     private let captureTextFromFileItem = NSMenuItem(title: "Görüntüden Metni Çıkar…", action: nil, keyEquivalent: "")
     private let recordToggleItem = NSMenuItem(title: "Kayda Başla…", action: nil, keyEquivalent: "")
     private let recordFullScreenItem = NSMenuItem(title: "Tüm Ekranı Kaydet", action: nil, keyEquivalent: "")
+    private let showPanelItem = NSMenuItem(title: "Kayıt Panelini Aç", action: nil, keyEquivalent: "")
     private let pauseResumeItem = NSMenuItem(title: "Kaydı Duraklat", action: nil, keyEquivalent: "")
     private let screenRecordingStatusItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let requestScreenRecordingItem = NSMenuItem(title: "Ekran Kaydı İzni İste…", action: nil, keyEquivalent: "")
@@ -34,6 +36,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     /// Left-click surface (the panel); wired by AppDelegate. Right-click opens the
     /// context menu with the permission/login rows.
     var onPrimaryClick: (() -> Void)?
+    var onShowPanel: (() -> Void)?
 
     /// Anchor for the popover panel.
     var anchorButton: NSStatusBarButton? { statusItem.button }
@@ -85,6 +88,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         captureFullScreenItem.setShortcut(for: .captureFullScreen)
         menu.addItem(captureFullScreenItem)
 
+        captureScrollingItem.target = self
+        captureScrollingItem.action = #selector(captureScrolling)
+        captureScrollingItem.setShortcut(for: .captureScrolling)
+        menu.addItem(captureScrollingItem)
+
         captureTextItem.target = self
         captureTextItem.action = #selector(captureTextRegion)
         captureTextItem.setShortcut(for: .captureTextRegion)
@@ -100,10 +108,14 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         // owner can bind pause/resume from Settings.
         recordToggleItem.target = self
         recordToggleItem.action = #selector(toggleRecording)
+        recordToggleItem.setShortcut(for: .toggleRecording)
         menu.addItem(recordToggleItem)
 
         recordFullScreenItem.target = self
         recordFullScreenItem.action = #selector(recordFullScreen)
+        if NSScreen.screens.count > 1 {
+            recordFullScreenItem.toolTip = "İmlecin bulunduğu ekran kaydedilir"
+        }
         menu.addItem(recordFullScreenItem)
 
         pauseResumeItem.target = self
@@ -111,6 +123,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         pauseResumeItem.setShortcut(for: .pauseRecording)
         pauseResumeItem.isHidden = true
         menu.addItem(pauseResumeItem)
+        showPanelItem.target = self
+        showPanelItem.action = #selector(showRecordingPanel)
+        menu.addItem(showPanelItem)
 
         menu.addItem(.separator())
 
@@ -172,12 +187,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     private func showContextMenu() {
-        statusItem.menu = menu
-        statusItem.button?.performClick(nil)
-        // Detach right away so the next left-click goes back to the panel.
-        DispatchQueue.main.async { [weak self] in
-            self?.statusItem.menu = nil
-        }
+        guard let button = statusItem.button else { return }
+        // Pop the menu cleanly without temporarily replacing the status item's main menu
+        // and relying on async dispatch timing.
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.minY + 4), in: button)
     }
 
     // MARK: - NSMenuDelegate
@@ -238,7 +251,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     func flashFailure() {
         guard let button = statusItem.button else { return }
         failureFlashTask?.cancel()
-        button.contentTintColor = .systemRed
+        if recordingController.uiState == .idle {
+            button.contentTintColor = .systemRed
+        }
         failureFlashTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled else { return }
@@ -252,7 +267,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     func flashSuccess() {
         guard let button = statusItem.button else { return }
         failureFlashTask?.cancel()
-        button.contentTintColor = .systemGreen
+        if recordingController.uiState == .idle {
+            button.contentTintColor = .systemGreen
+        }
         failureFlashTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(220))
             guard !Task.isCancelled else { return }
@@ -266,8 +283,23 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         guard let button = statusItem.button else { return }
         switch recordingController.uiState {
         case .idle: button.contentTintColor = nil
-        case .recording: button.contentTintColor = .systemRed
-        case .paused: button.contentTintColor = .systemOrange
+        case .recording: button.contentTintColor = nil
+        case .paused: button.contentTintColor = nil
+        }
+    }
+
+    private var lastUIState: RecordingController.UIState?
+    private var lastElapsed: String?
+
+    func setPreparing(_ preparing: Bool) {
+        if preparing, lastUIState == nil || lastUIState == .idle {
+            statusItem.button?.image = Self.indicatorImage(elapsed: "…", color: .systemGray, paused: false)
+            statusItem.button?.toolTip = "Kayıt hazırlanıyor"
+        } else if !preparing {
+            let state = lastUIState ?? .idle
+            lastUIState = nil
+            setRecordingUI(state, elapsed: lastElapsed)
+            statusItem.button?.toolTip = "Camcord"
         }
     }
 
@@ -277,6 +309,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     /// clearly legible on the menu bar instead of the default (near-invisible) label.
     func setRecordingUI(_ state: RecordingController.UIState, elapsed: String?) {
         guard let button = statusItem.button else { return }
+
+        // Optimize: skip rendering and menu updates if nothing changed.
+        guard state != lastUIState || elapsed != lastElapsed else { return }
+
+        let stateChanged = (state != lastUIState)
+        lastUIState = state
+        lastElapsed = elapsed
         switch state {
         case .idle:
             let image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Camcord")
@@ -285,58 +324,66 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             button.contentTintColor = nil
             button.attributedTitle = NSAttributedString(string: "")
         case .recording:
-            button.attributedTitle = NSAttributedString(string: "")
+            button.title = ""
             button.contentTintColor = nil
             button.imagePosition = .imageOnly
-            button.image = Self.indicatorImage(elapsed: elapsed ?? "", color: .systemRed, paused: false)
+            button.image = Self.indicatorImage(elapsed: elapsed ?? "0:00", color: .systemRed, paused: false)
         case .paused:
-            button.attributedTitle = NSAttributedString(string: "")
+            button.title = ""
             button.contentTintColor = nil
             button.imagePosition = .imageOnly
-            button.image = Self.indicatorImage(elapsed: elapsed ?? "", color: .systemOrange, paused: true)
+            button.image = Self.indicatorImage(elapsed: elapsed ?? "0:00", color: .systemOrange, paused: true)
         }
-        refreshRecordingItems()
+
+        if stateChanged {
+            refreshRecordingItems()
+        }
     }
 
-    /// The recording indicator (dot + elapsed) rendered as a NON-template image in
-    /// exact colors. The menu bar's vibrancy mutes template tints / attributed-title
-    /// colors toward the bar color (why a plain red title read as near-black); a
-    /// non-template image is drawn as-is, so a vivid glowing red survives.
+    /// A highly visible "recording pill": solid color background, white dot, white text.
+    /// Rendered as a non-template image so it ignores macOS menu bar tinting and stays vivid.
     private static func indicatorImage(elapsed: String, color: NSColor, paused: Bool) -> NSImage {
-        let glow = NSShadow()
-        glow.shadowColor = color.withAlphaComponent(0.85)
-        glow.shadowBlurRadius = 3.5
-        glow.shadowOffset = .zero
         let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
+        let textColor: NSColor = .white
         let text = NSAttributedString(
             string: elapsed,
-            attributes: [.foregroundColor: color, .font: font, .shadow: glow]
+            attributes: [.foregroundColor: textColor, .font: font]
         )
         let textSize = text.size()
-        let dot: CGFloat = 7
+
+        let dot: CGFloat = 8
         let gap: CGFloat = 5
-        let pad: CGFloat = 5  // room for the glow bleed
-        let height = max(textSize.height, dot) + pad * 2
-        let width = pad + dot + gap + ceil(textSize.width) + pad
+        let hPad: CGFloat = 8
+        let height: CGFloat = 22 // standard macOS menu bar height
+        let pillHeight: CGFloat = 18
+        let width = hPad + dot + gap + ceil(textSize.width) + hPad
 
         let image = NSImage(size: NSSize(width: width, height: height))
         image.lockFocus()
         NSGraphicsContext.saveGraphicsState()
-        glow.set()
+
+        // Draw the pill background
         color.setFill()
-        let dotRect = NSRect(x: pad, y: (height - dot) / 2, width: dot, height: dot)
+        let pillRect = NSRect(x: 0, y: (height - pillHeight) / 2, width: width, height: pillHeight)
+        let pillPath = NSBezierPath(roundedRect: pillRect, xRadius: pillHeight / 2, yRadius: pillHeight / 2)
+        pillPath.fill()
+
+        // Draw the dot or pause bars
+        textColor.setFill()
+        let dotRect = NSRect(x: hPad, y: (height - dot) / 2, width: dot, height: dot)
         if paused {
-            // Two bars for the pause glyph.
             let barW: CGFloat = 2, barGap: CGFloat = 2
-            let barsH = dot
-            let y = (height - barsH) / 2
-            NSBezierPath(rect: NSRect(x: pad, y: y, width: barW, height: barsH)).fill()
-            NSBezierPath(rect: NSRect(x: pad + barW + barGap, y: y, width: barW, height: barsH)).fill()
+            NSBezierPath(rect: NSRect(x: hPad + 1, y: dotRect.minY, width: barW, height: dot)).fill()
+            NSBezierPath(rect: NSRect(x: hPad + 1 + barW + barGap, y: dotRect.minY, width: barW, height: dot)).fill()
         } else {
             NSBezierPath(ovalIn: dotRect).fill()
         }
+
         NSGraphicsContext.restoreGraphicsState()
-        text.draw(at: NSPoint(x: pad + dot + gap, y: (height - textSize.height) / 2))
+
+        // Draw the text
+        text.draw(at: NSPoint(x: hPad + dot + gap, y: (height - textSize.height) / 2))
+
         image.unlockFocus()
         image.isTemplate = false
         return image
@@ -380,6 +427,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
     }
 
+    @objc private func showRecordingPanel() {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(100))
+            onShowPanel?()
+        }
+    }
+
     @objc private func pauseResumeRecording() {
         recordingController.pauseResume()
     }
@@ -416,6 +470,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
     }
 
+    @objc private func captureScrolling() {
+        Task {
+            try? await Task.sleep(for: .milliseconds(200))
+            await coordinator.captureScrollingInteractive()
+        }
+    }
+
     /// OCR an image the user already has: pick a file, extract its text to the clipboard.
     @objc private func captureTextFromFile() {
         let panel = NSOpenPanel()
@@ -425,8 +486,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         panel.allowedContentTypes = [.image]
         panel.prompt = "Metni Çıkar"
         panel.message = "Metnini çıkarmak istediğin görüntüyü seç"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        coordinator.captureTextFromImageFile(url)
+        panel.begin { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            self?.coordinator.captureTextFromImageFile(url)
+        }
     }
 
     // MARK: - Actions

@@ -1,11 +1,17 @@
 import Foundation
 
 /// How the recording's pixel dimensions relate to the source's native (Retina) size.
-enum ResolutionScale: String, Codable, CaseIterable {
+enum ResolutionScale: String, Codable, CaseIterable, Sendable {
     /// Full native pixels (Retina) — sharpest, largest files.
     case native
     /// Downscaled to logical points (1x) — smaller files.
     case oneX
+}
+
+/// The dynamic range of the recording. HDR requires a 10-bit codec (HEVC/ProRes) and an HDR display.
+enum DynamicRange: String, Codable, CaseIterable {
+    case sdr
+    case hdr
 }
 
 /// A one-tap quality preset spanning "smallest efficient file" to "production master".
@@ -54,6 +60,10 @@ struct RecordingSettings: Codable, Equatable {
     /// mixing guarantees the mic is heard everywhere. Turn off to keep separate tracks
     /// for editing.
     var mixAudioTracks: Bool
+    /// Software gain is independent of the current microphone hardware.
+    var systemAudioGainDB: Double
+    var microphoneGainDB: Double
+    var camera: CameraOptions
 
     // Safety limits
     /// Auto-stop after this many minutes (0 = unlimited). Guards against a forgotten
@@ -82,8 +92,13 @@ struct RecordingSettings: Codable, Equatable {
     var bitrateMbps: Int
     var fps: Int
     var resolutionScale: ResolutionScale
+    var dynamicRange: DynamicRange
     /// Whether the pointer is drawn into the recording.
     var showsCursor: Bool
+    /// 3-2-1 countdown before a full-screen recording starts. Opt-in (CleanShot's is
+    /// too): a mandatory delay would tax the quick-capture use, but staged demo
+    /// recordings genuinely want the beat.
+    var countdownEnabled: Bool
 
     // Output
     /// Custom output folder; nil = `~/Movies/camcord`.
@@ -100,6 +115,9 @@ struct RecordingSettings: Codable, Equatable {
         microphone: Bool = true,
         microphoneDeviceID: String? = nil,
         mixAudioTracks: Bool = true,
+        systemAudioGainDB: Double = 0,
+        microphoneGainDB: Double = 0,
+        camera: CameraOptions = CameraOptions(),
         maxDurationMinutes: Int = 0,
         stopWhenDiskLow: Bool = true,
         dndEnabled: Bool = true,
@@ -111,7 +129,9 @@ struct RecordingSettings: Codable, Equatable {
         bitrateMbps: Int = 20,
         fps: Int = 60,
         resolutionScale: ResolutionScale = .native,
+        dynamicRange: DynamicRange = .sdr,
         showsCursor: Bool = true,
+        countdownEnabled: Bool = false,
         outputDirectoryPath: String? = nil,
         filenamePrefix: String = "camcord",
         windowGlowEnabled: Bool = true
@@ -120,6 +140,9 @@ struct RecordingSettings: Codable, Equatable {
         self.microphone = microphone
         self.microphoneDeviceID = microphoneDeviceID
         self.mixAudioTracks = mixAudioTracks
+        self.systemAudioGainDB = systemAudioGainDB
+        self.microphoneGainDB = microphoneGainDB
+        self.camera = camera
         self.maxDurationMinutes = maxDurationMinutes
         self.stopWhenDiskLow = stopWhenDiskLow
         self.dndEnabled = dndEnabled
@@ -131,7 +154,9 @@ struct RecordingSettings: Codable, Equatable {
         self.bitrateMbps = bitrateMbps
         self.fps = fps
         self.resolutionScale = resolutionScale
+        self.dynamicRange = dynamicRange
         self.showsCursor = showsCursor
+        self.countdownEnabled = countdownEnabled
         self.outputDirectoryPath = outputDirectoryPath
         self.filenamePrefix = filenamePrefix
         self.windowGlowEnabled = windowGlowEnabled
@@ -140,6 +165,14 @@ struct RecordingSettings: Codable, Equatable {
     /// True when a recording will produce two separate audio tracks that should be
     /// collapsed into one at finalize.
     var shouldMixAudioTracks: Bool { mixAudioTracks && systemAudio && microphone }
+
+    var resolvedSystemAudioGainDB: Double {
+        systemAudioGainDB.isFinite ? min(12, max(-60, systemAudioGainDB)) : 0
+    }
+
+    var resolvedMicrophoneGainDB: Double {
+        microphoneGainDB.isFinite ? min(24, max(-24, microphoneGainDB)) : 0
+    }
 
     /// The codec actually used: the profile's codec, or the custom one.
     var resolvedCodec: VideoCodecChoice { profile.codec ?? codec }
@@ -161,6 +194,9 @@ struct RecordingSettings: Codable, Equatable {
         microphone = try c.decodeIfPresent(Bool.self, forKey: .microphone) ?? d.microphone
         microphoneDeviceID = try c.decodeIfPresent(String.self, forKey: .microphoneDeviceID)
         mixAudioTracks = try c.decodeIfPresent(Bool.self, forKey: .mixAudioTracks) ?? d.mixAudioTracks
+        systemAudioGainDB = try c.decodeIfPresent(Double.self, forKey: .systemAudioGainDB) ?? d.systemAudioGainDB
+        microphoneGainDB = try c.decodeIfPresent(Double.self, forKey: .microphoneGainDB) ?? d.microphoneGainDB
+        camera = try c.decodeIfPresent(CameraOptions.self, forKey: .camera) ?? d.camera
         maxDurationMinutes = try c.decodeIfPresent(Int.self, forKey: .maxDurationMinutes) ?? d.maxDurationMinutes
         stopWhenDiskLow = try c.decodeIfPresent(Bool.self, forKey: .stopWhenDiskLow) ?? d.stopWhenDiskLow
         dndEnabled = try c.decodeIfPresent(Bool.self, forKey: .dndEnabled) ?? d.dndEnabled
@@ -177,7 +213,9 @@ struct RecordingSettings: Codable, Equatable {
         bitrateMbps = try c.decodeIfPresent(Int.self, forKey: .bitrateMbps) ?? d.bitrateMbps
         fps = try c.decodeIfPresent(Int.self, forKey: .fps) ?? d.fps
         resolutionScale = try c.decodeIfPresent(ResolutionScale.self, forKey: .resolutionScale) ?? d.resolutionScale
+        dynamicRange = try c.decodeIfPresent(DynamicRange.self, forKey: .dynamicRange) ?? d.dynamicRange
         showsCursor = try c.decodeIfPresent(Bool.self, forKey: .showsCursor) ?? d.showsCursor
+        countdownEnabled = try c.decodeIfPresent(Bool.self, forKey: .countdownEnabled) ?? d.countdownEnabled
         outputDirectoryPath = try c.decodeIfPresent(String.self, forKey: .outputDirectoryPath)
         filenamePrefix = try c.decodeIfPresent(String.self, forKey: .filenamePrefix) ?? d.filenamePrefix
         windowGlowEnabled = try c.decodeIfPresent(Bool.self, forKey: .windowGlowEnabled) ?? d.windowGlowEnabled
@@ -193,6 +231,9 @@ struct RecordingSettings: Codable, Equatable {
         if microphone != old.microphone { r.microphone = microphone }
         if microphoneDeviceID != old.microphoneDeviceID { r.microphoneDeviceID = microphoneDeviceID }
         if mixAudioTracks != old.mixAudioTracks { r.mixAudioTracks = mixAudioTracks }
+        if systemAudioGainDB != old.systemAudioGainDB { r.systemAudioGainDB = systemAudioGainDB }
+        if microphoneGainDB != old.microphoneGainDB { r.microphoneGainDB = microphoneGainDB }
+        if camera != old.camera { r.camera = camera }
         if maxDurationMinutes != old.maxDurationMinutes { r.maxDurationMinutes = maxDurationMinutes }
         if stopWhenDiskLow != old.stopWhenDiskLow { r.stopWhenDiskLow = stopWhenDiskLow }
         if dndEnabled != old.dndEnabled { r.dndEnabled = dndEnabled }
@@ -204,7 +245,9 @@ struct RecordingSettings: Codable, Equatable {
         if bitrateMbps != old.bitrateMbps { r.bitrateMbps = bitrateMbps }
         if fps != old.fps { r.fps = fps }
         if resolutionScale != old.resolutionScale { r.resolutionScale = resolutionScale }
+        if dynamicRange != old.dynamicRange { r.dynamicRange = dynamicRange }
         if showsCursor != old.showsCursor { r.showsCursor = showsCursor }
+        if countdownEnabled != old.countdownEnabled { r.countdownEnabled = countdownEnabled }
         if outputDirectoryPath != old.outputDirectoryPath { r.outputDirectoryPath = outputDirectoryPath }
         if filenamePrefix != old.filenamePrefix { r.filenamePrefix = filenamePrefix }
         if windowGlowEnabled != old.windowGlowEnabled { r.windowGlowEnabled = windowGlowEnabled }
@@ -212,6 +255,7 @@ struct RecordingSettings: Codable, Equatable {
     }
 
     static let defaultsKey = "recordingSettings"
+    static let didChangeNotification = Notification.Name("dev.tavsan.camcord.recordingSettingsChanged")
 
     static func load(from defaults: UserDefaults) -> RecordingSettings {
         guard
@@ -226,6 +270,7 @@ struct RecordingSettings: Codable, Equatable {
     func save(to defaults: UserDefaults) {
         guard let data = try? JSONEncoder().encode(self) else { return }
         defaults.set(data, forKey: Self.defaultsKey)
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: defaults)
     }
 
     // MARK: - Output location & naming
@@ -291,7 +336,7 @@ struct RecordingSettings: Codable, Equatable {
 
 /// Screenshot preferences (separate from recording): quality, and optionally saving a
 /// copy of every screenshot to a folder (distinct from where videos go).
-struct ScreenshotSettings: Codable, Equatable {
+struct ScreenshotSettings: Codable, Equatable, Sendable {
     var resolutionScale: ResolutionScale
     /// When true, every screenshot is also written to `saveDirectory` (in addition to
     /// the clipboard).

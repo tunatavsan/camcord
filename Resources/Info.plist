@@ -15,13 +15,15 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>0.2.10</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>13</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>15.2</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Camcord shows your camera preview and includes it in recordings only when you enable the camera.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Camcord records the microphone when you include it in a screen recording.</string>
 	<key>NSScreenCaptureUsageDescription</key>

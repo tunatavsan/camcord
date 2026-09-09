@@ -7,6 +7,32 @@ import Testing
 struct PauseClockTests {
     private static let frameDuration = CMTime(value: 1, timescale: 60)
 
+    @Test("resuming a static screen never moves the audio timeline backwards")
+    func staticScreenPreservesAudioBeforePause() {
+        var clock = PauseClock(frameDuration: Self.frameDuration)
+        _ = clock.shouldAppend(pts: .zero, isVideo: true)
+        let lastAudio = CMTime(seconds: 4, preferredTimescale: 48_000)
+        _ = clock.shouldAppend(pts: lastAudio, isVideo: false)
+        clock.pause()
+        clock.resume()
+        let resumed = clock.shouldAppend(pts: CMTime(seconds: 8, preferredTimescale: 60), isVideo: true)
+        #expect(resumed != nil)
+        #expect(resumed! >= lastAudio)
+        let audio = clock.shouldAppend(pts: CMTime(seconds: 8.01, preferredTimescale: 48_000), isVideo: false)
+        #expect(audio != nil && audio! > lastAudio)
+    }
+
+    @Test("audio can resume while the screen remains completely unchanged")
+    func audioResumesWithoutWaitingForChangedScreenPixels() {
+        var clock = PauseClock(frameDuration: Self.frameDuration)
+        _ = clock.shouldAppend(pts: .zero, isVideo: true)
+        _ = clock.shouldAppend(pts: CMTime(seconds: 4, preferredTimescale: 48_000), isVideo: false)
+        clock.pause()
+        clock.resume()
+        let resumed = clock.shouldAppend(pts: CMTime(seconds: 8, preferredTimescale: 48_000), isVideo: false)
+        #expect(resumed != nil)
+    }
+
     // MARK: - Session start
 
     @Test("session starts on the first video buffer; audio arriving before it is dropped")
@@ -76,6 +102,61 @@ struct PauseClockTests {
         #expect(retimedVideo2 == CMTime(value: 2, timescale: 60))
     }
 
+    @Test("explicit clock boundaries preserve active static time around a pause")
+    func explicitBoundariesPreserveStaticTime() {
+        var clock = PauseClock(frameDuration: Self.frameDuration)
+        _ = clock.shouldAppend(pts: .zero, isVideo: true)
+
+        // Two active seconds with no complete frame, two paused seconds, then one
+        // more active second before pixels change at source t=5.
+        clock.pause(atSourceTime: CMTime(seconds: 2, preferredTimescale: 600))
+        clock.resume(atSourceTime: CMTime(seconds: 4, preferredTimescale: 600))
+
+        #expect(clock.shouldAppend(
+            pts: CMTime(seconds: 5, preferredTimescale: 600), isVideo: true
+        ) == CMTime(seconds: 3, preferredTimescale: 600))
+        #expect(clock.endTime(
+            atSourceTime: CMTime(seconds: 6, preferredTimescale: 600)
+        ) == CMTime(seconds: 4, preferredTimescale: 600))
+    }
+
+    @Test("ending while paused excludes time after the explicit pause boundary")
+    func pausedEndUsesPauseBoundary() {
+        var clock = PauseClock(frameDuration: Self.frameDuration)
+        _ = clock.shouldAppend(pts: .zero, isVideo: true)
+        clock.pause(atSourceTime: CMTime(seconds: 2, preferredTimescale: 600))
+
+        #expect(clock.endTime(
+            atSourceTime: CMTime(seconds: 20, preferredTimescale: 600)
+        ) == CMTime(seconds: 2, preferredTimescale: 600))
+    }
+
+    @Test("an accepted audio packet straddling Pause is preserved without overlap after Resume")
+    func straddlingAudioPacketSetsExplicitResumeFloor() {
+        var clock = PauseClock(frameDuration: Self.frameDuration)
+        _ = clock.shouldAppend(pts: .zero, isVideo: true)
+        let audioPTS = CMTime(seconds: 1.99, preferredTimescale: 48_000)
+        let audioDuration = CMTime(seconds: 0.04, preferredTimescale: 48_000)
+        _ = clock.shouldAppend(pts: audioPTS, isVideo: false, duration: audioDuration)
+
+        // The packet was already accepted and ends 30 ms after the click boundary.
+        // Preserve it whole, then make every resumed source share that packet end.
+        clock.pause(atSourceTime: CMTime(seconds: 2, preferredTimescale: 48_000))
+        clock.resume(atSourceTime: CMTime(seconds: 4, preferredTimescale: 48_000))
+        let packetEnd = CMTimeAdd(audioPTS, audioDuration)
+        #expect(clock.shouldAppend(
+            pts: CMTime(seconds: 4, preferredTimescale: 48_000),
+            isVideo: false,
+            duration: audioDuration
+        ) == packetEnd)
+        #expect(clock.shouldAppend(
+            pts: CMTime(seconds: 3.99, preferredTimescale: 48_000), isVideo: true
+        ) == nil)
+        #expect(clock.shouldAppend(
+            pts: CMTime(seconds: 4.01, preferredTimescale: 48_000), isVideo: true
+        ) == CMTimeAdd(packetEnd, CMTime(seconds: 0.01, preferredTimescale: 48_000)))
+    }
+
     // MARK: - Multiple pause/resume cycles
 
     @Test("two pause/resume cycles accumulate their offsets")
@@ -103,34 +184,37 @@ struct PauseClockTests {
 
     // MARK: - Audio arriving before the resume-anchoring video buffer
 
-    @Test(
-        """
-        audio that arrives after resume() but before the re-anchoring video buffer is DROPPED. \
-        Retiming it with the stale pre-pause offset would append a PTS a full pause-length in \
-        the future, and the next (re-anchored) audio buffer would then move BACKWARD on the \
-        same writer input -- audio inputs require monotonically increasing PTS, so that one \
-        stray buffer could fail the entire AVAssetWriter. Dropping bounds the loss to <1 frame.
-        """
-    )
-    func audioBeforeVideoAfterResumeIsDropped() {
+    @Test("first post-pause audio establishes one shared offset before the next video frame")
+    func audioBeforeVideoAfterResumeReanchorsOnce() {
         var clock = PauseClock(frameDuration: Self.frameDuration)
-        _ = clock.shouldAppend(pts: CMTime(value: 0, timescale: 60), isVideo: true)
-
+        _ = clock.shouldAppend(pts: .zero, isVideo: true)
         clock.pause()
         clock.resume()
+        #expect(clock.shouldAppend(pts: CMTime(value: 250, timescale: 60), isVideo: false)
+                == CMTime(value: 1, timescale: 60))
+        // Video appears later because the screen was static. It retains its position
+        // relative to the resumed speech; it must not recalculate the shared offset.
+        #expect(clock.shouldAppend(pts: CMTime(value: 300, timescale: 60), isVideo: true)
+                == CMTime(value: 51, timescale: 60))
+        #expect(clock.shouldAppend(pts: CMTime(value: 301, timescale: 60), isVideo: false)
+                == CMTime(value: 52, timescale: 60))
+    }
 
-        // Audio sneaks in before the resume-anchoring video buffer: dropped.
-        let earlyAudioPTS = CMTime(value: 250, timescale: 60)
-        #expect(clock.shouldAppend(pts: earlyAudioPTS, isVideo: false) == nil)
-
-        // The next video buffer re-anchors and establishes the real offset going forward.
-        let resumeVideoPTS = CMTime(value: 300, timescale: 60)
-        #expect(clock.shouldAppend(pts: resumeVideoPTS, isVideo: true) == CMTime(value: 1, timescale: 60))
-
-        // Post-anchor audio is retimed with the fresh offset -- monotonic with the
-        // video timeline, never behind a previously appended audio PTS.
-        let laterAudioPTS = CMTime(value: 301, timescale: 60)
-        #expect(clock.shouldAppend(pts: laterAudioPTS, isVideo: false) == CMTime(value: 2, timescale: 60))
+    @Test("resume preserves an entire PCM block and rejects callbacks older than its anchor")
+    func audioDurationAndDelayedCallbacks() {
+        var clock = PauseClock(frameDuration: Self.frameDuration)
+        _ = clock.shouldAppend(pts: .zero, isVideo: true)
+        let audioPTS = CMTime(value: 192_000, timescale: 48_000)
+        let audioDuration = CMTime(value: 1_024, timescale: 48_000)
+        _ = clock.shouldAppend(pts: audioPTS, isVideo: false, duration: audioDuration)
+        clock.pause()
+        clock.resume()
+        let resumePTS = CMTime(seconds: 8, preferredTimescale: 48_000)
+        let expected = CMTimeAdd(audioPTS, audioDuration)
+        #expect(clock.shouldAppend(pts: resumePTS, isVideo: false, duration: audioDuration) == expected)
+        #expect(clock.shouldAppend(pts: CMTimeSubtract(resumePTS, audioDuration), isVideo: true) == nil)
+        #expect(clock.shouldAppend(pts: CMTimeAdd(resumePTS, audioDuration), isVideo: true)
+                == CMTimeAdd(expected, audioDuration))
     }
 
     // MARK: - Pause/resume completing before the session starts
@@ -161,6 +245,28 @@ struct PauseClockTests {
         // Second video frame passes through unchanged — no spurious re-anchor.
         let v1 = CMTime(value: 110, timescale: 60)
         #expect(clock.shouldAppend(pts: v1, isVideo: true) == v1)
+    }
+
+    @Test("an explicit pre-session resume floor rejects cue-era callbacks delivered late")
+    func preSessionResumeFloorRejectsDelayedCallbacks() {
+        var clock = PauseClock(frameDuration: Self.frameDuration)
+        clock.pause()
+        clock.resume(atSourceTime: CMTime(seconds: 11, preferredTimescale: 600))
+
+        #expect(clock.shouldAppend(
+            pts: CMTime(seconds: 10.9, preferredTimescale: 600), isVideo: true
+        ) == nil)
+        #expect(clock.shouldAppend(
+            pts: CMTime(seconds: 11, preferredTimescale: 600), isVideo: false
+        ) == nil)
+        #expect(clock.shouldAppend(
+            pts: CMTime(seconds: 11, preferredTimescale: 600), isVideo: true
+        ) == CMTime(seconds: 11, preferredTimescale: 600))
+        // A microphone callback can be delivered after the accepted screen frame.
+        // Its raw timestamp still belongs to the cue interval and must stay rejected.
+        #expect(clock.shouldAppend(
+            pts: CMTime(seconds: 10.95, preferredTimescale: 600), isVideo: false
+        ) == nil)
     }
 
     @Test("retiming stays consistent across realistic mixed timescales (host-time video, 48kHz audio)")

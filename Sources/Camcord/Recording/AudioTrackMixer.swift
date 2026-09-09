@@ -3,7 +3,7 @@ import os
 
 /// Collapses a finished recording that has MORE THAN ONE audio track into an equivalent
 /// file with **one** audio track — the source's audio tracks mixed (summed) together —
-/// and the video passed through byte-for-byte.
+/// and every video track passed through without re-encoding.
 ///
 /// Why this exists: a movie with two separate audio tracks (system audio + microphone)
 /// plays only the FIRST track in most players and platforms (QuickTime's Quick Look,
@@ -13,8 +13,8 @@ import os
 /// `RecordingSettings.mixAudioTracks` off.
 ///
 /// The mixing is done by Apple's `AVAssetReaderAudioMixOutput` (sample-accurate, resamples
-/// and sums at unity gain) — we never hand-roll DSP. The video track is copied with
-/// `outputSettings: nil` (passthrough): no re-encode, no quality loss, so the cost is a
+/// and sums at unity gain), then the shared PCM processor peak-protects the sum. Video
+/// tracks use `outputSettings: nil` (passthrough): no re-encode, no quality loss, so the cost is a
 /// single audio re-encode + an I/O copy of the (already-compressed) video, done during the
 /// existing "finishing…" phase.
 enum AudioTrackMixer {
@@ -37,7 +37,6 @@ enum AudioTrackMixer {
         let audioTracks = try await asset.loadTracks(withMediaType: .audio)
         guard audioTracks.count >= 2 else { throw MixError.notNeeded }
         let videoTracks = try await asset.loadTracks(withMediaType: .video)
-        let videoFormat = try await videoTracks.first?.load(.formatDescriptions).first
 
         let temp = url.deletingLastPathComponent()
             .appendingPathComponent(".camcord-mix-\(UUID().uuidString)")
@@ -45,8 +44,7 @@ enum AudioTrackMixer {
 
         let session = MixSession(
             asset: asset,
-            videoTrack: videoTracks.first,
-            videoFormat: videoFormat,
+            videoTracks: videoTracks,
             audioTracks: audioTracks,
             destination: temp,
             fileType: fileType
@@ -76,8 +74,7 @@ enum AudioTrackMixer {
 /// mutable state below is single-threaded.
 private final class MixSession: @unchecked Sendable {
     private let asset: AVURLAsset
-    private let videoTrack: AVAssetTrack?
-    private let videoFormat: CMFormatDescription?
+    private let videoTracks: [AVAssetTrack]
     private let audioTracks: [AVAssetTrack]
     private let destination: URL
     private let fileType: AVFileType
@@ -91,10 +88,16 @@ private final class MixSession: @unchecked Sendable {
     private final class Pipe {
         let input: AVAssetWriterInput
         let output: AVAssetReaderOutput
+        let processor: AudioSampleProcessor?
         var finished = false
-        init(input: AVAssetWriterInput, output: AVAssetReaderOutput) {
+        init(
+            input: AVAssetWriterInput,
+            output: AVAssetReaderOutput,
+            processor: AudioSampleProcessor? = nil
+        ) {
             self.input = input
             self.output = output
+            self.processor = processor
         }
     }
 
@@ -107,15 +110,13 @@ private final class MixSession: @unchecked Sendable {
 
     init(
         asset: AVURLAsset,
-        videoTrack: AVAssetTrack?,
-        videoFormat: CMFormatDescription?,
+        videoTracks: [AVAssetTrack],
         audioTracks: [AVAssetTrack],
         destination: URL,
         fileType: AVFileType
     ) {
         self.asset = asset
-        self.videoTrack = videoTrack
-        self.videoFormat = videoFormat
+        self.videoTracks = videoTracks
         self.audioTracks = audioTracks
         self.destination = destination
         self.fileType = fileType
@@ -139,6 +140,15 @@ private final class MixSession: @unchecked Sendable {
         ]
         let mixOutput = AVAssetReaderAudioMixOutput(audioTracks: audioTracks, audioSettings: pcmSettings)
         mixOutput.alwaysCopiesSampleData = false
+        let audioMix = AVMutableAudioMix()
+        var inputParameters: [AVMutableAudioMixInputParameters] = []
+        for track in audioTracks {
+            let params = AVMutableAudioMixInputParameters(track: track)
+            params.setVolume(1, at: .zero)
+            inputParameters.append(params)
+        }
+        audioMix.inputParameters = inputParameters
+        mixOutput.audioMix = audioMix
         guard reader.canAdd(mixOutput) else { throw AudioTrackMixer.MixError.readerSetupFailed(nil) }
         reader.add(mixOutput)
 
@@ -152,16 +162,21 @@ private final class MixSession: @unchecked Sendable {
         audioInput.expectsMediaDataInRealTime = false
         guard writer.canAdd(audioInput) else { throw AudioTrackMixer.MixError.writerSetupFailed(nil) }
         writer.add(audioInput)
-        pipes.append(Pipe(input: audioInput, output: mixOutput))
+        pipes.append(Pipe(input: audioInput, output: mixOutput, processor: AudioSampleProcessor()))
 
-        // --- Video: passthrough (outputSettings nil = no re-encode) ---
-        if let videoTrack {
+        // --- Video: every source track passes through with its track presentation data. ---
+        for videoTrack in videoTracks {
+            guard let videoFormat = try await videoTrack.load(.formatDescriptions).first else {
+                throw AudioTrackMixer.MixError.readerSetupFailed(nil)
+            }
             let output = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: nil)
             output.alwaysCopiesSampleData = false
             guard reader.canAdd(output) else { throw AudioTrackMixer.MixError.readerSetupFailed(nil) }
             reader.add(output)
             let input = AVAssetWriterInput(mediaType: .video, outputSettings: nil, sourceFormatHint: videoFormat)
             input.expectsMediaDataInRealTime = false
+            input.transform = try await videoTrack.load(.preferredTransform)
+            input.metadata = try await videoTrack.load(.metadata)
             guard writer.canAdd(input) else { throw AudioTrackMixer.MixError.writerSetupFailed(nil) }
             writer.add(input)
             pipes.append(Pipe(input: input, output: output))
@@ -169,7 +184,12 @@ private final class MixSession: @unchecked Sendable {
 
         guard reader.startReading() else { throw AudioTrackMixer.MixError.readerSetupFailed(reader.error) }
         guard writer.startWriting() else { throw AudioTrackMixer.MixError.writerSetupFailed(writer.error) }
-        writer.startSession(atSourceTime: .zero)
+        var startTimes: [CMTime] = []
+        for track in videoTracks + audioTracks {
+            startTimes.append(try await track.load(.timeRange).start)
+        }
+        let startTime = startTimes.min(by: { CMTimeCompare($0, $1) < 0 }) ?? .zero
+        writer.startSession(atSourceTime: startTime)
 
         // `continuation` is Sendable, so capturing it directly is fine; every non-Sendable
         // AVFoundation object is reached through `self` (the @unchecked Sendable class).
@@ -177,7 +197,11 @@ private final class MixSession: @unchecked Sendable {
             for index in pipes.indices {
                 pump(pipeIndex: index)
             }
-            group.notify(queue: queue) { [self] in
+            group.notify(queue: queue) { [weak self] in
+                guard let self = self else {
+                    continuation.resume(throwing: AudioTrackMixer.MixError.pumpFailed(nil))
+                    return
+                }
                 if self.reader?.status == .failed {
                     continuation.resume(throwing: AudioTrackMixer.MixError.pumpFailed(self.reader?.error))
                     return
@@ -190,7 +214,11 @@ private final class MixSession: @unchecked Sendable {
                     continuation.resume(throwing: AudioTrackMixer.MixError.writerSetupFailed(nil))
                     return
                 }
-                writer.finishWriting { [self] in
+                writer.finishWriting { [weak self] in
+                    guard let self = self else {
+                        continuation.resume(throwing: AudioTrackMixer.MixError.pumpFailed(nil))
+                        return
+                    }
                     if self.writer?.status == .completed {
                         continuation.resume()
                     } else {
@@ -206,12 +234,13 @@ private final class MixSession: @unchecked Sendable {
     /// boundary and reached through `self.pipes[index]`.
     private func pump(pipeIndex index: Int) {
         group.enter()
-        pipes[index].input.requestMediaDataWhenReady(on: queue) { [self] in
+        pipes[index].input.requestMediaDataWhenReady(on: queue) { [weak self] in
+            guard let self = self else { return }
             let pipe = self.pipes[index]
             while pipe.input.isReadyForMoreMediaData {
                 if pipe.finished { return }
                 if self.firstError != nil {
-                    self.finish(pipe)
+                    self.cancelAllPipes()
                     return
                 }
                 guard let sample = pipe.output.copyNextSampleBuffer() else {
@@ -219,11 +248,27 @@ private final class MixSession: @unchecked Sendable {
                     self.finish(pipe)
                     return
                 }
-                if !pipe.input.append(sample) {
-                    self.firstError = self.writer?.error ?? AudioTrackMixer.MixError.pumpFailed(nil)
-                    self.finish(pipe)
+                let processed: CMSampleBuffer
+                do {
+                    processed = try pipe.processor?.process(sample, gainDB: 0).sampleBuffer ?? sample
+                } catch {
+                    self.firstError = AudioTrackMixer.MixError.pumpFailed(error)
+                    self.cancelAllPipes()
                     return
                 }
+                if !pipe.input.append(processed) {
+                    self.firstError = self.writer?.error ?? AudioTrackMixer.MixError.pumpFailed(nil)
+                    self.cancelAllPipes()
+                    return
+                }
+            }
+        }
+    }
+
+    private func cancelAllPipes() {
+        for pipe in pipes {
+            if !pipe.finished {
+                finish(pipe)
             }
         }
     }
@@ -231,7 +276,9 @@ private final class MixSession: @unchecked Sendable {
     private func finish(_ pipe: Pipe) {
         guard !pipe.finished else { return }
         pipe.finished = true
-        pipe.input.markAsFinished()
+        if self.writer?.status == .writing {
+            pipe.input.markAsFinished()
+        }
         group.leave()
     }
 }

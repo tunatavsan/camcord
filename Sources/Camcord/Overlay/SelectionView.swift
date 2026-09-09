@@ -14,7 +14,7 @@ protocol SelectionViewDelegate: AnyObject {
 
 /// One per screen. Dims its screen 12% black; while the controller reports an active
 /// drag, punches a clear hole at the (screen-local) selection intersection with a
-/// dashed white+black border and a pixel-dimension badge; otherwise, if a window is
+/// accented border and a pixel-dimension badge; otherwise, if a window is
 /// snapped, highlights its frame instead.
 @MainActor
 final class SelectionView: NSView {
@@ -27,35 +27,47 @@ final class SelectionView: NSView {
         didSet {
             highlightLayer.strokeColor = accent.cgColor
             highlightLayer.fillColor = accent.withAlphaComponent(0.14).cgColor
-            needsDisplay = true
+            chromeView.needsDisplay = true
         }
     }
 
-    /// Local-coordinate rect to punch out of the dim + draw the dashed border around.
+    /// Local-coordinate rect to punch out of the dim and outline.
     /// Nil on screens the current cross-screen selection doesn't intersect.
     var selectionRect: CGRect? {
-        didSet { needsDisplay = true }
+        didSet {
+            updateMaskPath()
+            chromeView.needsDisplay = true
+        }
     }
     /// Local-coordinate rect of a window-snap highlight. Nil when not in snap mode
     /// or the snapped window doesn't intersect this screen. Rendered by an animated
     /// CAShapeLayer (rounded like a macOS window, morphs between windows), not draw().
     var highlightRect: CGRect? {
-        didSet { updateHighlightLayer(from: oldValue) }
+        didSet {
+            guard highlightRect != oldValue else { return }
+            updateHighlightLayer(from: oldValue)
+        }
     }
 
     /// macOS windows' corner radius — the highlight matches it.
     private static let windowCornerRadius: CGFloat = 11
     private static let highlightDuration: CFTimeInterval = 0.22
+    private let frozenDesktopLayer = CALayer()
+    private let dimLayer = CALayer()
+    private let maskLayer = CAShapeLayer()
     private let highlightLayer = CAShapeLayer()
+    // NSView.draw paints its backing layer BELOW custom sublayers. Keep drag chrome
+    // in a separate foreground view so an opaque frozen screenshot cannot cover it.
+    private let chromeView = SelectionChromeView()
     /// Dimension badge (local anchor rect + "W x H" pixel text), shown only on the
     /// screen the cursor is currently over.
     var badge: (rect: CGRect, text: String)? {
-        didSet { needsDisplay = true }
+        didSet { chromeView.needsDisplay = true }
     }
     /// The current drag is an OCR (right-button) selection — draw it distinctly (teal
     /// outline + label) so it never looks like a plain screenshot selection.
     var selectionIsText: Bool = false {
-        didSet { needsDisplay = true }
+        didSet { chromeView.needsDisplay = true }
     }
 
     override var isFlipped: Bool { false }
@@ -66,6 +78,21 @@ final class SelectionView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+
+        frozenDesktopLayer.frame = bounds
+        frozenDesktopLayer.contentsGravity = .resize
+        frozenDesktopLayer.magnificationFilter = .nearest
+        frozenDesktopLayer.minificationFilter = .linear
+        layer?.addSublayer(frozenDesktopLayer)
+
+        dimLayer.frame = bounds
+        dimLayer.backgroundColor = NSColor.black.withAlphaComponent(0.12).cgColor
+
+        maskLayer.frame = bounds
+        maskLayer.fillRule = .evenOdd
+        dimLayer.mask = maskLayer
+        layer?.addSublayer(dimLayer)
+
         highlightLayer.frame = bounds
         highlightLayer.fillColor = accent.withAlphaComponent(0.14).cgColor
         highlightLayer.strokeColor = accent.cgColor
@@ -78,6 +105,13 @@ final class SelectionView: NSView {
         highlightLayer.shadowOpacity = 0.5
         highlightLayer.shadowOffset = .zero
         layer?.addSublayer(highlightLayer)
+
+        chromeView.frame = bounds
+        chromeView.autoresizingMask = [.width, .height]
+        chromeView.drawChrome = { [weak self] in self?.drawSelectionChrome() }
+        addSubview(chromeView)
+
+        updateMaskPath()
     }
 
     @available(*, unavailable)
@@ -85,13 +119,55 @@ final class SelectionView: NSView {
 
     override func layout() {
         super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        frozenDesktopLayer.frame = bounds
+        dimLayer.frame = bounds
         highlightLayer.frame = bounds
+        CATransaction.commit()
+        updateMaskPath()
+    }
+
+    /// Installs the immutable trigger-time pixels beneath the selection chrome.
+    func setFrozenDesktopImage(_ image: CGImage?, scale: CGFloat = 1) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        frozenDesktopLayer.contents = image
+        frozenDesktopLayer.contentsScale = max(scale, 1)
+        CATransaction.commit()
+    }
+
+    private func updateMaskPath() {
+        // Pointer-driven geometry follows the pointer exactly; implicit layer
+        // animation would leave the dim cutout trailing behind the visible border.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        maskLayer.frame = bounds
+        let path = CGMutablePath()
+        path.addRect(bounds)
+        if let selectionRect {
+            path.addRect(selectionRect)
+        }
+        maskLayer.path = path
+        CATransaction.commit()
     }
 
     // MARK: - Window-snap highlight (rounded like a macOS window, morphs between windows)
 
     private func updateHighlightLayer(from oldValue: CGRect?) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
         highlightLayer.frame = bounds
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            highlightLayer.removeAllAnimations()
+            highlightLayer.path = highlightRect.map {
+                CGPath(roundedRect: $0, cornerWidth: Self.windowCornerRadius,
+                       cornerHeight: Self.windowCornerRadius, transform: nil)
+            }
+            highlightLayer.opacity = highlightRect == nil ? 0 : 1
+            return
+        }
         guard let rect = highlightRect else {
             animate(keyPath: "opacity", to: 0, duration: 0.16)
             highlightLayer.opacity = 0
@@ -113,9 +189,9 @@ final class SelectionView: NSView {
             let spring = CASpringAnimation(keyPath: "path")
             spring.fromValue = highlightLayer.presentation()?.path ?? highlightLayer.path
             spring.toValue = newPath
-            spring.mass = 0.9
-            spring.stiffness = 220
-            spring.damping = 17
+            spring.mass = 1
+            spring.stiffness = 210
+            spring.damping = 19
             spring.initialVelocity = 6
             spring.duration = spring.settlingDuration
             spring.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -157,12 +233,8 @@ final class SelectionView: NSView {
         trackingArea = area
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor.black.withAlphaComponent(0.12).setFill()
-        bounds.fill()
-
+    private func drawSelectionChrome() {
         if let selectionRect {
-            selectionRect.fill(using: .clear)
             if selectionIsText {
                 let border = NSBezierPath(roundedRect: selectionRect, xRadius: 3, yRadius: 3)
                 border.lineWidth = 2
@@ -290,5 +362,26 @@ final class SelectionView: NSView {
 
     override func cancelOperation(_ sender: Any?) {
         delegate?.selectionViewCancel()
+    }
+}
+
+/// A transparent foreground that never steals drag, hover, or keyboard routing
+/// from SelectionView. AppKit handles Retina backing and redraws only the chrome.
+@MainActor
+private final class SelectionChromeView: NSView {
+    var drawChrome: (() -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        drawChrome?()
     }
 }

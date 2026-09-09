@@ -12,6 +12,73 @@ enum WindowSnapper {
         let windowID: CGWindowID
         let layer: Int
         let bounds: CGRect
+        let ownerPID: pid_t
+
+        init(windowID: CGWindowID, layer: Int, bounds: CGRect, ownerPID: pid_t = 0) {
+            self.windowID = windowID
+            self.layer = layer
+            self.bounds = bounds
+            self.ownerPID = ownerPID
+        }
+    }
+
+    /// Maps a `CGWindowListCopyWindowInfo` result to `Candidate`s, preserving its
+    /// front-to-back order. Fully transparent windows are dropped — they are invisible
+    /// click-catchers that would otherwise win the hit-test over the window the user sees.
+    static func candidates(from infoList: [[String: Any]]) -> [Candidate] {
+        infoList.compactMap { info in
+            guard
+                let layer = info[kCGWindowLayer as String] as? Int,
+                let number = info[kCGWindowNumber as String] as? Int,
+                let boundsDict = info[kCGWindowBounds as String] as? [String: Any],
+                let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
+            else { return nil }
+            if let alpha = info[kCGWindowAlpha as String] as? Double, alpha <= 0.01 { return nil }
+            let pid = (info[kCGWindowOwnerPID as String] as? Int).map(pid_t.init) ?? 0
+            return Candidate(windowID: CGWindowID(number), layer: layer, bounds: bounds, ownerPID: pid)
+        }
+    }
+
+    /// Fresh window-server geometry in front-to-back order. Kept synchronous and side-effect free;
+    /// callers decide whether to run it on the main actor (one trigger-time sample) or off-main
+    /// (continuous hover).
+    static func currentCandidates() -> [Candidate] {
+        guard
+            let infoList = CGWindowListCopyWindowInfo(
+                [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+            ) as? [[String: Any]]
+        else { return [] }
+        return candidates(from: infoList)
+    }
+
+    /// Resolves the actual active normal window from fresh WindowServer z-order. A display-sized
+    /// non-normal surface is a narrow fallback for exclusive-fullscreen apps only.
+    static func activeWindowID(
+        ordered: [Candidate],
+        frontmostPID: pid_t?,
+        ownPID: pid_t,
+        displayFrames: [CGRect]
+    ) -> CGWindowID? {
+        let belongsToTarget: (Candidate) -> Bool = { candidate in
+            guard candidate.ownerPID != ownPID else { return false }
+            if let frontmostPID, frontmostPID != ownPID {
+                return candidate.ownerPID == frontmostPID
+            }
+            return true
+        }
+        let sized: (Candidate) -> Bool = {
+            $0.bounds.width >= minimumSize && $0.bounds.height >= minimumSize
+        }
+        if let normal = ordered.first(where: { belongsToTarget($0) && sized($0) && $0.layer == 0 }) {
+            return normal.windowID
+        }
+        return ordered.first(where: { candidate in
+            guard belongsToTarget(candidate), sized(candidate), candidate.layer != 0 else { return false }
+            return displayFrames.contains { display in
+                candidate.bounds.width >= display.width * 0.9
+                    && candidate.bounds.height >= display.height * 0.9
+            }
+        })?.windowID
     }
 
     /// Pure hit-test: the topmost eligible window at `point`. `ordered` MUST be
@@ -57,15 +124,7 @@ enum WindowSnapper {
             return nil
         }
 
-        let ordered: [Candidate] = infoList.compactMap { info in
-            guard
-                let layer = info[kCGWindowLayer as String] as? Int,
-                let number = info[kCGWindowNumber as String] as? Int,
-                let boundsDict = info[kCGWindowBounds as String] as? [String: Any],
-                let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
-            else { return nil }
-            return Candidate(windowID: CGWindowID(number), layer: layer, bounds: bounds)
-        }
+        let ordered = candidates(from: infoList)
         // Only snap to windows ScreenCaptureKit can actually capture, and never our own.
         let capturableIDs = Set(content.windows.filter { $0.isOnScreen }.map { $0.windowID })
         let ownWindowIDs = Set(
@@ -80,5 +139,47 @@ enum WindowSnapper {
             ownWindowIDs: ownWindowIDs
         ) else { return nil }
         return byID[id]
+    }
+
+    /// Pure hit-test for the CLICK path: the topmost normal-layer window at `point`,
+    /// excluding only OUR OWN windows (by pid). Unlike the hover variant above it does
+    /// NOT require membership in a shareable-content snapshot: that snapshot can lag the
+    /// window server by seconds (a just-opened window is missing from it), and requiring
+    /// it made the picker skip the window actually under the cursor and select whatever
+    /// sat behind it.
+    static func topmost(atCGPoint point: CGPoint, ordered: [Candidate], excludingPID pid: pid_t) -> CGWindowID? {
+        for candidate in ordered {
+            guard candidate.layer == 0 else { continue }
+            guard candidate.bounds.width >= minimumSize, candidate.bounds.height >= minimumSize else { continue }
+            guard candidate.bounds.contains(point) else { continue }
+            guard candidate.ownerPID != pid else { continue }
+            return candidate.windowID
+        }
+        return nil
+    }
+
+    /// Click-time resolver: hit-tests a FRESH front-to-back window-server list at `point`
+    /// (see `topmost(atCGPoint:ordered:excludingPID:)`), off the main thread.
+    static func clickTopmostWindowID(atCGPoint point: CGPoint) async -> CGWindowID? {
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        return await Task.detached(priority: .userInitiated) {
+            topmost(atCGPoint: point, ordered: currentCandidates(), excludingPID: pid_t(ownPID))
+        }.value
+    }
+
+    /// Background-safe helper to offload CGWindowListCopyWindowInfo IPC from the main thread.
+    static func topmostWindowID(
+        atCGPoint point: CGPoint,
+        capturableIDs: Set<CGWindowID>,
+        ownWindowIDs: Set<CGWindowID>
+    ) async -> CGWindowID? {
+        await Task.detached(priority: .userInitiated) {
+            return topmost(
+                atCGPoint: point,
+                ordered: currentCandidates(),
+                capturableIDs: capturableIDs,
+                ownWindowIDs: ownWindowIDs
+            )
+        }.value
     }
 }

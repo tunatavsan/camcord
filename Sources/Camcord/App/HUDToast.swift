@@ -72,12 +72,15 @@ final class HUDToast {
         panel.ignoresMouseEvents = true
         panel.isReleasedWhenClosed = false
         panel.contentView = content
-        panel.alphaValue = 0
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        panel.alphaValue = reduceMotion ? 1 : 0
         panel.orderFrontRegardless()
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.14
-            panel.animator().alphaValue = 1
+        if !reduceMotion {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.14
+                panel.animator().alphaValue = 1
+            }
         }
         self.panel = panel
 
@@ -98,6 +101,10 @@ final class HUDToast {
     private func fadeOut() {
         guard let panel else { return }
         self.panel = nil
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            panel.orderOut(nil)
+            return
+        }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.22
             panel.animator().alphaValue = 0
@@ -149,6 +156,9 @@ private final class ToastView: NSVisualEffectView {
 
         addSubview(iconView)
         addSubview(label)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        setAccessibilityLabel(text)
 
         NSLayoutConstraint.activate([
             iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),

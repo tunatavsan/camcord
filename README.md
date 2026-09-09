@@ -1,68 +1,126 @@
 # Camcord
 
-Kişisel kullanım için ultra-hafif, native macOS ekran görüntüsü + ekran kaydı aracı.
-Menü çubuğunda yaşar, login'de açılır, her şey kısayolla — sürtünmesiz.
+Camcord, menü çubuğunda yaşayan native bir macOS ekran görüntüsü ve ekran kaydı
+uygulamasıdır. Swift 6 ile yazılmıştır ve macOS 15.2 veya yenisini gerektirir.
 
-- **Screenshot → sadece pano.** Bölge / pencere / tam ekran; PNG anında panoya düşer, dosya birikintisi yok. Panoya düşünce küçük bir küçük-resim onayı ("Panoya kopyalandı") belirir ve kaybolur.
-- **Metin (OCR).** Ekrandan bölge/pencere seç → metin (+ QR/barkod) panoya. Ayrıca **var olan bir görselden**: menüden "Görüntüden Metni Çıkar…" ya da Finder/herhangi bir uygulamada sağ tık → Servisler → "Camcord ile Metni Çıkar".
-- **Kayıt → `~/Movies/camcord/`.** Kalite profilleri (En Optimize → En Kaliteli) veya Özel: H.264 / HEVC 10-bit / ProRes (Proxy…4444), ayarlanabilir bitrate, kapsayıcı (varsayılan `.mp4`, ProRes → `.mov`), 24–120 fps. **Sistem sesi + mikrofon varsayılan olarak TEK ses parçasında birleşir** (her oynatıcıda mikrofon duyulur); düzenleme için ayrı-parça seçeneği de var. Bitince dosya URL'i panoya kopyalanır (Cmd+V ile Finder/Slack'e dosya olarak yapışır). Soft-pause/resume; pencere kaydı pencereyi taşıyınca/boyutlandırınca göstergesiyle takip eder.
-- **Güvenlik ağı.** Kayıt sırasında periyodik movie-fragment yazımı (çökme/güç kesintisinde dosya oynatılabilir kalır); disk dolmadan önce otomatik durup dosyayı korur; opsiyonel maksimum süre.
-- **Kayıtta bildirim susturma (opsiyonel).** Kayıt başlar/biterken bir Kısayolu çalıştırır (aşağıya bkz.).
-- **Gelişmiş kısayollar.** Klavye (Carbon, izin gerektirmez) + fare yan tuşları / çift-tap Sağ ⌘ (CGEventTap, Accessibility izni ister).
+## Özellikler
 
-## Kurulum
+- **Ekran görüntüsü:** Bölge, pencere veya tüm ekranı PNG olarak panoya kopyalar.
+  İstenirse ayrıca `~/Pictures/camcord/` veya seçilen başka bir klasöre kaydeder.
+- **Donmuş seçim görüntüsü:** Bölge/pencere seçici açılmadan önce masaüstünün değişmez
+  bir kopyası alınır. Tetikleme anında görünen hover durumu, tooltip ve menü pikselleri
+  seçim sırasında kaybolsa bile sonuçta korunur. Ekran düzeni değişirse işlem iptal edilir.
+- **Metin çıkarma:** Seçilen ekran alanındaki metni, QR kodunu ve barkodu panoya
+  aktarır. Finder veya başka bir uygulamadaki mevcut görseller için de Servisler menüsü
+  üzerinden çalışır.
+- **Kaydırmalı çekim:** Elle kaydırırken ara kareleri sırayla toplar; birleştirme ve
+  önizleme işini arka planda yürütür. Kaydırma mesafesinin belli bir eşiğe ulaşmasını
+  beklemez. Örtüşme kaybolur veya belirsizleşirse dışa aktarmayı durdurur ve geri
+  kaydırılmasını ister. Önizlemedeki **Bitti** sonucu kopyalar; **İptal** veya `Esc`
+  çekimden çıkar. Otomatik kaydırma yoktur.
+- **Ekran kaydı:** Ekran veya pencereyi kaydeder; duraklatma/sürdürme, geri sayım,
+  imleç, pencere göstergesi, düşük disk alanında güvenli durdurma ve isteğe bağlı süre
+  sınırı sunar.
+- **Ses:** Sistem sesi ve mikrofon için bağımsız canlı seviye göstergeleri ile kazanç
+  kontrolleri vardır. Varsayılan olarak ikisi tek ses parçasında birleştirilir; kurgu
+  için ayrı ses parçaları korunabilir. Mikrofon denemesi yalnızca kullanıcı düğmeye
+  bastığında başlar ve dosya oluşturmaz.
+- **Kamera:** İsteğe bağlı kamera görüntüsünü kaydın bir köşesine gömer; boyut, köşe
+  ve aynalama ayarlanabilir. Ayarlardaki kamera provası yalnızca açıkça başlatıldığında
+  kamerayı açar. Kamera sesi kayda eklenmez.
+- **Native kontroller:** Sol tıklanan menü çubuğu simgesi her durumda paneli açar;
+  kayıt sırasında buradan mikser, duraklatma ve durdurma kontrollerine ulaşılır. Video
+  ve ekran görüntüsü klasörü düğmeleri, klasörler henüz boşken de görünür. Tamamlanan
+  kayıt kartı hedefi, önizlemeyi ve Finder eylemlerini gösterir.
+
+## Varsayılan çıktı
+
+Ekran görüntüsü panoya gider; diske kopya yazma başlangıçta kapalıdır. Kayıtlar
+`~/Movies/camcord/` altında oluşturulur; tamamlanınca önizleme kartından açılabilir,
+yeniden adlandırılabilir veya Finder'da gösterilebilir. Kayıt almak panoyu değiştirmez.
+Varsayılan kayıt profili 60 fps, native çözünürlük, SDR, HEVC 20 Mbps ve MP4'tür.
+Sistem sesi ile mikrofon açıktır, tek ses parçasında birleştirilir; kamera kapalıdır.
+ProRes profilleri MOV kullanır. Bunların tamamı Ayarlar'dan değiştirilebilir.
+
+## Kısayollar ve kullanım
+
+Camcord hazır klavye kısayolu atamaz. Ayarlar'dan bölge, pencere, tüm ekran, OCR,
+kaydırmalı çekim, kayıt başlat/bitir ve kayıt duraklat/sürdür eylemlerine kısayol
+atanabilir. `Kaydırmalı çekim` kısayolu da isteğe bağlıdır ve başlangıçta boştur.
+Atanan kısayollar panelde ilgili eylemin yanında görünür.
+
+Menü çubuğu kalabalıksa, çalışan Camcord'u Finder veya Spotlight'tan tekrar açmak
+kontrolleri bağımsız bir macOS panelinde gösterir. Kayıt hazırlanırken ve başladığında
+ekranda bildirim çıkar. Kayıt sayacı ve durdurma düğmesi, pencere çerçevesi kapalı
+olsa veya kaydedilen pencere başka bir pencerenin altında kalsa da erişilebilir kalır.
+
+Bölge seçiminde sürükleyerek alan seçilir, pencereye tıklayarak o pencere seçilir ve
+`Esc` işlemi iptal eder. Menü çubuğu simgesine sağ tıklamak veya Control-tıklamak bağlam
+menüsünü açar. Fare yan tuşları, orta tık ve çift Sağ Command gibi ek girişler Ayarlar'dan
+atanabilir.
+
+## Derleme ve çalıştırma
+
+Xcode Command Line Tools ve geçerli, kalıcı bir codesign kimliği gerekir. Hazırlık
+betiği ortamı denetler ve eksikse izlenecek adımları gösterir:
 
 ```bash
-./scripts/dev-setup.sh    # imza kimliğini doğrular (tek seferlik)
-./scripts/build.sh        # dist/Camcord.app üretir (imzalı)
-./scripts/build.sh --install   # + /Applications'a kopyalar ve açar
+./scripts/dev-setup.sh
+./scripts/build.sh
+open dist/Camcord.app
 ```
 
-İlk açılışta: login item otomatik kaydedilir; ilk çekimde **Screen Recording** izni,
-mikrofonlu ilk kayıtta **Mikrofon** izni, fare kısayolu açılırsa **Accessibility**
-izni istenir. İzinler sabit imza kimliği sayesinde rebuild'lerde bozulmaz.
+Yerel `/Applications` kopyasını güncelleyip açmak için:
 
-## Kısayollar
+```bash
+./scripts/build.sh --install
+```
 
-**Varsayılan hiçbir kısayol yoktur** — hepsini Settings'ten sen atarsın (klavye kısayolları + fare yan tuşları). Atanabilir aksiyonlar: bölge / aktif pencere / tüm ekran çek, metin (OCR), kaydır (scrolling capture), kayıt başlat-bitir, kayıt duraklat-sürdür. Fare yan tuşları ve orta tık (yapıştır) da Settings'ten bağlanır.
+`--install`, çalışan Camcord'dan önce normal biçimde çıkmasını ister ve bekler. Kayıt
+sonlandırması süre içinde bitmezse uygulamayı zorla kapatıp dosyayı riske atmak yerine
+kurulumu durdurur. Bu komut yerel bir geliştirici kurulumu yapar; README herhangi bir
+dağıtılmış veya yayınlanmış sürüm iddiasında bulunmaz.
 
-Bölge seçiminde: sürükle = bölge, pencereye tek tık = o pencere, `Esc` = iptal. Üst üste
-pencerelerde imleci gezdirdikçe **her zaman en üstteki** pencere vurgulanır.
+Geliştirme sırasında hızlı kontroller:
 
-## Kayıtta bildirim susturma (Rahatsız Etme)
+```bash
+swift build
+swift test
+```
 
-macOS 15'te Focus/Rahatsız Etme'yi açıp kapatmanın halka açık bir API'si **yok**. Camcord
-bunu en-iyi-çaba olarak **Kısayollar** ile yapar:
+## İzinler
 
-1. Kısayollar uygulamasında iki kısayol oluştur: biri "Odak Ayarla → Rahatsız Etme →
-   Açık", diğeri "…→ Kapalı" (dilediğin gibi adlandır).
-2. Ayarlar › Kayıt › **Bildirimler**'de aç/kapat kısayollarının adlarını yaz.
+Kullanılan özelliğe göre macOS Ekran Kaydı, Mikrofon, Kamera veya Erişilebilirlik izni
+isteyebilir. Mikrofon ve kamera provaları izni yalnızca kullanıcı ilgili düğmeye
+bastığında ister. Kalıcı imza kimliği, yeniden derlemelerde uygulamanın aynı code-signing
+kimliğini taşımasını sağlar; macOS'un izin kararları yine Sistem Ayarları tarafından
+yönetilir.
 
-Kayıt başlarken açma, biterken kapatma kısayolu çalıştırılır. Ad boşsa sessizce atlanır.
+Bir izin kaydı sorunluysa Sistem Ayarları › Gizlilik ve Güvenlik bölümünü kontrol edin.
+Geliştirici kurulumu için gerekirse ilgili kaydı sıfırlayabilirsiniz:
 
-## Sorun giderme
+```bash
+tccutil reset ScreenCapture dev.tavsan.camcord
+tccutil reset Accessibility dev.tavsan.camcord
+tccutil reset Microphone dev.tavsan.camcord
+tccutil reset Camera dev.tavsan.camcord
+```
 
-- **Çekim başarısız + bip:** Screen Recording izni düşmüş olabilir (macOS ~30 gün
-  kullanılmayınca yeniden onay ister). App sizi otomatik olarak ilgili ayar
-  bölmesine götürür. Gerekirse elle sıfırlayın:
-  ```bash
-  tccutil reset ScreenCapture dev.tavsan.camcord
-  tccutil reset Accessibility dev.tavsan.camcord
-  tccutil reset Microphone dev.tavsan.camcord
-  ```
-- **Fare kısayolu çalışmıyor:** Sistem Ayarları → Gizlilik ve Güvenlik →
-  Erişilebilirlik'te Camcord açık mı? Menüdeki durum satırı eksikliği gösterir.
-- **İkonu yeniden üretmek:** `swift scripts/make-icon.swift`
+## Bildirimleri susturma
 
-## Mimari (kısa)
+macOS, Focus durumunu değiştirmek için genel bir API sunmadığından Camcord bunu isteğe
+bağlı olarak Kısayollar uygulaması üzerinden yapar. Kısayollar'da Focus'u açan ve kapatan
+iki kısayol hazırlayıp adlarını Ayarlar › Kayıt › Bildirimler bölümüne girin. Alanlar
+boşsa bu adım atlanır.
 
-Saf Swift 6 / AppKit (SwiftUI yalnızca Settings içeriği). ScreenCaptureKit:
-screenshot'ta `SCScreenshotManager.captureImage(in:)` (çoklu ekran bölge desteği),
-kayıtta manuel `SCStream` → `AVAssetWriter` (3 ayrı input: video + sistem sesi +
-mikrofon; `SCRecordingOutput` pause API'si olmadığı için kullanılmadı; soft-pause
-`PauseClock` CMTime retiming ile). `SCShareableContent` cache'lenir, asla
-çekim-başına sorgulanmaz. Hotkey Tier 1 = KeyboardShortcuts (Carbon), Tier 2 =
-`CGEventTap` (watchdog + wake/session yeniden-kurulum). Build: SPM + `scripts/build.sh`
-(Xcode projesi yok); her build sabit Apple Development kimliğiyle imzalanır — asla
-`codesign -s -` (TCC, Designated Requirement'a bakar; ad-hoc imza her rebuild'de
-izinleri bozar).
+## Teknik yapı ve doğrulama sınırı
+
+Uygulama yaşam döngüsü, menü çubuğu ve overlay pencereleri AppKit; panel ve ayarlar
+native SwiftUI/AppKit kontrolleri kullanır. Ekran yakalama ScreenCaptureKit, medya
+yazımı ve kamera AVFoundation, OCR Vision ile çalışır. Paket Swift Package Manager ile
+derlenir; Xcode projesi yoktur.
+
+Birim ve medya testleri donmuş seçim geometrisini, kaydırmalı birleştirmeyi, zaman
+damgalarını, ses işleme/miksajı ve kamera kompozisyonunu kapsar. Offscreen render'lar
+yerleşim kontrolü içindir; gerçek masaüstü hover/tooltip yakalamasını, fiziksel kamera
+ve mikrofon kalitesini, izin akışlarını veya uzun süreli termal performansı doğrulamaz.

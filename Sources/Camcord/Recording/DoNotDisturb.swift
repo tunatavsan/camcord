@@ -28,6 +28,14 @@ enum DoNotDisturb {
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         do {
+            let log = logger
+            let shortcutName = trimmed
+            process.terminationHandler = { p in
+                let status = p.terminationStatus
+                if status != 0 {
+                    log.error("shortcuts run \"\(shortcutName, privacy: .public)\" exited with non-zero status: \(status)")
+                }
+            }
             try process.run()
         } catch {
             logger.error("shortcuts run \"\(trimmed, privacy: .public)\" failed to launch: \(String(describing: error), privacy: .public)")

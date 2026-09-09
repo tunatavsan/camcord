@@ -30,16 +30,49 @@ final class CaptureCoordinator {
     /// and it's clickable (opens for editing) / draggable. `fileURL` is the on-disk PNG when
     /// disk-saving is on, else nil (the card writes a temp file on demand).
     var onScreenshotPreview: ((CGImage, URL?) -> Void)?
+    var onScreenshotSaved: ((CGImage, URL) -> Void)?
 
     /// One capture flow at a time: the overlay's own isPresenting only covers the
     /// on-screen phase, not the post-hide delay + SCK call after it — a re-press in
     /// that window would open a NEW overlay whose chrome gets baked into the still-
     /// pending shot. Also collapses double-clicks on the panel's tiles.
     private var isCapturing = false
-    /// Bumped on every successful clipboard-writing capture. A fire-and-forget OCR snapshots
-    /// it at launch and refuses to write if a newer capture has since claimed the clipboard,
-    /// so a slow recognition can't clobber the user's latest result.
-    private var clipboardEpoch = 0
+    /// Newest accepted OCR/capture owns future clipboard writes. Generation is allocated at
+    /// request acceptance, so two concurrent OCR jobs cannot complete out of order and let the
+    /// older one overwrite the newer result.
+    private var clipboardRequests = LatestRequestGate()
+
+    private final class FrozenHoldRequest {
+        let token: UInt64
+        let anchor: CGPoint
+        let mode: HoldCaptureMode
+        let resolutionScale: ResolutionScale
+        var latest: CGPoint
+        var moved = false
+        var releasedAt: CGPoint?
+        var snapshot: FrozenDesktopSnapshot?
+        var overlayStarted = false
+        var captureTask: Task<Void, Never>?
+
+        init(
+            token: UInt64,
+            anchor: CGPoint,
+            mode: HoldCaptureMode,
+            resolutionScale: ResolutionScale
+        ) {
+            self.token = token
+            self.anchor = anchor
+            self.latest = anchor
+            self.mode = mode
+            self.resolutionScale = resolutionScale
+        }
+    }
+
+    private var holdRequests = LatestRequestGate()
+    private var frozenHoldRequest: FrozenHoldRequest?
+    private var pendingHoldSnapshots = 0
+    private static let maximumPendingHoldSnapshots = 2
+    private static let holdDragThreshold: CGFloat = 4
 
     /// After hiding the overlay, wait ~2 display refresh cycles before capturing so
     /// the compositor has actually flushed the hide -- otherwise the screenshot
@@ -80,20 +113,20 @@ final class CaptureCoordinator {
         guard beginExclusiveCapture() else { return }
         defer { endExclusiveCapture() }
         guard preflightScreenCapture("captureRegionInteractive") else { return }
-        guard let (result, mode) = await overlay.selectRegion() else { return }
-        // The overlay has already ordered its panels out on this exit path (every
-        // exit path does); give the compositor a couple of refresh cycles before we shoot.
-        try? await Task.sleep(for: Self.postHideDelay)
-
-        switch (result, mode) {
-        case (.region(let cgRect), .screenshot):
-            await performRegionScreenshot(cgRect)
-        case (.region(let cgRect), .text):
-            await performRegionText(cgRect)
-        case (.window(let window), .screenshot):
-            await performWindowCapture(window)
-        case (.window(let window), .text):
-            await performWindowText(window)
+        let settings = ScreenshotSettings.load(from: .standard)
+        do {
+            let snapshot = try await ScreenshotService.captureFrozenDesktop(
+                resolutionScale: settings.resolutionScale
+            )
+            guard let (cgRect, mode) = await overlay.selectFrozen(snapshot: snapshot) else { return }
+            switch mode {
+            case .screenshot:
+                await performFrozenScreenshot(snapshot, cgRect: cgRect)
+            case .text:
+                performFrozenText(snapshot, cgRect: cgRect)
+            }
+        } catch {
+            fail("Frozen region capture failed: \(error)")
         }
     }
 
@@ -105,19 +138,11 @@ final class CaptureCoordinator {
         guard beginExclusiveCapture() else { return }
         defer { endExclusiveCapture() }
         guard preflightScreenCapture("captureTextRegion") else { return }
-        // This entry point always OCRs, regardless of which button ended the selection.
-        guard let (result, _) = await overlay.selectRegion() else { return }
-        try? await Task.sleep(for: Self.postHideDelay)
-
         do {
-            let image: CGImage
-            switch result {
-            case .region(let cgRect):
-                image = try await ScreenshotService.captureRegion(cgRect: cgRect)
-            case .window(let window):
-                image = try await ScreenshotService.captureWindow(window)
-            }
-            startOCR(on: image)   // fire-and-forget: lock releases on return, OCR runs in bg
+            let snapshot = try await ScreenshotService.captureFrozenDesktop(resolutionScale: .native)
+            // This entry point always OCRs, regardless of which button ended the selection.
+            guard let (cgRect, _) = await overlay.selectFrozen(snapshot: snapshot) else { return }
+            performFrozenText(snapshot, cgRect: cgRect)
         } catch {
             fail("Text capture failed: \(error)")
         }
@@ -158,19 +183,28 @@ final class CaptureCoordinator {
             return
         }
 
-        let image = await ScrollingCaptureSession(region: clampedRegion, display: display).run()
+        let image = await ScrollingCaptureSession(region: clampedRegion, display: display, contentCache: cache).run()
         guard let image else { return }  // cancelled by the user — no chirp
+        let acceptedToken = clipboardRequests.begin()
 
         // The stitched image is taller than the viewport; derive its point size from the
         // captured pixel scale so DPI-aware pastes stay correct.
         let scale = clampedRegion.width > 0 ? CGFloat(image.width) / clampedRegion.width : 2
         let pointSize = CGSize(width: clampedRegion.width, height: CGFloat(image.height) / max(scale, 0.01))
-        let saveURL = screenshotSaveURL()
-        guard await ClipboardWriter.copyPNG(image, pointSize: pointSize, saveTo: saveURL) else {
+        let resolutionScale = ScreenshotSettings.load(from: .standard).resolutionScale
+        let scaled = await Task.detached(priority: .userInitiated) {
+            FrozenDesktopSnapshot.scaledImage(image, pointSize: pointSize, resolutionScale: resolutionScale)
+        }.value
+        guard let outputImage = scaled else {
+            fail("Scroll capture: output scaling failed")
+            return
+        }
+        guard let copied = await copyScreenshot(outputImage, pointSize: pointSize, acceptedToken: acceptedToken) else { return }
+        guard copied else {
             fail("Scroll capture: clipboard write failed")
             return
         }
-        succeeded(.fullScreenShot, preview: (image, saveURL))
+        succeeded(.fullScreenShot, preview: (outputImage, nil))
     }
 
     /// The SCDisplay whose frame contains the region's center.
@@ -195,43 +229,168 @@ final class CaptureCoordinator {
             endExclusiveCapture()
             return false
         }
-        let started = overlay.beginHoldSelection(atCGPoint: cgPoint, mode: mode) { [weak self] result in
-            guard let self else { return }
-            guard case .region(let cgRect) = result else {
-                endExclusiveCapture()
-                return
-            }
-            Task { @MainActor in
-                // Same compositor-flush wait as every other overlay exit.
-                try? await Task.sleep(for: Self.postHideDelay)
-                switch mode {
-                case .screenshot:
-                    await self.performRegionScreenshot(cgRect)
-                case .text:
-                    await self.performRegionText(cgRect)
-                }
-                self.endExclusiveCapture()
-            }
-        }
-        // Overlay already up (a selection in flight): release the lock and tell the caller
-        // NOT to track this gesture, so the event tap doesn't swallow it for nothing.
-        guard started else {
+        guard pendingHoldSnapshots < Self.maximumPendingHoldSnapshots else {
             endExclusiveCapture()
+            NSSound.beep()
             return false
         }
+        let token = holdRequests.begin()
+        let request = FrozenHoldRequest(
+            token: token,
+            anchor: cgPoint,
+            mode: mode,
+            resolutionScale: ScreenshotSettings.load(from: .standard).resolutionScale
+        )
+        frozenHoldRequest = request
+        pendingHoldSnapshots += 1
+        request.captureTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.pendingHoldSnapshots = max(0, self.pendingHoldSnapshots - 1) }
+            do {
+                let snapshot = try await ScreenshotService.captureFrozenDesktop(
+                    resolutionScale: request.resolutionScale
+                )
+                self.holdSnapshotDidFinish(snapshot, request: request)
+            } catch is CancellationError {
+                // A no-drag release or explicit cancel invalidated this request.
+            } catch {
+                self.holdSnapshotDidFail(error, request: request)
+            }
+        }
+        // Snapshot acquisition and all later crop/OCR work run asynchronously. The event-tap
+        // callback returns immediately, preserving side-button tap-versus-hold recognition.
         return true
     }
 
     func updateHoldRegionSelection(toCGPoint cgPoint: CGPoint) {
-        overlay.updateHoldSelection(toCGPoint: cgPoint)
+        guard let request = frozenHoldRequest else { return }
+        request.latest = cgPoint
+        if !request.moved {
+            request.moved = hypot(
+                cgPoint.x - request.anchor.x,
+                cgPoint.y - request.anchor.y
+            ) >= Self.holdDragThreshold
+        }
+        guard request.moved else { return }
+        if request.overlayStarted {
+            overlay.updateHoldSelection(toCGPoint: cgPoint)
+        } else if request.snapshot != nil {
+            startFrozenHoldOverlay(request)
+        }
     }
 
     func finishHoldRegionSelection(atCGPoint cgPoint: CGPoint) {
-        overlay.finishHoldSelection(atCGPoint: cgPoint)
+        guard let request = frozenHoldRequest else { return }
+        request.latest = cgPoint
+        if !request.moved {
+            request.moved = hypot(
+                cgPoint.x - request.anchor.x,
+                cgPoint.y - request.anchor.y
+            ) >= Self.holdDragThreshold
+        }
+        if request.overlayStarted {
+            overlay.finishHoldSelection(atCGPoint: cgPoint)
+            return
+        }
+        guard request.moved else {
+            abandonFrozenHold(request)
+            return
+        }
+        request.releasedAt = cgPoint
+        if request.snapshot != nil {
+            completeFrozenHoldWithoutOverlay(request)
+        }
     }
 
     func cancelHoldRegionSelection() {
-        overlay.cancelHoldSelection()
+        guard let request = frozenHoldRequest else { return }
+        if request.overlayStarted {
+            overlay.cancelHoldSelection()
+        } else {
+            abandonFrozenHold(request)
+        }
+    }
+
+    private func holdSnapshotDidFinish(
+        _ snapshot: FrozenDesktopSnapshot,
+        request: FrozenHoldRequest
+    ) {
+        guard frozenHoldRequest === request, holdRequests.isCurrent(request.token) else { return }
+        request.snapshot = snapshot
+        if request.releasedAt != nil {
+            completeFrozenHoldWithoutOverlay(request)
+        } else if request.moved {
+            startFrozenHoldOverlay(request)
+        }
+    }
+
+    private func holdSnapshotDidFail(_ error: Error, request: FrozenHoldRequest) {
+        guard frozenHoldRequest === request, holdRequests.isCurrent(request.token) else { return }
+        frozenHoldRequest = nil
+        holdRequests.invalidate()
+        endExclusiveCapture()
+        fail("Hold capture snapshot failed: \(error)")
+    }
+
+    private func startFrozenHoldOverlay(_ request: FrozenHoldRequest) {
+        guard frozenHoldRequest === request, !request.overlayStarted,
+            let snapshot = request.snapshot
+        else { return }
+        let started = overlay.beginHoldSelection(
+            atCGPoint: request.anchor,
+            mode: request.mode,
+            frozenSnapshot: snapshot
+        ) { [weak self, weak request] result in
+            guard let self, let request else { return }
+            guard self.frozenHoldRequest === request else { return }
+            guard case .region(let cgRect) = result else {
+                self.abandonFrozenHold(request)
+                return
+            }
+            self.finishFrozenHold(request, cgRect: cgRect)
+        }
+        guard started else {
+            abandonFrozenHold(request)
+            return
+        }
+        request.overlayStarted = true
+        overlay.updateHoldSelection(toCGPoint: request.latest)
+    }
+
+    private func completeFrozenHoldWithoutOverlay(_ request: FrozenHoldRequest) {
+        guard let releasedAt = request.releasedAt else { return }
+        let rect = Geometry.normalizedRect(from: request.anchor, to: releasedAt)
+        guard rect.width >= 1, rect.height >= 1 else {
+            abandonFrozenHold(request)
+            return
+        }
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+        finishFrozenHold(request, cgRect: rect)
+    }
+
+    private func finishFrozenHold(_ request: FrozenHoldRequest, cgRect: CGRect) {
+        guard frozenHoldRequest === request, let snapshot = request.snapshot else { return }
+        frozenHoldRequest = nil
+        holdRequests.invalidate()
+        request.captureTask = nil
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            switch request.mode {
+            case .screenshot:
+                await self.performFrozenScreenshot(snapshot, cgRect: cgRect)
+            case .text:
+                self.performFrozenText(snapshot, cgRect: cgRect)
+            }
+            self.endExclusiveCapture()
+        }
+    }
+
+    private func abandonFrozenHold(_ request: FrozenHoldRequest) {
+        guard frozenHoldRequest === request else { return }
+        frozenHoldRequest = nil
+        holdRequests.invalidate()
+        request.captureTask = nil
+        endExclusiveCapture()
     }
 
     // MARK: - OCR on an existing image (file / dropped / Services)
@@ -270,24 +429,40 @@ final class CaptureCoordinator {
         guard beginExclusiveCapture() else { return }
         defer { endExclusiveCapture() }
         let frontmost = NSWorkspace.shared.frontmostApplication
-        let ownBundleID = Bundle.main.bundleIdentifier
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        guard let primaryHeight = NSScreen.screens.first?.frame.height else {
+            fail("captureActiveWindow: no display")
+            return
+        }
+        let displayFrames = NSScreen.screens.map {
+            Geometry.appKitToCG($0.frame, primaryScreenHeight: primaryHeight)
+        }
+        let ordered = WindowSnapper.currentCandidates()
+        let preferredID = WindowSnapper.activeWindowID(
+            ordered: ordered,
+            frontmostPID: frontmost?.processIdentifier,
+            ownPID: ownPID,
+            displayFrames: displayFrames
+        )
         do {
-            let content = try await cache.content()
-            let isEligible: (SCWindow) -> Bool = { window in
-                window.isOnScreen
-                    && window.windowLayer == 0
-                    && window.owningApplication?.bundleIdentifier != ownBundleID
-                    && window.frame.width >= 40 && window.frame.height >= 40
+            var content = try await cache.content()
+            var window = preferredID.flatMap { id in
+                content.windows.first { $0.windowID == id && $0.isOnScreen }
             }
-
-            let window: SCWindow?
-            if let frontmost, frontmost.bundleIdentifier != ownBundleID {
-                window = content.windows.first {
-                    isEligible($0) && $0.owningApplication?.processID == frontmost.processIdentifier
+            // A new or newly-visible window can precede the cache by a few seconds. One forced
+            // refresh is the bounded fallback; target order still comes from WindowServer.
+            if window == nil {
+                content = try await cache.content(forceRefresh: true)
+                let capturableIDs = Set(content.windows.filter(\.isOnScreen).map(\.windowID))
+                let fallbackID = WindowSnapper.activeWindowID(
+                    ordered: ordered.filter { capturableIDs.contains($0.windowID) },
+                    frontmostPID: frontmost?.processIdentifier,
+                    ownPID: ownPID,
+                    displayFrames: displayFrames
+                )
+                window = fallbackID.flatMap { id in
+                    content.windows.first { $0.windowID == id && $0.isOnScreen }
                 }
-            } else {
-                // content.windows is front-to-back: first eligible = topmost window.
-                window = content.windows.first(where: isEligible)
             }
 
             guard let window else {
@@ -321,13 +496,17 @@ final class CaptureCoordinator {
                 fail("captureFullScreen: no SCDisplay match for display \(displayID)")
                 return
             }
-            let image = try await ScreenshotService.captureDisplay(display)
-            let saveURL = screenshotSaveURL()
-            guard await ClipboardWriter.copyPNG(image, pointSize: screen.frame.size, saveTo: saveURL) else {
+            let settings = ScreenshotSettings.load(from: .standard)
+            let image = try await ScreenshotService.captureDisplay(
+                display,
+                resolutionScale: settings.resolutionScale
+            )
+            guard let copied = await copyScreenshot(image, pointSize: screen.frame.size) else { return }
+            guard copied else {
                 fail("captureFullScreen: clipboard write failed")
                 return
             }
-            succeeded(.fullScreenShot, preview: (image, saveURL))
+            succeeded(.fullScreenShot, preview: (image, nil))
         } catch {
             fail("captureFullScreen: capture failed: \(error)")
         }
@@ -338,14 +517,48 @@ final class CaptureCoordinator {
     private func performRegionScreenshot(_ cgRect: CGRect) async {
         do {
             let image = try await ScreenshotService.captureRegion(cgRect: cgRect)
-            let saveURL = screenshotSaveURL()
-            guard await ClipboardWriter.copyPNG(image, pointSize: cgRect.size, saveTo: saveURL) else {
+            guard let copied = await copyScreenshot(image, pointSize: cgRect.size) else { return }
+            guard copied else {
                 fail("Region capture: clipboard write failed")
                 return
             }
-            succeeded(.regionShot, preview: (image, saveURL))
+            succeeded(.regionShot, preview: (image, nil))
         } catch {
             fail("Region capture failed: \(error)")
+        }
+    }
+
+    private func performFrozenScreenshot(
+        _ snapshot: FrozenDesktopSnapshot,
+        cgRect: CGRect
+    ) async {
+        let acceptedToken = clipboardRequests.begin()
+        let cropped = await Task.detached(priority: .userInitiated) { snapshot.crop(cgRect: cgRect) }.value
+        guard let crop = cropped else {
+            fail("Frozen region capture: selection did not intersect a display")
+            return
+        }
+        guard let copied = await copyScreenshot(crop.image, pointSize: crop.pointSize, acceptedToken: acceptedToken) else { return }
+        guard copied else {
+            fail("Frozen region capture: clipboard write failed")
+            return
+        }
+        succeeded(.regionShot, preview: (crop.image, nil))
+    }
+
+    private func performFrozenText(_ snapshot: FrozenDesktopSnapshot, cgRect: CGRect) {
+        let token = clipboardRequests.begin()
+        Task { @MainActor in
+            // Cross-display composition stays off the input thread, as does recognition.
+            let crop = await Task.detached(priority: .userInitiated) {
+                snapshot.crop(cgRect: cgRect, resolutionScale: .native)
+            }.value
+            guard clipboardRequests.isCurrent(token) else { return }
+            guard let crop else {
+                fail("Frozen text capture: selection did not intersect a display")
+                return
+            }
+            startOCR(on: crop.image, acceptedToken: token)
         }
     }
 
@@ -360,13 +573,17 @@ final class CaptureCoordinator {
 
     private func performWindowCapture(_ window: SCWindow) async {
         do {
-            let image = try await ScreenshotService.captureWindow(window)
-            let saveURL = screenshotSaveURL()
-            guard await ClipboardWriter.copyPNG(image, pointSize: window.frame.size, saveTo: saveURL) else {
+            let settings = ScreenshotSettings.load(from: .standard)
+            let image = try await ScreenshotService.captureWindow(
+                window,
+                resolutionScale: settings.resolutionScale
+            )
+            guard let copied = await copyScreenshot(image, pointSize: window.frame.size) else { return }
+            guard copied else {
                 fail("Window capture: clipboard write failed")
                 return
             }
-            succeeded(.windowShot, preview: (image, saveURL))
+            succeeded(.windowShot, preview: (image, nil))
         } catch {
             fail("Window capture failed: \(error)")
         }
@@ -387,19 +604,20 @@ final class CaptureCoordinator {
     /// grabbed) and the app stays responsive to the next gesture. `read` runs the Vision
     /// work off the main actor; only the fast clipboard write + feedback hop back to it.
     /// Shared by the interactive OCR flow and the hold OCR gesture.
-    private func startOCR(on image: CGImage) {
-        let epoch = clipboardEpoch
+    private func startOCR(on image: CGImage, acceptedToken: UInt64? = nil) {
+        let token = acceptedToken ?? clipboardRequests.begin()
         Task { @MainActor in
             let payload: String
             do {
                 payload = try await TextRecognitionService.read(in: image).clipboardString
             } catch {
+                guard clipboardRequests.isCurrent(token) else { return }
                 fail("Text recognition failed: \(error)")
                 return
             }
             // A newer capture claimed the clipboard while we were recognizing — don't
             // clobber the user's latest result with this now-stale OCR.
-            guard clipboardEpoch == epoch else { return }
+            guard clipboardRequests.isCurrent(token) else { return }
             guard !payload.isEmpty else {
                 fail("Text capture: no readable text or code in the selection")
                 return
@@ -415,7 +633,12 @@ final class CaptureCoordinator {
     }
 
     private func beginExclusiveCapture() -> Bool {
-        guard !isCapturing else { return false }
+        guard !isCapturing else {
+            // Another capture/session is active: an audible bonk beats a dead trigger —
+            // without it the second attempt no-ops with zero feedback and reads as broken.
+            NSSound.beep()
+            return false
+        }
         isCapturing = true
         return true
     }
@@ -432,10 +655,21 @@ final class CaptureCoordinator {
         return true
     }
 
-    /// A file URL to also save the screenshot to, when disk-saving is enabled (nil
-    /// otherwise). Screenshots save to their own folder, separate from recordings.
-    private func screenshotSaveURL() -> URL? {
-        ScreenshotSettings.load(from: .standard).uniqueSaveURL(date: Date())
+    /// nil means a newer accepted result superseded this clipboard publication.
+    private func copyScreenshot(_ image: CGImage, pointSize: CGSize, acceptedToken: UInt64? = nil) async -> Bool? {
+        let token = acceptedToken ?? clipboardRequests.begin()
+        let copied = await ClipboardWriter.copyPNG(
+            image, pointSize: pointSize,
+            saveSettings: ScreenshotSettings.load(from: .standard),
+            shouldPublish: { self.clipboardRequests.isCurrent(token) }
+        ) { [weak self] result in
+            switch result {
+            case .success(let url): self?.onScreenshotSaved?(image, url)
+            case .failure:
+                self?.onToast?(ToastRequest(text: "Görüntü dosyaya kaydedilemedi — kayıt konumunu kontrol et", systemSymbol: "externaldrive.badge.exclamationmark", tint: .systemOrange, important: true))
+            }
+        }
+        return clipboardRequests.isCurrent(token) ? copied : nil
     }
 
     /// Success feedback: the action's distinct sound + a brief status-glyph flash, plus
@@ -443,7 +677,6 @@ final class CaptureCoordinator {
     /// preview card (`preview` — the image that just landed on the clipboard, + its saved
     /// URL when disk-saving is on).
     private func succeeded(_ sound: FeedbackSound, toast: ToastRequest? = nil, preview: (image: CGImage, url: URL?)? = nil) {
-        clipboardEpoch &+= 1   // this capture now owns the clipboard (see startOCR)
         sound.play()
         onSuccess?()
         if let toast { onToast?(toast) }

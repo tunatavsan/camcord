@@ -27,6 +27,13 @@ enum SelectionAccent {
 /// true for a `.nonactivatingPanel` to receive key events (Esc) at all.
 final class SelectionPanel: NSPanel {
     override var canBecomeKey: Bool { true }
+
+    /// A frozen desktop must replace the live desktop in one compositor commit. AppKit's
+    /// default behavior may animate a panel as it is ordered in, which makes opaque frozen
+    /// pixels visibly move even though the screenshot layer itself has implicit actions off.
+    func configureForPresentation(displaysFrozenDesktop: Bool) {
+        animationBehavior = displaysFrozenDesktop ? .none : .default
+    }
 }
 
 /// Presents one `SelectionPanel` per `NSScreen`, lets the user drag out a region
@@ -43,10 +50,12 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     private var panels: [SelectionPanel] = []
     private var views: [SelectionView] = []
     private var continuation: CheckedContinuation<(SelectionResult, HoldCaptureMode)?, Never>?
+    private var frozenContinuation: CheckedContinuation<(CGRect, HoldCaptureMode)?, Never>?
     /// Non-nil while a HOLD session (mouse side button held; events driven by the
     /// CGEventTap, not by the panels) is active. Every exit path funnels through
     /// `finish(_:)`, which fires this exactly once.
     private var holdEndHandler: ((SelectionResult?) -> Void)?
+    private var frozenSnapshot: FrozenDesktopSnapshot?
     private var isPresenting = false
 
     // Global = AppKit screen space (bottom-left origin, Y up).
@@ -64,6 +73,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     /// teal "Metin · OCR" treatment even though no right button drove the selection.
     private var holdIsText = false
     private var highlightedWindow: SCWindow?
+    private var highlightedFrozenWindow: FrozenDesktopSnapshot.Window?
     /// Session token for the async window-snap lookups: they hop through the cache
     /// actor, so one can resolve after teardown (or after a newer lookup) and would
     /// otherwise write a stale `highlightedWindow` into the wrong session — a click
@@ -97,6 +107,20 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         }
     }
 
+    /// Screenshot/OCR selector backed entirely by pixels and window geometry captured before this
+    /// panel exists. A click resolves to the frozen window frame; a drag resolves to its rect.
+    func selectFrozen(snapshot: FrozenDesktopSnapshot) async -> (CGRect, HoldCaptureMode)? {
+        guard !isPresenting else { return nil }
+        isPresenting = true
+        frozenSnapshot = snapshot
+        rightClickWholeScreen = false
+        accent = .screenshot
+        return await withCheckedContinuation { continuation in
+            frozenContinuation = continuation
+            presentPanels()
+        }
+    }
+
     // MARK: - Hold session (side button held down; driven by the event tap)
 
     /// Starts a hold-to-capture session anchored at the button-down location.
@@ -112,10 +136,16 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     /// so the caller must NOT track/swallow the gesture). On rejection `onEnd` is NOT
     /// called — the caller owns its own cleanup.
     @discardableResult
-    func beginHoldSelection(atCGPoint cgPoint: CGPoint, mode: HoldCaptureMode, onEnd: @escaping (SelectionResult?) -> Void) -> Bool {
+    func beginHoldSelection(
+        atCGPoint cgPoint: CGPoint,
+        mode: HoldCaptureMode,
+        frozenSnapshot: FrozenDesktopSnapshot? = nil,
+        onEnd: @escaping (SelectionResult?) -> Void
+    ) -> Bool {
         guard !isPresenting else { return false }
         isPresenting = true
         holdEndHandler = onEnd
+        self.frozenSnapshot = frozenSnapshot
         holdIsText = mode == .text
         accent = .screenshot   // hold-to-capture is always a screenshot → blue
         activeIsRight = false   // chord mode comes from `mode` alone, not a stale right-drag
@@ -184,12 +214,27 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
             finish(nil)
             return
         }
+        if let frozenSnapshot,
+            let primaryHeight = NSScreen.screens.first?.frame.height
+        {
+            let frames = Dictionary(uniqueKeysWithValues: NSScreen.screens.compactMap { screen in
+                screen.cgDirectDisplayID.map {
+                    ($0, Geometry.appKitToCG(screen.frame, primaryScreenHeight: primaryHeight))
+                }
+            })
+            guard frozenSnapshot.matches(displayFramesByID: frames) else {
+                finish(nil)
+                return
+            }
+        }
 
         NSCursor.crosshair.push()
         cursorPushed = true
         // Kick off a refresh so window-snap has something reasonably fresh; mouseMoved
         // itself only ever reads the last-known snapshot, never blocks on a fetch.
-        Task { await shareableContentCache.refreshInBackground() }
+        if frozenSnapshot == nil {
+            Task { await shareableContentCache.refreshInBackground() }
+        }
 
         // The panel/view arrays are built from this instant's NSScreen.screens and
         // are index-paired with it in updateRendering -- if the display set changes
@@ -224,11 +269,15 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
             panel.ignoresMouseEvents = false
             panel.acceptsMouseMovedEvents = true
             panel.isReleasedWhenClosed = false
+            panel.configureForPresentation(displaysFrozenDesktop: frozenSnapshot != nil)
 
             let view = SelectionView(frame: NSRect(origin: .zero, size: screen.frame.size))
             view.delegate = self
             view.backingScale = screen.backingScaleFactor
             view.accent = accent.color
+            if let frozenDisplay = screen.cgDirectDisplayID.flatMap({ frozenSnapshot?.display(id: $0) }) {
+                view.setFrozenDesktopImage(frozenDisplay.image, scale: frozenDisplay.scaleX)
+            }
             panel.contentView = view
             // A programmatic panel's first responder defaults to the panel ITSELF,
             // which swallows keyDown/cancelOperation — Esc only reaches
@@ -259,7 +308,9 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
                 // the CURRENT space and z-order — native full-screen enters a new
                 // Space, so the last-known snapshot can momentarily lack the front
                 // window and the snap would fall through to a window behind it.
-                _ = try? await shareableContentCache.content()
+                if frozenSnapshot == nil {
+                    _ = try? await shareableContentCache.content()
+                }
                 await updateWindowSnap(at: mouseLocation, generation: generation)
             }
         }
@@ -285,6 +336,8 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         dragCurrent = nil
         isDragging = false
         highlightedWindow = nil
+        highlightedFrozenWindow = nil
+        frozenSnapshot = nil
         rightClickWholeScreen = false
         accent = .screenshot   // next session defaults to the screenshot (blue) accent
         holdIsText = false
@@ -299,15 +352,28 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         isPresenting = false
         let continuation = self.continuation
         self.continuation = nil
+        let frozenContinuation = self.frozenContinuation
+        self.frozenContinuation = nil
         let holdHandler = holdEndHandler
         holdEndHandler = nil
         continuation?.resume(returning: result.map { ($0, mode) })
+        let frozenRect: CGRect? = result.flatMap {
+            switch $0 {
+            case .region(let rect): return rect
+            case .window(let window): return window.frame
+            }
+        }
+        frozenContinuation?.resume(returning: frozenRect.map { ($0, mode) })
         holdHandler?(result)
     }
 
     // MARK: - SelectionViewDelegate
 
     func selectionViewMouseDown(at globalPoint: CGPoint, isRight: Bool) {
+        // A new gesture orphans any still-pending click resolution from a previous
+        // click (see selectionViewMouseUp) — without this, a slow lookup could commit
+        // its window mid-way through THIS gesture.
+        snapGeneration &+= 1
         // Don't switch to selection-drag rendering yet -- stay in window-snap
         // highlight mode until mouseDragged confirms an actual drag past the
         // click-movement threshold. Avoids the highlight flickering off on a
@@ -351,13 +417,42 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         }
 
         guard wasDragging else {
-            // Click-without-drag: over a highlighted window -> pick it; over empty space -> cancel.
-            if let highlightedWindow {
-                // Tactile commit tick — a no-op on non-Force-Touch input devices.
-                NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
-                finish(.window(highlightedWindow), mode: mode)
-            } else {
-                finish(nil)
+            if let frozenSnapshot {
+                let cgPoint = appKitPointToCG(
+                    globalPoint,
+                    primaryScreenHeight: NSScreen.screens.first?.frame.height ?? 0
+                )
+                let window = frozenSnapshot.window(atCGPoint: cgPoint) ?? highlightedFrozenWindow
+                if let window {
+                    NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+                    finish(.region(window.frame), mode: mode)
+                } else {
+                    finish(nil)
+                }
+                return
+            }
+            // Click-without-drag: pick the window UNDER THE CLICK POINT. The hover
+            // highlight resolves asynchronously off a possibly-stale snapshot, so on a
+            // fast move-and-click it can still be the PREVIOUS window (or nil) —
+            // committing it captured a window the user never pointed at. The highlight
+            // only serves as fallback if the fresh lookup fails.
+            let fallback = highlightedWindow
+            // Session/gesture token: teardown and every new mouseDown bump this, so a
+            // slow lookup can never commit into a later session or a newer gesture
+            // (isPresenting alone is not session-scoped — it is true again for the next
+            // session).
+            let generation = snapGeneration
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let resolved = await self.resolveClickedWindow(atAppKitPoint: globalPoint) ?? fallback
+                guard generation == self.snapGeneration, self.isPresenting else { return }
+                if let resolved {
+                    // Tactile commit tick — a no-op on non-Force-Touch input devices.
+                    NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+                    self.finish(.window(resolved), mode: mode)
+                } else {
+                    self.finish(nil)
+                }
             }
             return
         }
@@ -395,6 +490,19 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     /// the session it was spawned for is no longer the current one (see `snapGeneration`).
     private func updateWindowSnap(at globalPoint: CGPoint, generation: Int) async {
         guard let primaryHeight = NSScreen.screens.first?.frame.height else { return }
+        if let frozenSnapshot {
+            guard generation == snapGeneration, isPresenting else { return }
+            let cgPoint = appKitPointToCG(globalPoint, primaryScreenHeight: primaryHeight)
+            let window = frozenSnapshot.window(atCGPoint: cgPoint)
+            if window != highlightedFrozenWindow {
+                if window != nil {
+                    NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+                }
+                highlightedFrozenWindow = window
+                updateRendering()
+            }
+            return
+        }
         guard let content = await shareableContentCache.lastKnownContent() else {
             guard generation == snapGeneration, isPresenting else { return }
             if highlightedWindow != nil {
@@ -405,15 +513,26 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         }
         guard generation == snapGeneration, isPresenting else { return }
         let cgPoint = appKitPointToCG(globalPoint, primaryScreenHeight: primaryHeight)
-        // Always resolve the TOPMOST window under the cursor. A previous "skip if the
-        // cursor is still inside the current highlight's frame" optimization was wrong:
-        // a small window sitting ON TOP of a larger highlighted one is inside the
-        // larger one's frame, so the guard froze the highlight on the big back window
-        // and you couldn't snap to the front ones without first leaving the big frame.
-        // WindowSnapper hit-tests the live front-to-back list, so re-running it every
-        // move is what makes overlapping/stacked windows selectable; the windowID
-        // compare below still suppresses redundant re-renders when it's unchanged.
-        let window = WindowSnapper.window(atCGPoint: cgPoint, content: content)
+
+        let capturableIDs = Set(content.windows.filter { $0.isOnScreen }.map { $0.windowID })
+        let ownBundleID = Bundle.main.bundleIdentifier
+        let ownWindowIDs = Set(
+            content.windows
+                .filter { $0.owningApplication?.bundleIdentifier == ownBundleID }
+                .map { $0.windowID }
+        )
+
+        let topmostID = await WindowSnapper.topmostWindowID(
+            atCGPoint: cgPoint,
+            capturableIDs: capturableIDs,
+            ownWindowIDs: ownWindowIDs
+        )
+
+        guard generation == snapGeneration, isPresenting else { return }
+
+        let byID = Dictionary(content.windows.map { ($0.windowID, $0) }, uniquingKeysWith: { a, _ in a })
+        let window = topmostID.flatMap { byID[$0] }
+
         if window?.windowID != highlightedWindow?.windowID {
             // Subtle level-change tick as the snap target switches (Finder-style).
             if window != nil {
@@ -422,6 +541,22 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
             highlightedWindow = window
             updateRendering()
         }
+    }
+
+    /// The SCWindow under a clicked point: geometry from a FRESH window-server list
+    /// (own windows excluded by pid), mapped into shareable content — with one bounded
+    /// refresh when the window is newer than the cached snapshot. Without the refresh a
+    /// just-opened window could not be picked at all and the click fell through to the
+    /// window behind it.
+    private func resolveClickedWindow(atAppKitPoint point: CGPoint) async -> SCWindow? {
+        guard let primaryHeight = NSScreen.screens.first?.frame.height else { return nil }
+        let cgPoint = appKitPointToCG(point, primaryScreenHeight: primaryHeight)
+        guard let id = await WindowSnapper.clickTopmostWindowID(atCGPoint: cgPoint) else { return nil }
+        if let known = await shareableContentCache.lastKnownContent()?.windows.first(where: { $0.windowID == id }) {
+            return known
+        }
+        let fresh = try? await shareableContentCache.content(forceRefresh: true)
+        return fresh?.windows.first { $0.windowID == id }
     }
 
     /// Converts a single AppKit-space point via `Geometry.appKitToCG` (a zero-size
@@ -443,7 +578,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
             // OCR mode from either a right-button drag (activeIsRight) or a .text hold/chord —
             // but NOT while recording, where the right button means "whole screen", not OCR.
             view.selectionIsText = (activeIsRight || holdIsText) && !rightClickWholeScreen
-            guard globalSelection != nil || highlightedWindow != nil else {
+            guard globalSelection != nil || highlightedWindow != nil || highlightedFrozenWindow != nil else {
                 view.selectionRect = nil
                 view.highlightRect = nil
                 view.badge = nil
@@ -465,6 +600,12 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
                 }
             } else if let highlightedWindow {
                 let appKitFrame = Geometry.cgToAppKit(highlightedWindow.frame, primaryScreenHeight: primaryHeight)
+                let intersection = appKitFrame.intersection(screen.frame)
+                view.highlightRect = intersection.isNull ? nil : localRect(intersection, in: screen)
+                view.selectionRect = nil
+                view.badge = nil
+            } else if let highlightedFrozenWindow {
+                let appKitFrame = Geometry.cgToAppKit(highlightedFrozenWindow.frame, primaryScreenHeight: primaryHeight)
                 let intersection = appKitFrame.intersection(screen.frame)
                 view.highlightRect = intersection.isNull ? nil : localRect(intersection, in: screen)
                 view.selectionRect = nil

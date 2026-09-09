@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Testing
 
@@ -32,6 +33,41 @@ struct FeedbackSoundTests {
         #expect(FeedbackSound.isEnabled(in: defaults) == false)
         FeedbackSound.setEnabled(true, in: defaults)
         #expect(FeedbackSound.isEnabled(in: defaults) == true)
+    }
+
+    @MainActor
+    @Test("every action keeps the original macOS cue and decodes its cached AIFF")
+    func legacyCueMediaContract() throws {
+        let expected: [FeedbackSound: String] = [
+            .regionShot: "Pop",
+            .windowShot: "Bottle",
+            .fullScreenShot: "Funk",
+            .textOCR: "Morse",
+            .recordStart: "Hero",
+            .recordStop: "Glass",
+            .recordPause: "Tink",
+            .recordResume: "Purr",
+            .paste: "Frog",
+            .error: "Basso",
+        ]
+        var payloads = Set<Data>()
+
+        for cue in FeedbackSound.allCases {
+            let name = try #require(expected[cue])
+            let payload = cue.audioData
+            let player = try AVAudioPlayer(data: payload)
+            payloads.insert(payload)
+
+            #expect(cue.systemSoundName == name)
+            #expect(payload.starts(with: Data("FORM".utf8)))
+            let diskPayload = try Data(contentsOf: cue.systemSoundURL)
+            #expect(payload == diskPayload)
+            #expect(player.duration > 0.5)
+            #expect(player.duration < FeedbackSound.maximumAwaitedPlaybackSeconds)
+            #expect(cue.audioData == payload)
+        }
+
+        #expect(payloads.count == FeedbackSound.allCases.count)
     }
 }
 

@@ -4,3 +4,6 @@ dist/
 .DS_Store
 *.mov
 *.mp4
+
+.playwright-mcp/
+.claude/

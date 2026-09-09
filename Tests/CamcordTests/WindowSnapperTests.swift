@@ -81,4 +81,56 @@ struct WindowSnapperTests {
         )
         #expect(id == nil)
     }
+
+    // MARK: - Click-path hit-test (no capturable-set dependency)
+
+    /// The regression that motivated the click path: a window that is missing from the
+    /// (stale) shareable-content snapshot — e.g. opened seconds ago — must still be
+    /// pickable; the hover variant skipped it and selected the window BEHIND it.
+    @Test("click path picks the front window even when no snapshot knows it")
+    func clickPathIgnoresSnapshotStaleness() {
+        let front = candidate(1, CGRect(x: 0, y: 0, width: 500, height: 500))
+        let back = candidate(2, CGRect(x: 0, y: 0, width: 500, height: 500))
+        let id = WindowSnapper.topmost(
+            atCGPoint: CGPoint(x: 10, y: 10),
+            ordered: [front, back],
+            excludingPID: 999
+        )
+        #expect(id == 1)
+    }
+
+    @Test("click path skips this process's own windows and non-normal layers")
+    func clickPathSkipsOwnAndNonNormal() {
+        let point = CGPoint(x: 50, y: 50)
+        let menuBar = WindowSnapper.Candidate(windowID: 10, layer: 25, bounds: CGRect(x: 0, y: 0, width: 1000, height: 100))
+        let own = WindowSnapper.Candidate(windowID: 11, layer: 0, bounds: CGRect(x: 0, y: 0, width: 500, height: 500), ownerPID: 42)
+        let real = WindowSnapper.Candidate(windowID: 12, layer: 0, bounds: CGRect(x: 0, y: 0, width: 500, height: 500), ownerPID: 7)
+        let id = WindowSnapper.topmost(atCGPoint: point, ordered: [menuBar, own, real], excludingPID: 42)
+        #expect(id == 12)
+    }
+
+    @Test("candidate mapping keeps z-order, carries the owner pid, and drops transparent windows")
+    func candidateMappingFiltersTransparent() {
+        let infoList: [[String: Any]] = [
+            [
+                kCGWindowLayer as String: 0,
+                kCGWindowNumber as String: 1,
+                kCGWindowOwnerPID as String: 42,
+                kCGWindowAlpha as String: 0.0,   // invisible click-catcher — must be dropped
+                kCGWindowBounds as String: ["X": 0, "Y": 0, "Width": 500, "Height": 500],
+            ],
+            [
+                kCGWindowLayer as String: 0,
+                kCGWindowNumber as String: 2,
+                kCGWindowOwnerPID as String: 7,
+                kCGWindowAlpha as String: 1.0,
+                kCGWindowBounds as String: ["X": 0, "Y": 0, "Width": 400, "Height": 300],
+            ],
+        ]
+        let mapped = WindowSnapper.candidates(from: infoList)
+        #expect(mapped.count == 1)
+        #expect(mapped.first?.windowID == 2)
+        #expect(mapped.first?.ownerPID == 7)
+        #expect(mapped.first?.bounds == CGRect(x: 0, y: 0, width: 400, height: 300))
+    }
 }
