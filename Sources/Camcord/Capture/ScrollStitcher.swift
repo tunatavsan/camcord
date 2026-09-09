@@ -104,6 +104,9 @@ final class ScrollStitcher {
     }
     /// Baseline for the next comparison, including a move still awaiting confirmation.
     var firstFrame: Frame? { pending?.frame ?? reference ?? warmup.last }
+    /// Sticky bands detected during warm-up (0 until then) — a caller comparing two frames
+    /// outside `add` must exclude the same rows or a tall sticky header reads as no motion.
+    var detectedBands: (header: Int, footer: Int) { (headerH, footerH) }
 
     init(maxTotalHeight: Int = 40_000) { self.maxTotalHeight = maxTotalHeight }
 
@@ -119,7 +122,12 @@ final class ScrollStitcher {
     /// last accepted frame, in the image's PIXELS (0 = unknown → full search).
     @discardableResult
     func add(_ image: CGImage, predictedOffset: Int) -> Outcome {
-        guard let f = Self.makeFrame(image) else { return .ignored }
+        guard let f = Self.makeFrame(image) else {
+            // Never leave a stale `.down` behind: the session reads `lastMotion` to decide
+            // whether an auto-scroll is still advancing.
+            (lastMotion, lastScore) = (.none, .infinity)
+            return .ignored
+        }
 
         if !detected {
             if let previous = warmup.last {

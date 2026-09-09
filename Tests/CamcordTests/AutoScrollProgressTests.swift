@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import Camcord
@@ -57,5 +58,34 @@ struct AutoScrollProgressTests {
         var p = AutoScrollProgress()
         #expect(p.record(.up(20)) == .flipDirection)
         #expect(p.record(.up(20)) == .reachedEnd)
+    }
+}
+
+@Suite("AutoScroller direction", .serialized)
+struct AutoScrollerDirectionTests {
+
+    @Test("a proven direction is written once per sign and re-armed by a flip")
+    @MainActor func directionPersistsOncePerSign() {
+        let defaults = UserDefaults.standard
+        let key = AutoScroller.directionDefaultsKey
+        let saved = defaults.object(forKey: key)
+        defer {
+            if let saved { defaults.set(saved, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+
+        defaults.removeObject(forKey: key)
+        let scroller = AutoScroller()
+        scroller.confirmDirection()
+        let first = defaults.integer(forKey: key)
+        #expect(first != 0)
+
+        // Every stitched frame confirms; the identical value must not be rewritten.
+        defaults.removeObject(forKey: key)
+        scroller.confirmDirection()
+        #expect(defaults.object(forKey: key) == nil)
+
+        scroller.flipDirection()
+        scroller.confirmDirection()
+        #expect(defaults.integer(forKey: key) == -first)
     }
 }

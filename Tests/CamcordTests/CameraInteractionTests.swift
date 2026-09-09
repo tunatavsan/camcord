@@ -276,6 +276,63 @@ struct CameraInteractionTests {
         #expect(nativePanel.frame.maxY <= appKitBounds.maxY + 0.01)
     }
 
+    @Test("a live drag reaches the compositor every frame but persists only when it settles")
+    @MainActor func livePlacementDefersPersistence() throws {
+        let defaults = UserDefaults.standard
+        let key = RecordingSettings.defaultsKey
+        let savedData = defaults.data(forKey: key)
+        let overlay = CameraOverlayController.shared
+        let savedCallback = overlay.onPlacementChange
+        defer {
+            overlay.onPlacementChange = nil
+            if let savedData { defaults.set(savedData, forKey: key) } else { defaults.removeObject(forKey: key) }
+            overlay.onPlacementChange = savedCallback
+        }
+
+        var emitted: [CameraOptions] = []
+        overlay.onPlacementChange = { emitted.append($0) }
+        let seated = CameraOptions(enabled: true, widthFraction: 0.2, position: CameraPosition(x: 0, y: 0))
+        overlay.applyPlacement(seated, source: .floating)
+        let dragged = CameraOptions(enabled: true, widthFraction: 0.42, position: CameraPosition(x: 0.7, y: 0.3))
+
+        overlay.applyPlacement(dragged, source: .floating, persists: false)
+        #expect(emitted.last == dragged.resolved())
+        #expect(RecordingSettings.load(from: defaults).camera == seated.resolved())
+
+        overlay.applyPlacement(dragged, source: .floating, persists: true)
+        #expect(RecordingSettings.load(from: defaults).camera == dragged.resolved())
+        #expect(emitted.count == 3)
+    }
+
+    @Test("a finished recording releases the window confinement")
+    @MainActor func recordingEndReleasesConfinement() throws {
+        _ = NSApplication.shared
+        let overlay = CameraOverlayController.shared
+        let savedPreview = overlay.previewVisible
+        defer {
+            overlay.previewVisible = false
+            overlay.recordingEnded()
+            overlay.previewVisible = savedPreview
+            overlay.hide()
+        }
+
+        let options = CameraOptions(enabled: true, widthFraction: 0.3, position: CameraPosition(x: 1, y: 0))
+        let window = CGRect(x: 140, y: 160, width: 700, height: 420)
+        let moved = CGRect(x: 620, y: 300, width: 700, height: 420)
+        overlay.previewVisible = true
+        overlay.prepareRecording(cgRect: window, options: options)
+        let nativePanel = try #require(NSApp.windows.first { $0.contentView is FloatingCameraView })
+        let confined = nativePanel.frame
+
+        // Ending a recording that composited no camera must drop the recording bounds,
+        // or the dead window rect keeps framing the free preview for the rest of the
+        // session and every later drag normalizes against it.
+        overlay.previewVisible = false
+        overlay.recordingEnded()
+        overlay.updateRecordingBounds(cgRect: moved)
+        #expect(nativePanel.frame == confined)
+    }
+
     @Test("stage camera geometry scales exactly with its thumbnail")
     @MainActor func stageThumbnailScale() {
         let frameSize = CGSize(width: 1600, height: 900)

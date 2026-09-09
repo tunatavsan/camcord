@@ -183,7 +183,10 @@ final class ScrollingCaptureSession {
             preview.flashHint("Otomatik için Erişilebilirlik izni gerekli")
             return
         }
-        guard prepared, stitcher.firstFrame != nil else { return }
+        guard prepared, stitcher.firstFrame != nil else {
+            preview.flashHint("Sayfa hazırlanıyor · yeniden dene")
+            return
+        }
         autoScrolling = true
         calibrating = true
         settleGeneration &+= 1
@@ -201,19 +204,22 @@ final class ScrollingCaptureSession {
     }
 
     private func calibrate(_ scroller: AutoScroller, generation: Int) async {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
         defer {
             if calibrating, autoGeneration == generation {
                 stopAutoScroll(reachedEnd: false)
                 preview.flashHint("Sayfa kaydırılamıyor")
             }
         }
-        while captureInFlight, ContinuousClock.now < deadline, autoGeneration == generation {
+        let ready = ContinuousClock.now.advanced(by: .milliseconds(500))
+        while captureInFlight, ContinuousClock.now < ready, autoGeneration == generation {
             try? await Task.sleep(for: .milliseconds(16))
         }
         for attempt in 0..<2 {
+            // Per ATTEMPT, not per calibration: one shared 1 s budget could never fit the
+            // second burst (430 ms of sleeps + a screenshot each), so the flip-and-retry
+            // branch — the whole point of measuring — was unreachable.
+            let deadline = ContinuousClock.now.advanced(by: .milliseconds(1200))
             guard autoGeneration == generation, !captureInFlight,
-                  ContinuousClock.now.advanced(by: .milliseconds(430)) < deadline,
                   let baseline = stitcher.firstFrame else { return }
             let burst = region.height * 0.15
             scroller.start(at: CGPoint(x: region.midX, y: region.midY), region: region, burstPoints: burst)
@@ -227,17 +233,26 @@ final class ScrollingCaptureSession {
             captureInFlight = false
             guard autoGeneration == generation, ContinuousClock.now < deadline,
                   let image, let frame = ScrollStitcher.makeFrame(image) else { return }
-            let motion = ScrollStitcher.motion(from: baseline, to: frame, predicted: Int((burst * scale).rounded()))
+            let bands = stitcher.detectedBands
+            let motion = ScrollStitcher.motion(from: baseline, to: frame,
+                                               headerH: bands.header, footerH: bands.footer,
+                                               predicted: Int((burst * scale).rounded()))
             switch motion {
             case .down:
                 scroller.confirmDirection()
             case .up:
-                scroller.flipDirection() // Persist only when the corrected sign measures down.
+                // The flip IS the measurement: the corrected sign is exactly as proven as
+                // a `.down` under the current one, so remember it (S.3).
+                scroller.flipDirection()
+                scroller.confirmDirection()
             case .none:
                 if attempt == 0 { scroller.flipDirection(); continue }
                 return
             }
-            _ = autoProgress.record(motion)
+            // Only a measured advance seeds the run. Recording a calibration `.up` would
+            // spend the run's single allowed flip before it starts, so the first three
+            // stalled frames would report "page end" without ever having advanced.
+            if case .down = motion { _ = autoProgress.record(motion) }
             calibrating = false
             accumulatedDeltaPoints = 0
             pendingCapture = false

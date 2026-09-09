@@ -330,14 +330,29 @@ struct CapturePanelView: View {
             Text("Kamerayı kaydet").font(.system(size: 11, weight: .medium))
             Spacer()
             if cameraRunning { Circle().fill(.green).frame(width: 6, height: 6) }
-            Button(previewVisible ? "Önizlemeyi gizle" : "Önizleme") {
+            // A real, visible control: the record switch alone left the preview
+            // unreachable (the owner never found the bare text button next to it).
+            HoverScaleButton(action: {
                 guard !designPreview else { return }
                 CameraOverlayController.shared.togglePreview()
                 previewVisible = CameraOverlayController.shared.previewVisible
+            }) { hovering in
+                HStack(spacing: 4) {
+                    Image(systemName: previewVisible ? "eye.fill" : "eye.slash")
+                    Text("Önizleme")
+                }
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(previewVisible ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
+                .padding(.horizontal, 8)
+                .frame(height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.primary.opacity(previewVisible ? (hovering ? 0.15 : 0.11) : (hovering ? 0.08 : 0.035)))
+                )
             }
-            .buttonStyle(.plain)
-            .font(.system(size: 10))
-            .foregroundStyle(.secondary)
+            .help("Kamera önizleme penceresini açar veya gizler — kayda kamera gömmekten bağımsızdır")
+            .accessibilityLabel("Kamera önizlemesi")
+            .accessibilityValue(previewVisible ? "Açık" : "Kapalı")
             Toggle("Kamerayı kaydet", isOn: Binding(
                 get: { cameraEnabled },
                 set: { enabled in
@@ -351,6 +366,8 @@ struct CapturePanelView: View {
                 }
             ))
                 .labelsHidden().toggleStyle(.switch).controlSize(.mini)
+                .help("Kamerayı kaydedilen dosyaya gömer — önizleme penceresini açmaz")
+                .accessibilityLabel("Kamerayı kaydet")
                 .disabled(model.state != .idle || model.isStarting)
         }
         .padding(.horizontal, 10)
@@ -598,7 +615,7 @@ struct StageView: View {
 
     @ViewBuilder
     private func cameraOverlay(in thumbnail: CGRect) -> some View {
-        let rect = Self.cameraRect(options: options, frameSize: frameSize, thumbnail: thumbnail)
+        let rect = options.enabled ? Self.cameraRect(options: options, frameSize: frameSize, thumbnail: thumbnail) : .zero
         if !rect.isEmpty {
             ZStack {
                 RoundedRectangle(cornerRadius: max(3, CameraOptions.cornerRadius(for: rect.size)))
@@ -638,15 +655,15 @@ struct StageView: View {
                         CameraResizeGeometry.corner(at: point, in: scaledRect)
                     )
                 }
-                updatePlacement(translation: value.translation, thumbnail: thumbnail)
+                updatePlacement(translation: value.translation, thumbnail: thumbnail, persists: false)
             }
             .onEnded { value in
-                updatePlacement(translation: value.translation, thumbnail: thumbnail)
+                updatePlacement(translation: value.translation, thumbnail: thumbnail, persists: true)
                 dragStart = nil
             }
     }
 
-    private func updatePlacement(translation: CGSize, thumbnail: CGRect) {
+    private func updatePlacement(translation: CGSize, thumbnail: CGRect, persists: Bool) {
         guard let start = dragStart, start.frameSize.width > 0, start.frameSize.height > 0 else { return }
         let delta = Self.recordingTranslation(
             translation,
@@ -671,7 +688,7 @@ struct StageView: View {
             )
         }
         options = updated.resolved()
-        CameraOverlayController.shared.applyPlacement(options, source: .stage)
+        CameraOverlayController.shared.applyPlacement(options, source: .stage, persists: persists)
     }
 
     private func installSink() {
@@ -684,10 +701,9 @@ struct StageView: View {
                 let points = recordingFrameSize()
                 guard points.width > 0, points.height > 0 else { return }
                 rendering = true
+                defer { rendering = false }
                 let rendered = await CameraPreviewMonitor.shared.renderer.render(box.value, maximumWidth: 360)
-                guard token == generation else { return }
-                rendering = false
-                guard let rendered else { return }
+                guard token == generation, let rendered else { return }
                 image = NSImage(cgImage: rendered.image, size: rendered.size)
                 thumbnailPixelSize = box.pixelSize
                 frameSize = points

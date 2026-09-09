@@ -68,6 +68,9 @@ final class AutoScroller {
         return saved == 0 ? -1 : Int32(saved)   // 0 = unset → default
     }()
     private var rampTick = 0
+    /// Last sign written to UserDefaults by `confirmDirection`, to keep a long auto run
+    /// from rewriting the identical value once per frame.
+    private var persistedDirection: Int32?
     private var burstPoints: CGFloat?
     /// The area the scroll must land in; if the cursor wanders out we PAUSE posting (rather
     /// than blast scroll into whatever window is now under the pointer) and resume when it
@@ -109,10 +112,14 @@ final class AutoScroller {
     func flipDirection() {
         direction = -direction
         rampTick = 0
+        persistedDirection = nil
     }
 
-    /// Persist only after a measured downward motion under the current wheel sign.
+    /// Persist only after a measured downward motion under the current wheel sign. Called
+    /// once per stitched frame, so it writes only when the stored sign actually changes.
     func confirmDirection() {
+        guard persistedDirection != direction else { return }
+        persistedDirection = direction
         UserDefaults.standard.set(Int(direction), forKey: Self.directionDefaultsKey)
     }
 

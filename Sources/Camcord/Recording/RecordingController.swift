@@ -57,6 +57,7 @@ final class RecordingController: NSObject {
     private var armedPoll: Timer?
     private var armedMissingBounds = 0
     private var armedEscapeMonitor: Any?
+    private var armedEscapeLocalMonitor: Any?
     private var armedPreviewTask: Task<Void, Never>?
     var isArmed: Bool { armed != nil }
     var onArmedChange: ((Bool) -> Void)?
@@ -201,12 +202,21 @@ final class RecordingController: NSObject {
         armedMissingBounds = 0
         let overlay = CameraOverlayController.shared
         previewBeforeArming = overlay.previewVisible
-        overlay.previewVisible = true
         let settings = RecordingSettings.load(from: .standard)
-        overlay.prepareRecording(cgRect: window.frame, options: settings.camera)
-        armedPreviewTask = Task {
-            await CameraPreviewMonitor.shared.start(deviceID: settings.camera.resolved().deviceID,
-                                                    fps: settings.fps, requestPermission: true)
+        // Arming exists to place the camera. With the camera out of the recording there is
+        // nothing to place: never open the device, and never leave a confinement rect
+        // behind that would follow the free preview for the rest of the session.
+        if settings.camera.enabled {
+            overlay.previewVisible = true
+            // Same rect begin() composites against, so the placement made while armed is
+            // the placement that lands in the file (window.frame is double-scaled for
+            // fullscreen-exclusive apps).
+            overlay.prepareRecording(cgRect: CaptureAreaIndicator.windowBounds(window.windowID) ?? window.frame,
+                                     options: settings.camera)
+            armedPreviewTask = Task {
+                await CameraPreviewMonitor.shared.start(deviceID: settings.camera.resolved().deviceID,
+                                                        fps: settings.fps, requestPermission: true)
+            }
         }
         indicator.showRecordingWindow(window.windowID, initialCGRect: window.frame, showsBorder: true,
                                       title: "Başlat", glyph: .play, color: .systemBlue,
@@ -222,6 +232,13 @@ final class RecordingController: NSObject {
         }
         armedEscapeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53 { self?.cancelArmed() }
+        }
+        // The global monitor never sees events routed to our own key window, and the panel
+        // is deliberately held open while armed — so Esc needs the local path too.
+        armedEscapeLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == 53 else { return event }
+            self?.cancelArmed()
+            return nil
         }
         onArmedChange?(true)
     }
@@ -261,6 +278,8 @@ final class RecordingController: NSObject {
         armedPreviewTask = nil
         if let armedEscapeMonitor { NSEvent.removeMonitor(armedEscapeMonitor) }
         armedEscapeMonitor = nil
+        if let armedEscapeLocalMonitor { NSEvent.removeMonitor(armedEscapeLocalMonitor) }
+        armedEscapeLocalMonitor = nil
         indicator.hide()
     }
 
@@ -510,6 +529,11 @@ final class RecordingController: NSObject {
         if settings.camera.enabled {
             CameraOverlayController.shared.prepareRecording(cgRect: cameraRect, options: settings.camera)
             preparedCamera = await CameraPreviewMonitor.shared.prepareForRecording(options: settings.camera)
+        } else {
+            // Nothing is composited, so no target confines the preview. Without this the
+            // teardown below (gated on recordingCameraEnabled) never runs and an armed
+            // window's rect would keep confining the free preview after the recording.
+            CameraOverlayController.shared.recordingEnded()
         }
         var didStart = false
         defer {

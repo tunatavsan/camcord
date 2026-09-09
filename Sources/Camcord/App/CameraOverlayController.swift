@@ -68,13 +68,18 @@ final class CameraOverlayController: NSObject {
             }.store(in: &observations)
     }
 
-    func applyPlacement(_ options: CameraOptions, source: PlacementSource) {
+    /// `persists: false` is the live-drag path: the compositor and the floating preview
+    /// follow every frame, but UserDefaults (and the settings notification that fans out
+    /// to two more observers) is written only when the gesture settles.
+    func applyPlacement(_ options: CameraOptions, source: PlacementSource, persists: Bool = true) {
         if source != .floating { stopMotion(); dragStart = nil }
         self.options = options.resolved()
-        var settings = RecordingSettings.load(from: .standard)
-        if settings.camera != self.options {
-            settings.camera = self.options
-            settings.save(to: .standard)
+        if persists {
+            var settings = RecordingSettings.load(from: .standard)
+            if settings.camera != self.options {
+                settings.camera = self.options
+                settings.save(to: .standard)
+            }
         }
         if panel.isVisible { cameraView.mirrored = self.options.mirrored; layout() }
         onPlacementChange?(self.options)
@@ -217,7 +222,7 @@ final class CameraOverlayController: NSObject {
         guard let motion else { return }
         options.place(motion.frame, in: bounds.size)
         if let corner = motion.magnetCorner { options.corner = corner }
-        applyPlacement(options, source: .floating)
+        applyPlacement(options, source: .floating, persists: false)
     }
 
     @objc private func animateDrag(_ link: CADisplayLink) {
@@ -251,7 +256,7 @@ final class CameraOverlayController: NSObject {
                 options = CameraResizeGeometry.resize(start: local, translation: translation,
                                                       corner: corner, options: options, in: bounds.size)
                 final = options
-                applyPlacement(options, source: .floating)
+                applyPlacement(options, source: .floating, persists: phase == .ended)
             } else {
                 motion?.follow(CGPoint(x: local.minX + translation.x, y: local.minY + translation.y),
                                released: phase == .ended)
