@@ -614,6 +614,8 @@ private final class StopPillView: NSView {
         self.label = NSTextField(labelWithString: title)
         super.init(frame: frame)
         wantsLayer = true
+        // Half the pill's 30 pt height: a capsule, not a surface corner — keep it off the
+        // app's radius token.
         layer?.cornerRadius = 15
         layer?.backgroundColor = color.cgColor
         label.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold)

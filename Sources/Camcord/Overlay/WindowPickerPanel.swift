@@ -366,7 +366,7 @@ private struct WindowPickerView: View {
             .buttonStyle(.plain)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 7).fill(Color.primary.opacity(0.08)))
+            .background(RoundedRectangle(cornerRadius: CamcordStyle.Radius.control).fill(Color.primary.opacity(0.08)))
             .keyboardShortcut(.cancelAction)
         }
         .padding(.horizontal, 20)
@@ -422,14 +422,14 @@ private struct WindowCell: View {
             }
             .padding(8)
             .background(
-                RoundedRectangle(cornerRadius: 12)
+                RoundedRectangle(cornerRadius: CamcordStyle.Radius.surface)
                     .fill(Color.primary.opacity(hovering ? 0.10 : 0.05))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
+                RoundedRectangle(cornerRadius: CamcordStyle.Radius.surface)
                     .strokeBorder(Color.accentColor.opacity(hovering ? 0.9 : 0), lineWidth: 2)
             )
-            .contentShape(RoundedRectangle(cornerRadius: 12))
+            .contentShape(RoundedRectangle(cornerRadius: CamcordStyle.Radius.surface))
         }
         .buttonStyle(.plain)
         .scaleEffect(hovering && !reduceMotion ? 1.02 : 1)
@@ -442,13 +442,13 @@ private struct WindowCell: View {
 
     private var thumbnail: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: CamcordStyle.Radius.inset(by: 8))
                 .fill(Color.black.opacity(0.28))
             if let thumb = item.thumbnail {
                 Image(nsImage: thumb)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .clipShape(RoundedRectangle(cornerRadius: CamcordStyle.Radius.inset(by: 8)))
             } else if let icon = item.appIcon {
                 Image(nsImage: icon)
                     .resizable()
@@ -460,6 +460,6 @@ private struct WindowCell: View {
         }
         .frame(height: 128)
         .frame(maxWidth: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: CamcordStyle.Radius.inset(by: 8)))
     }
 }

@@ -129,7 +129,7 @@ private final class ScrollPreviewView: NSView {
         card.frame = b
         card.wantsLayer = true
         card.layer?.backgroundColor = NSColor(calibratedWhite: 0.10, alpha: 0.96).cgColor
-        card.layer?.cornerRadius = 14
+        card.layer?.cornerRadius = CamcordStyle.Radius.surface
         card.layer?.borderWidth = 1
         card.layer?.borderColor = NSColor.systemBlue.withAlphaComponent(0.55).cgColor
         addSubview(card)
@@ -154,7 +154,7 @@ private final class ScrollPreviewView: NSView {
         imageView.frame = CGRect(x: 12, y: 90, width: b.width - 24, height: (b.height - 56) - 90)
         imageView.wantsLayer = true
         imageView.layer?.backgroundColor = NSColor(calibratedWhite: 0.16, alpha: 1).cgColor
-        imageView.layer?.cornerRadius = 8
+        imageView.layer?.cornerRadius = CamcordStyle.Radius.control
         imageView.layer?.masksToBounds = true
         card.addSubview(imageView)
 
@@ -253,7 +253,7 @@ private final class HUDButton: NSView {
         self.label = NSTextField(labelWithString: title)
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 8
+        layer?.cornerRadius = CamcordStyle.Radius.control
         layer?.backgroundColor = idleColor
         label.font = .systemFont(ofSize: 12.5, weight: .semibold)
         label.textColor = .white

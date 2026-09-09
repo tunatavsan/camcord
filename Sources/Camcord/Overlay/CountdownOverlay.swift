@@ -50,7 +50,7 @@ private final class CountdownView: NSView {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.withAlphaComponent(0.72).cgColor
-        layer?.cornerRadius = 28
+        layer?.cornerRadius = CamcordStyle.Radius.surface
         layer?.cornerCurve = .continuous
         setAccessibilityElement(true)
         setAccessibilityRole(.button)

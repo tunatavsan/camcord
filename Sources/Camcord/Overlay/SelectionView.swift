@@ -236,6 +236,9 @@ final class SelectionView: NSView {
     private func drawSelectionChrome() {
         if let selectionRect {
             if selectionIsText {
+                // Not the app's corner on purpose: this traces the rect the user dragged,
+                // and the non-text border next to it is square. A UI radius here would
+                // round away the selection's real edges.
                 let border = NSBezierPath(roundedRect: selectionRect, xRadius: 3, yRadius: 3)
                 border.lineWidth = 2
                 NSColor.systemTeal.setStroke()
@@ -268,7 +271,7 @@ final class SelectionView: NSView {
         }
         let labelRect = CGRect(origin: origin, size: size)
         NSColor.systemTeal.setFill()
-        NSBezierPath(roundedRect: labelRect, xRadius: 5, yRadius: 5).fill()
+        NSBezierPath(roundedRect: labelRect, xRadius: CamcordStyle.Radius.control, yRadius: CamcordStyle.Radius.control).fill()
         attributed.draw(at: CGPoint(x: labelRect.minX + hp, y: labelRect.minY + vp))
     }
 
@@ -315,7 +318,7 @@ final class SelectionView: NSView {
         }
         let badgeRect = CGRect(origin: badgeOrigin, size: badgeSize)
 
-        let path = NSBezierPath(roundedRect: badgeRect, xRadius: 4, yRadius: 4)
+        let path = NSBezierPath(roundedRect: badgeRect, xRadius: CamcordStyle.Radius.control, yRadius: CamcordStyle.Radius.control)
         NSColor.black.withAlphaComponent(0.75).setFill()
         path.fill()
         attributed.draw(at: CGPoint(x: badgeRect.minX + horizontalPadding, y: badgeRect.minY + verticalPadding))
