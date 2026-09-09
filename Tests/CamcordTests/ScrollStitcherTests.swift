@@ -70,6 +70,41 @@ struct ScrollStitcherTests {
         }
     }
 
+    /// A page whose last `block` rows are repeated `times` times at the very bottom — the
+    /// shape of a page end stitched two or three times (the wheel keeps firing at the end).
+    private func repeatedTailViewport(
+        contentOffset: Int, height: Int, pageHeight: Int, block: Int, times: Int
+    ) -> CGImage {
+        let firstCopy = pageHeight - times * block
+        return pixelImage(height: height) { x, y in
+            let row = contentOffset + y
+            guard row >= firstCopy + block else { return pixel(x, row) }
+            return pixel(x, firstCopy + (row - firstCopy) % block)
+        }
+    }
+
+    /// Scrolls a repeated-tail page top→bottom in `block`-sized steps, then rests on the
+    /// last frame so the final strip is committed (and its duplicate flag computed).
+    private func stitchRepeatedTail(pageHeight: Int, viewport h: Int, block: Int, times: Int) -> ScrollStitcher {
+        let stitcher = ScrollStitcher()
+        var offset = 0
+        while offset <= pageHeight - h {
+            stitcher.add(
+                repeatedTailViewport(contentOffset: offset, height: h, pageHeight: pageHeight,
+                                     block: block, times: times),
+                predictedOffset: block
+            )
+            offset += block
+        }
+        // A settled frame at the bottom commits the last strip, as the Done flush does.
+        stitcher.add(
+            repeatedTailViewport(contentOffset: pageHeight - h, height: h, pageHeight: pageHeight,
+                                 block: block, times: times),
+            predictedOffset: 0
+        )
+        return stitcher
+    }
+
     private func periodicViewport(contentOffset: Int, height: Int) -> CGImage {
         pixelImage(height: height) { x, y in
             UInt8(((contentOffset + y) % 48) * 4 + x % 4)
@@ -379,6 +414,68 @@ struct ScrollStitcherTests {
         #expect(final.height == 128)
         #expect(!stitcher.hasPending)
         expectPageRows(final, startingAt: 0)
+    }
+
+    // MARK: - End of page
+
+    @Test("a page end stitched twice is dropped at finalize")
+    func repeatedTailOnceIsDropped() {
+        let page = 240, h = 120, block = 24
+        let stitcher = stitchRepeatedTail(pageHeight: page, viewport: h, block: block, times: 2)
+        // The duplicate is visible to the session the moment it is committed — that is the
+        // signal that stops an auto-scroll run at the bottom.
+        #expect(stitcher.tailRepeated)
+
+        let final = stitcher.finalImage()!
+        #expect(final.height == page - block)
+        expectPageRows(final, startingAt: 0)
+    }
+
+    @Test("a page end stitched three times drops both repeats")
+    func repeatedTailTwiceIsDropped() {
+        let page = 240, h = 120, block = 24
+        let stitcher = stitchRepeatedTail(pageHeight: page, viewport: h, block: block, times: 3)
+        let final = stitcher.finalImage()!
+        #expect(final.height == page - 2 * block)
+        expectPageRows(final, startingAt: 0)
+    }
+
+    @Test("an over-scroll strip nothing appears below is dropped at finalize")
+    func flatOverscrollStripIsProvisional() {
+        let h = 384, base = 500, stretch = 150
+        let stitcher = ScrollStitcher()
+        primeBaseline(stitcher, contentOffset: base, height: h)
+
+        // A strong flick past the bottom: the page rubber-bands, revealing a tall band of
+        // blank window background — far past the sliver the small-offset guards covered.
+        let stretched = pixelImage(height: h) { x, y in
+            y < h - stretch ? pixel(x, base + stretch + y) : 8
+        }
+        #expect(stitcher.add(stretched, predictedOffset: stretch) == .appended)
+        #expect(stitcher.hasPending)
+
+        let final = stitcher.finalImage()!
+        #expect(final.height == h)   // nothing ever confirmed the band, so it is not content
+        expectPageRows(final, startingAt: base)
+    }
+
+    @Test("a flat band that real content follows is kept")
+    func flatBandFollowedByContentIsCommitted() {
+        let h = 384, base = 500, gap = 150
+        let stitcher = ScrollStitcher()
+        primeBaseline(stitcher, contentOffset: base, height: h)
+
+        let blank = pixelImage(height: h) { x, y in y < h - gap ? pixel(x, base + gap + y) : 8 }
+        #expect(stitcher.add(blank, predictedOffset: gap) == .appended)
+        // The page really did have a blank gap: the next frame shows content below it.
+        let after = pixelImage(height: h) { x, y in
+            if y < h - 2 * gap { return pixel(x, base + 2 * gap + y) }
+            if y < h - gap { return 8 }
+            return pixel(x, base + h + (y - (h - gap)))
+        }
+        #expect(stitcher.add(after, predictedOffset: gap) == .appended)
+
+        #expect(stitcher.finalImage()!.height == h + 2 * gap)
     }
 
     /// Counts contiguous runs of "bright" (≥ threshold) rows at least `minRun` tall.

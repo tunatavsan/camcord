@@ -21,10 +21,15 @@ struct AutoScrollProgress: Equatable {
             stallStreak = 0
             return .keepScrolling
         case .up:
-            break
+            // Once the run has advanced, an upward frame is the rubber band springing back
+            // off the bottom — the page end, not a wrong direction. Stop immediately, or the
+            // next posted ticks stitch that bottom a second and third time.
+            if advancedEver { return .reachedEnd }
         case .none:
             stallStreak += 1
-            guard stallStreak >= 3 else { return .keepScrolling }
+            // Two stalled frames are enough: the direction is measured at calibration, so a
+            // stall after advancing can only mean the page stopped moving.
+            guard stallStreak >= 2 else { return .keepScrolling }
             if advancedEver { return .reachedEnd }
         }
         if flipped { return .reachedEnd }

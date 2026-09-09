@@ -209,7 +209,7 @@ private final class ScrollPreviewView: NSView {
         } else if autoRunning {
             subtitle.stringValue = "Otomatik kaydırılıyor…"
         } else if endReached {
-            subtitle.stringValue = "Sona ulaşıldı · Bitti'ye bas"
+            subtitle.stringValue = "Sayfa sonu · Bitti'ye bas"
         } else {
             switch sections {
             case 0: subtitle.stringValue = "aşağı kaydır veya Otomatik"
