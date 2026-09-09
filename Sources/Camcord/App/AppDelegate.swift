@@ -225,9 +225,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.panelController?.keepOpenForRecording()
             Task { await recordingController?.toggleRecording() }
         }
-        actions.recordWindow = { [weak self, weak recordingController] in
-            self?.panelController?.keepOpenForRecording()
-            Task { await recordingController?.recordWindow() }
+        // The picker is a window of its own and would otherwise open on top of the still-
+        // open panel, hiding half the grid. Close first, like every overlay-opening
+        // capture action; the arming that follows a pick has its own on-screen Başlat.
+        actions.recordWindow = { [weak recordingController] in
+            afterClosingPanel { await recordingController?.recordWindow() }
         }
         actions.recordFullScreen = { [weak self, weak recordingController] in
             self?.panelController?.keepOpenForRecording()

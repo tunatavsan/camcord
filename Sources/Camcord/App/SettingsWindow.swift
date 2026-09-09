@@ -436,6 +436,8 @@ struct RecordingSettingsView: View {
                     Text("Retina (tam)").tag(ResolutionScale.native)
                     Text("Standart (1x)").tag(ResolutionScale.oneX)
                 }
+                Toggle("Oyunda 1080p kaydet", isOn: $settings.gameModeScale)
+                    .help("Tam ekran bir oyun kaydedilirken çözünürlük yarıya iner; kare hızı ve codec değişmez.")
                 Picker("Dinamik Aralık", selection: $settings.dynamicRange) {
                     Text("SDR (Standart) · uyumlu").tag(DynamicRange.sdr)
                     Text("HDR (Geniş Renk) · 10-bit").tag(DynamicRange.hdr)

@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// How the recording's pixel dimensions relate to the source's native (Retina) size.
@@ -92,6 +93,10 @@ struct RecordingSettings: Codable, Equatable {
     var bitrateMbps: Int
     var fps: Int
     var resolutionScale: ResolutionScale
+    /// Halve the resolution of a game-context display recording (1080p on a Retina
+    /// display) so the encoder does not compete with the game for GPU and thermal
+    /// budget. Applies to game-like targets ONLY; fps and codec are untouched.
+    var gameModeScale: Bool
     var dynamicRange: DynamicRange
     /// Whether the pointer is drawn into the recording.
     var showsCursor: Bool
@@ -129,6 +134,7 @@ struct RecordingSettings: Codable, Equatable {
         bitrateMbps: Int = 20,
         fps: Int = 60,
         resolutionScale: ResolutionScale = .native,
+        gameModeScale: Bool = true,
         dynamicRange: DynamicRange = .sdr,
         showsCursor: Bool = true,
         countdownEnabled: Bool = false,
@@ -154,6 +160,7 @@ struct RecordingSettings: Codable, Equatable {
         self.bitrateMbps = bitrateMbps
         self.fps = fps
         self.resolutionScale = resolutionScale
+        self.gameModeScale = gameModeScale
         self.dynamicRange = dynamicRange
         self.showsCursor = showsCursor
         self.countdownEnabled = countdownEnabled
@@ -179,6 +186,13 @@ struct RecordingSettings: Codable, Equatable {
 
     /// The bitrate actually used (Mbps; 0 = auto / quality-based).
     var resolvedBitrateMbps: Int { profile == .custom ? bitrateMbps : profile.bitrateMbps }
+
+    /// The scale a DISPLAY target is captured at. `SCDisplay.frame` is in logical points,
+    /// so the display's backing scale means native Retina pixels and 1 means points —
+    /// exactly the half-resolution "Oyunda 1080p kaydet" wants for a game-like target.
+    func captureScale(displayScale: CGFloat, gameLike: Bool) -> CGFloat {
+        gameLike && gameModeScale ? 1 : displayScale
+    }
 
     /// ProRes only lives in a `.mov`; otherwise the chosen container.
     var effectiveContainer: VideoContainer {
@@ -213,6 +227,7 @@ struct RecordingSettings: Codable, Equatable {
         bitrateMbps = try c.decodeIfPresent(Int.self, forKey: .bitrateMbps) ?? d.bitrateMbps
         fps = try c.decodeIfPresent(Int.self, forKey: .fps) ?? d.fps
         resolutionScale = try c.decodeIfPresent(ResolutionScale.self, forKey: .resolutionScale) ?? d.resolutionScale
+        gameModeScale = try c.decodeIfPresent(Bool.self, forKey: .gameModeScale) ?? d.gameModeScale
         dynamicRange = try c.decodeIfPresent(DynamicRange.self, forKey: .dynamicRange) ?? d.dynamicRange
         showsCursor = try c.decodeIfPresent(Bool.self, forKey: .showsCursor) ?? d.showsCursor
         countdownEnabled = try c.decodeIfPresent(Bool.self, forKey: .countdownEnabled) ?? d.countdownEnabled
@@ -245,6 +260,7 @@ struct RecordingSettings: Codable, Equatable {
         if bitrateMbps != old.bitrateMbps { r.bitrateMbps = bitrateMbps }
         if fps != old.fps { r.fps = fps }
         if resolutionScale != old.resolutionScale { r.resolutionScale = resolutionScale }
+        if gameModeScale != old.gameModeScale { r.gameModeScale = gameModeScale }
         if dynamicRange != old.dynamicRange { r.dynamicRange = dynamicRange }
         if showsCursor != old.showsCursor { r.showsCursor = showsCursor }
         if countdownEnabled != old.countdownEnabled { r.countdownEnabled = countdownEnabled }

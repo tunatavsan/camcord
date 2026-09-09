@@ -14,17 +14,21 @@ import SwiftUI
 @MainActor
 final class WindowPickerPanel: NSObject, NSWindowDelegate {
     private var window: NSWindow?
-    private var continuation: CheckedContinuation<SCWindow?, Never>?
+    private var continuation: CheckedContinuation<WindowPickerChoice?, Never>?
     private var thumbnailTask: Task<Void, Never>?
     private let model = WindowPickerModel()
 
-    /// Presents the picker for the windows in `content` and returns the chosen `SCWindow`,
-    /// or nil if the user dismissed it (or there was nothing to pick).
-    func pick(content: SCShareableContent) async -> SCWindow? {
+    /// Presents the picker for the windows in `content` and returns what the user chose,
+    /// or nil if they dismissed it (or there was nothing to pick).
+    func pick(content: SCShareableContent) async -> WindowPickerChoice? {
         guard window == nil else { return nil }   // one at a time
-        model.windows = Self.eligibleWindows(content)
+        var items = Self.eligibleWindows(content)
+        if let card = Self.fullscreenCard(content: content, context: FullscreenContext.covering(), eligible: items) {
+            items.insert(card, at: 0)
+        }
+        model.windows = items
 
-        return await withCheckedContinuation { (c: CheckedContinuation<SCWindow?, Never>) in
+        return await withCheckedContinuation { (c: CheckedContinuation<WindowPickerChoice?, Never>) in
             self.continuation = c
             present()
             startLoadingThumbnails()
@@ -36,7 +40,7 @@ final class WindowPickerPanel: NSObject, NSWindowDelegate {
     private func present() {
         let view = WindowPickerView(
             model: model,
-            onPick: { [weak self] window in self?.finish(with: window) },
+            onPick: { [weak self] choice in self?.finish(with: choice) },
             onCancel: { [weak self] in self?.finish(with: nil) }
         )
         let hosting = NSHostingController(rootView: view)
@@ -68,7 +72,9 @@ final class WindowPickerPanel: NSObject, NSWindowDelegate {
 
             for item in windows {
                 if Task.isCancelled { return }
-                let image = try? await ScreenshotService.captureWindowThumbnail(item.window, maxWidth: 480)
+                // The fullscreen card has no window to grab; its app icon is the placeholder.
+                guard case .window(let scWindow) = item.choice else { continue }
+                let image = try? await ScreenshotService.captureWindowThumbnail(scWindow, maxWidth: 480)
                 if Task.isCancelled { return }
 
                 if let image {
@@ -87,7 +93,7 @@ final class WindowPickerPanel: NSObject, NSWindowDelegate {
         }
     }
 
-    private func finish(with result: SCWindow?) {
+    private func finish(with result: WindowPickerChoice?) {
         guard let continuation else { return }
         self.continuation = nil
         thumbnailTask?.cancel()
@@ -111,48 +117,175 @@ final class WindowPickerPanel: NSObject, NSWindowDelegate {
 
     private static func eligibleWindows(_ content: SCShareableContent) -> [PickableWindow] {
         let ownBundleID = Bundle.main.bundleIdentifier
+        let displayFrames = content.displays.map(\.frame)
+        var rejected = 0
         // content.windows is front-to-back, so the grid mirrors the on-screen z-order.
-        return content.windows.compactMap { window in
-            // No title requirement: borderless/exclusive-fullscreen render windows (games)
-            // often report an empty title — the grid cell falls back to the app name.
-            guard window.owningApplication?.bundleIdentifier != ownBundleID,
-                  window.frame.width >= 80, window.frame.height >= 80
-            else { return nil }
-
+        let items: [PickableWindow] = content.windows.compactMap { window in
             let pid = window.owningApplication?.processID
             let runningApp = pid.flatMap { NSRunningApplication(processIdentifier: $0) }
-
-            // Only allow windows that belong to a standard user-facing GUI application.
-            // This filters out menu bar apps, background daemons, tooltips, and the Desktop,
-            // preventing SCK from choking on hundreds of invisible/uncapturable windows.
-            guard let runningApp, runningApp.activationPolicy == .regular else {
-                return nil
-            }
-            // The cache queries with onScreenWindowsOnly: false so a fullscreen surface
-            // living on another Space stays pickable — but ordinary off-screen/minimized
-            // windows can't deliver frames, so only display-sized ones pass.
-            if !window.isOnScreen {
-                guard content.displays.contains(where: {
-                    window.frame.width >= $0.frame.width - 2 && window.frame.height >= $0.frame.height - 2
-                }) else { return nil }
-            }
-            let icon = runningApp.icon
-            return PickableWindow(
-                id: window.windowID,
-                window: window,
+            // No title requirement: borderless/exclusive-fullscreen render windows (games)
+            // often report an empty title — the grid cell falls back to the app name.
+            let candidate = PickerCandidate(
+                bundleID: window.owningApplication?.bundleIdentifier,
                 appName: window.owningApplication?.applicationName ?? "",
                 title: window.title ?? "",
-                appIcon: icon,
+                frame: window.frame,
+                isOnScreen: window.isOnScreen,
+                activationPolicy: runningApp?.activationPolicy
+            )
+            if let rejection = rejection(for: candidate, ownBundleID: ownBundleID, displayFrames: displayFrames) {
+                rejected += 1
+                // Our own windows are expected noise; every other rejection is written once
+                // per open so a missing game window is explained by the file.
+                if rejection != .ownApp { DiagnosticsLog.append(diagnosticsLine(candidate, rejection)) }
+                return nil
+            }
+            return PickableWindow(
+                id: window.windowID,
+                choice: .window(window),
+                bundleID: candidate.bundleID,
+                frame: candidate.frame,
+                appName: candidate.appName,
+                title: candidate.title,
+                appIcon: runningApp?.icon,
                 aspect: window.frame.height > 0 ? window.frame.width / window.frame.height : 16.0 / 9.0
             )
+        }
+        DiagnosticsLog.append("picker open windows=\(content.windows.count) eligible=\(items.count) rejected=\(rejected)")
+        return items
+    }
+
+    /// A game whose window the eligibility rules (or ScreenCaptureKit itself) never
+    /// surfaced still has to be reachable: when the frontmost app covers a display and no
+    /// eligible card belongs to it, offer the DISPLAY — the best capture path for a
+    /// fullscreen game anyway (window-surface capture freezes when the game loses focus).
+    private static func fullscreenCard(
+        content: SCShareableContent,
+        context: FullscreenContext,
+        eligible: [PickableWindow]
+    ) -> PickableWindow? {
+        guard context.isGameLike,
+              let bundleID = context.frontmostBundleID,
+              let display = content.displays.first(where: { $0.displayID == context.displayID }),
+              needsFullscreenCard(
+                  bundleID: bundleID,
+                  eligible: eligible.map { (bundleID: $0.bundleID, frame: $0.frame) },
+                  displayFrame: display.frame
+              )
+        else { return nil }
+
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        let name = content.applications.first { $0.bundleIdentifier == bundleID }?.applicationName
+            ?? frontmost?.localizedName
+            ?? "Uygulama"
+        DiagnosticsLog.append("picker fullscreen-card app=\(name) bundle=\(bundleID) display=\(context.displayID)")
+        return PickableWindow(
+            id: kCGNullWindowID,
+            choice: .display(display),
+            bundleID: bundleID,
+            frame: display.frame,
+            appName: name,
+            title: "\(name) — tam ekran",
+            appIcon: frontmost?.icon,
+            aspect: display.frame.height > 0 ? display.frame.width / display.frame.height : 16.0 / 9.0
+        )
+    }
+
+    // MARK: - Decision table (pure, so the rules are testable without ScreenCaptureKit)
+
+    /// True when the covering (game) window did not survive the eligibility rules, so the
+    /// display card is the only way to reach it.
+    static func needsFullscreenCard(
+        bundleID: String,
+        eligible: [(bundleID: String?, frame: CGRect)],
+        displayFrame: CGRect
+    ) -> Bool {
+        !eligible.contains { $0.bundleID == bundleID && covers(frame: $0.frame, displayFrames: [displayFrame]) }
+    }
+
+    /// Nil when the window belongs in the grid; otherwise the rule that rejected it.
+    static func rejection(
+        for candidate: PickerCandidate,
+        ownBundleID: String?,
+        displayFrames: [CGRect]
+    ) -> PickerRejection? {
+        if let ownBundleID, candidate.bundleID == ownBundleID { return .ownApp }
+        guard candidate.frame.width >= 80, candidate.frame.height >= 80 else { return .tooSmall }
+        // Only windows of a user-facing GUI application: this keeps menu-bar apps,
+        // background daemons, tooltips and the Desktop out, so SCK is not asked for
+        // hundreds of invisible/uncapturable surfaces.
+        guard let policy = candidate.activationPolicy else { return .noApplication }
+        let coversDisplay = covers(frame: candidate.frame, displayFrames: displayFrames)
+        // A fullscreen game can run as an .accessory app (no Dock tile). When its window
+        // covers a whole display it is precisely the target the owner came here for.
+        guard policy == .regular || (policy == .accessory && coversDisplay) else { return .activationPolicy }
+        // The cache queries with onScreenWindowsOnly: false so a fullscreen surface living
+        // on another Space stays pickable — but ordinary off-screen/minimized windows
+        // can't deliver frames, so only display-sized ones pass.
+        guard candidate.isOnScreen || coversDisplay else { return .offScreen }
+        return nil
+    }
+
+    static func covers(frame: CGRect, displayFrames: [CGRect]) -> Bool {
+        displayFrames.contains { frame.width >= $0.width - 2 && frame.height >= $0.height - 2 }
+    }
+
+    /// One diagnostics line per rejected window: enough to say why the game is missing.
+    static func diagnosticsLine(_ candidate: PickerCandidate, _ rejection: PickerRejection) -> String {
+        let frame = candidate.frame
+        let geometry = "\(Int(frame.minX)),\(Int(frame.minY)) \(Int(frame.width))x\(Int(frame.height))"
+        return "picker reject rule=\(rejection.rawValue)"
+            + " app=\(candidate.appName.isEmpty ? "-" : candidate.appName)"
+            + " bundle=\(candidate.bundleID ?? "-")"
+            + " title=\(candidate.title.isEmpty ? "-" : candidate.title)"
+            + " frame=\(geometry) onScreen=\(candidate.isOnScreen)"
+            + " policy=\(policyName(candidate.activationPolicy))"
+    }
+
+    private static func policyName(_ policy: NSApplication.ActivationPolicy?) -> String {
+        switch policy {
+        case .some(.regular): "regular"
+        case .some(.accessory): "accessory"
+        case .some(.prohibited): "prohibited"
+        case .some: "other"
+        case .none: "no-app"
         }
     }
 }
 
-/// One window the user can pick. Carries the live `SCWindow` to hand back on selection.
+/// What the picker hands back: a window to capture directly, or the display a fullscreen
+/// app covers when its own window is unreachable.
+enum WindowPickerChoice {
+    case window(SCWindow)
+    case display(SCDisplay)
+}
+
+/// One window as the eligibility rules see it — primitives only, so the decision table
+/// runs in tests without ScreenCaptureKit.
+struct PickerCandidate {
+    let bundleID: String?
+    let appName: String
+    let title: String
+    let frame: CGRect
+    let isOnScreen: Bool
+    let activationPolicy: NSApplication.ActivationPolicy?
+}
+
+/// The rule that kept a window out of the grid; the raw value is what the log says.
+enum PickerRejection: String {
+    case ownApp = "own-app"
+    case tooSmall = "smaller-than-80pt"
+    case noApplication = "no-running-app"
+    case activationPolicy = "not-regular-app"
+    case offScreen = "off-screen-not-display-sized"
+}
+
+/// One entry the user can pick. Carries the live target to hand back on selection.
 struct PickableWindow: Identifiable {
     let id: CGWindowID
-    let window: SCWindow
+    let choice: WindowPickerChoice
+    let bundleID: String?
+    let frame: CGRect
     let appName: String
     let title: String
     let appIcon: NSImage?
@@ -183,7 +316,7 @@ final class WindowPickerModel: ObservableObject {
 
 private struct WindowPickerView: View {
     @ObservedObject var model: WindowPickerModel
-    let onPick: (SCWindow) -> Void
+    let onPick: (WindowPickerChoice) -> Void
     let onCancel: () -> Void
 
     private let columns = [GridItem(.adaptive(minimum: 208, maximum: 260), spacing: 16)]
@@ -198,7 +331,7 @@ private struct WindowPickerView: View {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 16) {
                         ForEach(model.windows) { item in
-                            WindowCell(item: item) { onPick(item.window) }
+                            WindowCell(item: item) { onPick(item.choice) }
                         }
                     }
                     .padding(20)
