@@ -82,6 +82,8 @@ struct CapturePanelView: View {
     @State private var recordMicrophone = true
     @State private var systemGainDB: Double = 0
     @State private var microphoneGainDB: Double = 0
+    @State private var microphoneDeviceID: String?
+    @State private var mixAudioTracks = true
     @State private var soundEnabled = true
     @State private var saveScreenshots = false
     @State private var isMicrophoneDenied = false
@@ -224,20 +226,24 @@ struct CapturePanelView: View {
                 .frame(height: 84, alignment: .top)
                 .animation(reduceMotion ? nil : Self.panelSpring, value: model.state)
 
-            VStack(spacing: 8) {
-                    AudioControlRow(title: "Sistem", symbol: "speaker.wave.2", health: model.health?.systemAudio ?? AudioSourceHealth(enabled: recordSystemAudio),
-                                    gainDB: $systemGainDB, range: -60...12, paused: model.state == .paused)
-                    AudioControlRow(title: "Mikrofon", symbol: "mic", health: model.health?.microphone ?? AudioSourceHealth(enabled: recordMicrophone),
-                                    gainDB: $microphoneGainDB, range: -24...24, paused: model.state == .paused)
-                }
-                .onChange(of: systemGainDB) { _, value in saveGain(system: value, microphone: nil) }
-                .onChange(of: microphoneGainDB) { _, value in
-                    saveGain(system: nil, microphone: value)
-                }
+            AudioChannelStrip(
+                health: model.health,
+                state: model.state,
+                isStarting: model.isStarting,
+                microphoneDenied: isMicrophoneDenied,
+                systemEnabled: $recordSystemAudio,
+                microphoneEnabled: $recordMicrophone,
+                systemGainDB: $systemGainDB,
+                microphoneGainDB: $microphoneGainDB,
+                microphoneDeviceID: $microphoneDeviceID,
+                mixTracks: $mixAudioTracks,
+                onChannelToggle: saveRecordingSettings,
+                onGainChange: { system, microphone in saveGain(system: system, microphone: microphone) },
+                onDeviceChange: saveMicrophoneDevice,
+                onMixChange: saveMixAudioTracks
+            )
 
             cameraRow
-
-            quickControls
 
             Spacer(minLength: 0)
         }
@@ -257,6 +263,7 @@ struct CapturePanelView: View {
                 armedStageFrame: actions.armedStageFrame
             )
             libraryRow
+            quickControls
             Spacer(minLength: 0)
         }
     }
@@ -436,29 +443,10 @@ struct CapturePanelView: View {
         .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: CamcordStyle.Radius.control))
     }
 
+    /// The two audio switches used to live here; they are the channel strip's now, so what
+    /// is left are the output preferences — which belong next to the two destinations.
     private var quickControls: some View {
-        HStack(spacing: 4) {
-            ToggleChip(
-                title: "Sistem",
-                onSymbol: "speaker.wave.2.fill", offSymbol: "speaker.slash.fill",
-                help: audioToggleHelp("Sistem sesini kaydet"),
-                isEnabled: model.state == .idle && !model.isStarting,
-                isOn: $recordSystemAudio
-            ) {
-                saveRecordingSettings()
-            }
-            ToggleChip(
-                title: "Mikrofon",
-                onSymbol: "mic.fill", offSymbol: "mic.slash.fill",
-                help: audioToggleHelp(
-                    isMicrophoneDenied ? "Mikrofonu kaydet — mikrofon izni yok" : "Mikrofonu kaydet"
-                ),
-                warning: isMicrophoneDenied,
-                isEnabled: model.state == .idle && !model.isStarting,
-                isOn: $recordMicrophone
-            ) {
-                saveRecordingSettings()
-            }
+        HStack(spacing: 6) {
             ToggleChip(title: "Bildirim", onSymbol: "bell.fill", offSymbol: "bell.slash.fill", help: "Geri bildirim sesleri", isOn: $soundEnabled) {
                 FeedbackSound.setEnabled(soundEnabled)
             }
@@ -520,6 +508,8 @@ struct CapturePanelView: View {
         let screenshotSettings = ScreenshotSettings.load(from: .standard)
         recordSystemAudio = settings.systemAudio
         recordMicrophone = settings.microphone
+        microphoneDeviceID = settings.microphoneDeviceID
+        mixAudioTracks = settings.mixAudioTracks
         cameraEnabled = settings.camera.enabled
         previewVisible = CameraOverlayController.shared.previewVisible
         soundEnabled = FeedbackSound.isEnabled()
@@ -587,9 +577,27 @@ struct CapturePanelView: View {
     }
 
     private func saveRecordingSettings() {
+        guard !designPreview else { return }
         var settings = RecordingSettings.load(from: .standard)
         settings.systemAudio = recordSystemAudio
         settings.microphone = recordMicrophone
+        settings.save(to: .standard)
+    }
+
+    private func saveMicrophoneDevice(_ deviceID: String?) {
+        microphoneDeviceID = deviceID
+        guard !designPreview else { return }
+        var settings = RecordingSettings.load(from: .standard)
+        guard settings.microphoneDeviceID != deviceID else { return }
+        settings.microphoneDeviceID = deviceID
+        settings.save(to: .standard)
+    }
+
+    private func saveMixAudioTracks() {
+        guard !designPreview else { return }
+        var settings = RecordingSettings.load(from: .standard)
+        guard settings.mixAudioTracks != mixAudioTracks else { return }
+        settings.mixAudioTracks = mixAudioTracks
         settings.save(to: .standard)
     }
 }

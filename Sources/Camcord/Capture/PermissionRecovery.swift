@@ -21,6 +21,12 @@ enum PermissionRecovery {
         string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
     )!
 
+    /// The same pane for the microphone: a denied grant is not something the app can ask
+    /// for a second time, so the only useful affordance is the way to the switch.
+    static let microphonePaneURL = URL(
+        string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+    )!
+
     /// Call from capture failure paths. No-op while the permission is intact.
     static func noteCaptureFailure() {
         guard !CGPreflightScreenCaptureAccess() else { return }

@@ -185,35 +185,3 @@ private final class MeterDisplayProxy: NSObject {
     init(view: AudioMeterView) { self.view = view }
     @objc func tick(_ link: CADisplayLink) { view?.tick(link) }
 }
-
-struct AudioControlRow: View {
-    let title: String
-    let symbol: String
-    let health: AudioSourceHealth?
-    @Binding var gainDB: Double
-    let range: ClosedRange<Double>
-    var paused = false
-
-    private var enabled: Bool { health?.enabled ?? true }
-
-    var body: some View {
-        VStack(spacing: 2) {
-            HStack(spacing: 6) {
-                Label(title, systemImage: symbol)
-                    .font(.system(size: 10, weight: .medium))
-                    .frame(width: 70, alignment: .leading)
-                AudioLevelMeter(levels: health?.levels, active: !paused && enabled)
-                Text(enabled ? String(format: "%+.0f dB", gainDB) : "Kapalı")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .frame(width: 43, alignment: .trailing)
-            }
-            Slider(value: $gainDB, in: range, step: 1)
-                .controlSize(.mini)
-                .disabled(!enabled)
-                .accessibilityLabel("\(title) ses kazancı")
-                .accessibilityValue("\(Int(gainDB)) desibel")
-        }
-        .opacity(enabled ? 1 : 0.5)
-        .help("\(title) ses seviyesini ayarla")
-    }
-}
