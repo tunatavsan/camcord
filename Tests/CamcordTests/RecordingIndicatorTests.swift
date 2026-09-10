@@ -72,7 +72,7 @@ struct RecordingIndicatorTests {
         #expect(indicator.borderPanelForTesting == nil)
         #expect(indicator.hubPanelForTesting?.ignoresMouseEvents == false)
 
-        indicator.show(cgRect: cgTarget, color: .systemRed, label: nil, onStop: {})
+        indicator.show(cgRect: cgTarget, color: .systemRed, onStop: {})
         #expect(indicator.frameVisibilityForTesting.mode == .recording)
         indicator.setOccludedForTesting(true)
         #expect(indicator.frameAlphaForTesting == 0)
@@ -80,7 +80,7 @@ struct RecordingIndicatorTests {
         indicator.hide()
 
         // No stop action means no hub — the scrolling-capture border, which is simply visible.
-        indicator.show(cgRect: cgTarget, color: .systemBlue, label: nil, onStop: nil)
+        indicator.show(cgRect: cgTarget, color: .systemBlue, onStop: nil)
         #expect(indicator.hubPanelForTesting == nil)
         #expect(indicator.frameVisibilityForTesting.mode == .plain)
         #expect(indicator.frameAlphaForTesting == 1)
@@ -160,6 +160,45 @@ struct RecordingIndicatorTests {
         #expect(indicator.hubForTesting?.viewForTesting.mode == .recording)
         indicator.hide()
         #expect(indicator.hubPanelForTesting == nil)
+    }
+
+    @Test("every hub control reaches its own action")
+    func hubPressRouting() throws {
+        _ = NSApplication.shared
+        let primaryHeight = try #require(NSScreen.screens.first?.frame.height)
+        let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
+        let target = screen.visibleFrame.insetBy(dx: 130, dy: 130)
+        let cgTarget = Geometry.appKitToCG(target, primaryScreenHeight: primaryHeight)
+        let indicator = CaptureAreaIndicator(panelPresenter: { _ in }, defaults: try freshDefaults())
+        var stops = 0
+        var pauses = 0
+        var previews = 0
+
+        indicator.showRecordingWindow(
+            CGWindowID.max,
+            initialCGRect: cgTarget,
+            showsBorder: true,
+            onPauseResume: { pauses += 1 },
+            onTogglePreview: { previews += 1 },
+            onStop: { stops += 1 }
+        )
+        let view = try #require(indicator.hubForTesting?.viewForTesting)
+
+        // Stop, pause and the camera eye each land on their OWN closure. `.start` and
+        // `.stop` deliberately share one — an armed hub's Başlat IS the start action — so
+        // a slip that routed anything else there would be invisible without this.
+        view.pressForTesting(.stop)
+        #expect((stops, pauses, previews) == (1, 0, 0))
+        view.pressForTesting(.pause)
+        #expect((stops, pauses, previews) == (1, 1, 0))
+        view.pressForTesting(.preview)
+        #expect((stops, pauses, previews) == (1, 1, 1))
+        // The readouts are not controls and must fire nothing.
+        view.pressForTesting(.elapsed)
+        view.pressForTesting(.micLevel)
+        view.pressForTesting(.divider)
+        #expect((stops, pauses, previews) == (1, 1, 1))
+        indicator.hide()
     }
 
     @Test("a display recording gets a hub and no frame at all")

@@ -656,7 +656,7 @@ final class RecordingController: NSObject {
                 )
             case .region(let clamp, _, _):
                 indicator.show(
-                    cgRect: clamp.clampedRegion, color: .systemRed, label: nil,
+                    cgRect: clamp.clampedRegion, color: .systemRed,
                     onStop: { [weak self] in Task { await self?.toggleRecording() } },
                     onPauseResume: { [weak self] in self?.pauseResume() },
                     onTogglePreview: { CameraOverlayController.shared.togglePreview() }

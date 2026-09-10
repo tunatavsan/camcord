@@ -143,6 +143,12 @@ struct AudioChannelStrip: View {
             }
         }
         .task(id: designPreview) { await loadInputs() }
+        // Switching the channel off is the owner saying "not this microphone": an open
+        // rehearsal would otherwise keep the input light on with a meter that reads dead.
+        .onChange(of: microphoneEnabled) { _, enabled in
+            guard !enabled else { return }
+            stopRehearsal()
+        }
         .onDisappear(perform: stopRehearsal)
     }
 
@@ -175,9 +181,11 @@ struct AudioChannelStrip: View {
 
     /// A rehearsal is impossible while the recording owns the device; a denied permission
     /// still leaves the button pressable, because pressing it is how the owner gets to the
-    /// place that fixes it.
+    /// place that fixes it. A rehearsal that is ALREADY running can always be stopped —
+    /// greying "Durdur" out would leave the microphone open with no way to close it.
     private var rehearsalDisabled: Bool {
-        monitor.recordingLocked || monitor.isStarting || recording || isStarting
+        if monitor.isRunning || monitor.isStarting { return monitor.recordingLocked }
+        return monitor.recordingLocked || recording || isStarting
             || (!microphoneEnabled && !microphoneDenied)
     }
 
@@ -209,7 +217,7 @@ struct AudioChannelStrip: View {
     }
 
     private func stopRehearsal() {
-        guard !designPreview else { return }
+        guard !designPreview, monitor.isRunning || monitor.isStarting else { return }
         Task { await MicrophoneMonitor.shared.stop() }
     }
 

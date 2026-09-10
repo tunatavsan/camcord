@@ -106,7 +106,6 @@ final class CaptureAreaIndicator {
     func show(
         cgRect: CGRect,
         color: NSColor,
-        label: String?,
         onStop: (() -> Void)?,
         onPauseResume: (() -> Void)? = nil,
         onTogglePreview: (() -> Void)? = nil
@@ -145,8 +144,10 @@ final class CaptureAreaIndicator {
         hide()
         guard let primaryHeight = NSScreen.screens.first?.frame.height else { return }
         let target = Geometry.cgToAppKit(cgRect, primaryScreenHeight: primaryHeight)
+        // A display target draws no frame at all, so there is nothing for a grace timer to
+        // reveal — starting one would just be a Task that expires into a no-op.
         frame.isDisplayTarget = true
-        beginRecordingFrame()
+        frame.mode = .recording
         hub = makeHub(
             mode: .recording,
             target: target,
@@ -211,9 +212,9 @@ final class CaptureAreaIndicator {
 
     /// Convenience for a window target: looks up the window's current bounds. When `follow`
     /// is true the indicator tracks the window live as it moves/resizes.
-    func showWindow(_ windowID: CGWindowID, color: NSColor, label: String?, follow: Bool = false, onStop: (() -> Void)?) {
+    func showWindow(_ windowID: CGWindowID, color: NSColor, follow: Bool = false, onStop: (() -> Void)?) {
         guard let bounds = Self.windowBounds(windowID) else { return }
-        show(cgRect: bounds, color: color, label: label, onStop: onStop)
+        show(cgRect: bounds, color: color, onStop: onStop)
         if follow {
             followWindowID = windowID
             lastFollowedBounds = bounds

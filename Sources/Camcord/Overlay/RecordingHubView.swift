@@ -128,13 +128,25 @@ final class RecordingHubView: NSView {
         didSet { if mode != oldValue { refresh() } }
     }
     var elapsed: String? {
-        didSet { if elapsed != oldValue { needsDisplay = true } }
+        didSet {
+            guard elapsed != oldValue else { return }
+            needsDisplay = true
+            // The drawn label ticks every second while nothing about the geometry changes,
+            // so the accessibility value has to be written here or VoiceOver reads the time
+            // the hub had when it opened for the whole recording.
+            setAccessibilityValue(elapsed)
+        }
     }
     var previewVisible = false {
         didSet { if previewVisible != oldValue { refresh() } }
     }
     var micLevel: CGFloat = 0 {
-        didSet { if abs(micLevel - oldValue) > 0.04 { needsDisplay = true } }
+        didSet {
+            // The dot only exists in the expanded capsule; while collapsed this would be a
+            // full repaint of the hub up to 30x a second, for the length of a recording.
+            guard progress > 0.001, abs(micLevel - oldValue) > 0.04 else { return }
+            needsDisplay = true
+        }
     }
     /// 0 = disc, 1 = capsule. Driven by the panel's expansion spring.
     var progress: CGFloat = 0 {

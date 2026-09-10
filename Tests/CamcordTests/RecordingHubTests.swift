@@ -291,7 +291,5 @@ struct RecordingHubTests {
         #expect(frame.alpha == 0)
         frame.mode = .armed
         #expect(frame.alpha == 0)
-
-        #expect(RecordingFrameVisibility.startGrace == 1.5)
     }
 }

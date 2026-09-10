@@ -67,6 +67,9 @@ final class MicrophoneMonitor: ObservableObject {
         isStarting = false
         isRunning = false
         levels = nil
+        // The panel renders this: left set, a failed rehearsal parks an orange warning in
+        // the menu-bar panel on every open until some later start() happens to succeed.
+        message = nil
         await capture.stop()
     }
 

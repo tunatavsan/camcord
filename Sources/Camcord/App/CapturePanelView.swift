@@ -114,6 +114,10 @@ struct CapturePanelView: View {
     /// The two columns inside the 12 pt padding: 276 + 12 + 248 = 536.
     static let controlColumnWidth: CGFloat = 276
     static let contextColumnWidth: CGFloat = 248
+    /// The two end-of-recording cards keep the width they were composed for and sit centred
+    /// in the wider panel — stretching a rename field and a 16:9 still across 536 points
+    /// makes the state every recording ends in look like a mistake.
+    static let cardWidth: CGFloat = 340
 
     private var currentHeight: CGFloat {
         if model.finishedURL != nil { return Self.finishedHeight }
@@ -139,9 +143,11 @@ struct CapturePanelView: View {
                     },
                     dismiss: { model.finishedURL = nil }
                 )
+                .frame(maxWidth: Self.cardWidth)
                 .transition(panelTransition)
             } else if model.isFinishing {
                 FinishingCard()
+                    .frame(maxWidth: Self.cardWidth)
                     .transition(panelTransition)
             } else {
                 mainContent
@@ -365,6 +371,9 @@ struct CapturePanelView: View {
                 RoundIconButton(
                     symbol: previewVisible ? "eye.fill" : "eye.slash",
                     help: previewVisible ? "Kamera önizlemesini gizle" : "Kamera önizlemesini aç",
+                    // Distinct from the camera row's eye, which is on screen at the same
+                    // time and does the same thing: this one belongs to the transport.
+                    label: "Önizleme",
                     action: togglePreviewWindow
                 )
                 RoundIconButton(
@@ -418,6 +427,7 @@ struct CapturePanelView: View {
                 symbol: previewVisible ? "eye.fill" : "eye.slash",
                 tint: previewVisible ? CamcordStyle.accent : nil,
                 help: "Kamera önizleme penceresini açar veya gizler — kayda kamera gömmekten bağımsızdır",
+                label: "Kamera önizlemesi",
                 action: togglePreviewWindow
             )
             .accessibilityValue(previewVisible ? "Açık" : "Kapalı")
@@ -643,11 +653,20 @@ struct StageView: View {
     @State private var generation: UInt64 = 0
     @State private var canvasWidth: CGFloat = 0
     @State private var drag: Drag?
+    @Environment(\.camcordDesignPreview) private var designPreview
 
     private var isLive: Bool { !isArmed && state != .idle }
 
-    /// Re-runs the source task whenever what the stage is showing changes.
-    private var sourceKey: String { isArmed ? "armed" : "\(state)" }
+    private var sourceKey: String { Self.sourceKey(isArmed: isArmed, state: state) }
+
+    /// What the stage is SHOWING, as the key that re-runs its source task. Pausing is not
+    /// such a change: no frame arrives while paused, so tearing the source down there would
+    /// blank the stage for the whole pause and leave the veil nothing to sit on. Pure, so
+    /// that rule is pinned rather than re-derived from the enum's description.
+    static func sourceKey(isArmed: Bool, state: RecordingController.UIState) -> String {
+        if isArmed { return "armed" }
+        return state == .idle ? "idle" : "live"
+    }
 
     private var aspect: CGFloat {
         guard thumbnailPixelSize.width > 0, thumbnailPixelSize.height > 0 else { return Self.restingAspect }
@@ -719,6 +738,12 @@ struct StageView: View {
             .frame(maxWidth: .infinity)
         }
         .task(id: sourceKey) { await activateSource() }
+        // The armed stage has no frame feed to refresh it, so the camera switch and a drag
+        // on the tile itself would otherwise never reach the rectangle drawn here.
+        .onReceive(NotificationCenter.default.publisher(for: RecordingSettings.didChangeNotification)) { _ in
+            guard !designPreview, drag == nil else { return }
+            options = RecordingSettings.load(from: .standard).camera.resolved()
+        }
         .onDisappear(perform: deactivate)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Kayıt sahnesi")
@@ -844,7 +869,14 @@ struct StageView: View {
         options = RecordingSettings.load(from: .standard).camera.resolved()
 
         if isArmed {
-            guard let armed = await armedStageFrame(), token == generation else { return }
+            // One retry: the window can be mid-move or the capture can fail transiently, and
+            // a stage stuck on "alınıyor…" for the whole arm is worse than a second attempt.
+            var armed = await armedStageFrame()
+            if armed == nil, token == generation {
+                try? await Task.sleep(for: .milliseconds(400))
+                armed = await armedStageFrame()
+            }
+            guard let armed, token == generation else { return }
             let pixelSize = CGSize(width: armed.image.width, height: armed.image.height)
             image = NSImage(cgImage: armed.image, size: pixelSize)
             thumbnailPixelSize = pixelSize
@@ -862,8 +894,9 @@ struct StageView: View {
                 guard points.width > 0, points.height > 0 else { return }
                 rendering = true
                 defer { rendering = false }
-                let width = min(Self.maximumRenderWidth, max(320, canvasWidth * 2))
-                let rendered = await CameraPreviewMonitor.shared.renderer.render(box.value, maximumWidth: width)
+                let rendered = await CameraPreviewMonitor.shared.renderer.render(
+                    box.value, maximumWidth: Self.renderWidth(canvasPoints: canvasWidth)
+                )
                 guard token == generation, let rendered else { return }
                 image = NSImage(cgImage: rendered.image, size: rendered.size)
                 thumbnailPixelSize = box.pixelSize
@@ -888,6 +921,13 @@ struct StageView: View {
         image = nil
         thumbnailPixelSize = .zero
         frameSize = .zero
+    }
+
+    /// Twice the canvas's points, so a Retina panel is shown the composite rather than an
+    /// upscale of it; floored so a canvas that has not been measured yet still gets a usable
+    /// image, and capped because a 248 pt viewport has no use for 4K.
+    static func renderWidth(canvasPoints: CGFloat) -> CGFloat {
+        min(maximumRenderWidth, max(320, canvasPoints * 2))
     }
 
     /// Aspect-fits the actual recording pixels into the panel canvas.
@@ -1378,6 +1418,9 @@ private struct RoundIconButton: View {
     let symbol: String
     var tint: Color? = nil
     let help: String
+    /// The name VoiceOver reads. Without it the whole help sentence becomes the name, and
+    /// two eye buttons on the same panel are told apart only by a paragraph.
+    var label: String? = nil
     let action: () -> Void
 
     var body: some View {
@@ -1394,7 +1437,8 @@ private struct RoundIconButton: View {
                 )
         }
         .help(help)
-        .accessibilityLabel(help)
+        .accessibilityLabel(label ?? help)
+        .accessibilityHint(label == nil ? "" : help)
     }
 }
 

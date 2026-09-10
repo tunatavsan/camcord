@@ -75,7 +75,7 @@ final class ScrollingCaptureSession {
     /// Runs to completion. Returns the stitched image on Done, or nil if cancelled
     /// (Esc / İptal) or nothing usable was captured.
     func run() async -> CGImage? {
-        indicator.show(cgRect: region, color: .systemBlue, label: nil, onStop: nil)
+        indicator.show(cgRect: region, color: .systemBlue, onStop: nil)
         preview.show(
             near: region,
             onDone: { [weak self] in self?.finish(keep: true) },

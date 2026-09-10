@@ -108,7 +108,7 @@ final class CameraOverlayController: NSObject {
             .sink { @Sendable [weak self] _ in
                 Task { @MainActor [weak self] in
                     guard let self, self.panel.isVisible else { return }
-                    self.applyContext(FullscreenContext.current())
+                    self.applyContext()
                 }
             }.store(in: &observations)
     }
@@ -213,7 +213,7 @@ final class CameraOverlayController: NSObject {
         layout()
         // The level is chosen BEFORE the panel is ordered in: a game-like context is known
         // from the measurement, and everything else is settled by the probe below.
-        applyContext(FullscreenContext.current())
+        applyContext()
         probeVisibility()
         // Opening onto a black rectangle while the device warms up is the ugliest second of
         // the whole flow. The panel goes up (so confinement, layout and every caller's
@@ -262,8 +262,14 @@ final class CameraOverlayController: NSObject {
         // Every pixel of the opening state is set BEFORE the panel is ordered front.
         // Ordering a window in makes the server composite it at its current alpha, so the
         // old "order front at 1, then set 0 and animate up" showed one opaque frame first.
+        let finalShadow = shadowPanel.frame
         if appearing {
-            if scaled { panel.setFrame(CameraEntrance.startFrame(final), display: false) }
+            if scaled {
+                panel.setFrame(CameraEntrance.startFrame(final), display: false)
+                // The shadow is a separate panel: left at full size it would sit 8% too
+                // large behind a 92% tile for the whole entrance, uncovered on two sides.
+                shadowPanel.setFrame(CameraEntrance.startFrame(finalShadow), display: false)
+            }
             panel.alphaValue = 0
             shadowPanel.alphaValue = 0
         } else {
@@ -278,7 +284,10 @@ final class CameraOverlayController: NSObject {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = CameraEntrance.duration(reduceMotion: reduceMotion)
             context.timingFunction = CameraEntrance.timing(reduceMotion: reduceMotion)
-            if scaled { panel.animator().setFrame(final, display: true) }
+            if scaled {
+                panel.animator().setFrame(final, display: true)
+                shadowPanel.animator().setFrame(finalShadow, display: true)
+            }
             panel.animator().alphaValue = 1
             shadowPanel.animator().alphaValue = 1
         }
@@ -296,11 +305,15 @@ final class CameraOverlayController: NSObject {
         updateInteractivity()
     }
 
-    /// Raise over a game; put back only once the display is plainly ours again, so an
-    /// elevation the probe earned is not dropped by the next app switch inside the game.
-    private func applyContext(_ context: FullscreenContext) {
-        if context.isGameLike { setElevated(true) }
-        else if !context.displayCaptured { setElevated(false) }
+    /// Raise over whatever owns the display the TILE is on, and come back down only when
+    /// that display is plainly ours again. Measured with `covering(at:)` at the tile's own
+    /// centre rather than `current()` at the cursor: clicking our status item makes Camcord
+    /// frontmost, an already-raised tile is on top of the game so its own occlusion can no
+    /// longer see it, and the cursor may be on a different display entirely — the window
+    /// list behind us is the only reading that stays true in all three.
+    private func applyContext() {
+        let centre = CGPoint(x: panel.frame.midX, y: panel.frame.midY)
+        setElevated(FullscreenContext.covering(at: centre).isGameLike)
     }
 
     /// G.4's probe, the same shape as G.1's: `show()` has ordered the panels in, so 50 ms

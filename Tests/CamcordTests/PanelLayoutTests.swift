@@ -69,31 +69,59 @@ struct PanelLayoutTests {
 
     @Test("the stage renders at twice its canvas points, so a Retina panel is not upscaled")
     func stageRenderWidth() {
-        // The rule the sink applies, kept here so the sharpness is a decision, not a
-        // constant someone edits by feel.
-        for canvas in [CapturePanelView.contextColumnWidth, 320, 600] {
-            let width = min(960, max(320, canvas * 2))
-            #expect(width >= canvas * 2 || width == 960)
+        // The rule the sink actually applies — reverting it to the old fixed 360 fails here.
+        #expect(StageView.renderWidth(canvasPoints: CapturePanelView.contextColumnWidth) == 496)
+        #expect(StageView.renderWidth(canvasPoints: 200) == 400)
+        // Floored, so a canvas that has not been measured yet still gets a usable image.
+        #expect(StageView.renderWidth(canvasPoints: 0) == 320)
+        #expect(StageView.renderWidth(canvasPoints: 100) == 320)
+        // Capped: a 248 pt viewport has no use for 4K.
+        #expect(StageView.renderWidth(canvasPoints: 1200) == 960)
+        // Exactly 2x through the whole usable range.
+        for canvas in stride(from: CGFloat(200), through: 480, by: 40) {
+            #expect(StageView.renderWidth(canvasPoints: canvas) == canvas * 2)
         }
-        #expect(min(960, max(320, CapturePanelView.contextColumnWidth * 2)) == 496)
     }
 
-    @Test("every panel state lays out inside its own frame")
+    @Test("pausing does not tear down the stage's source")
+    func stageSourceSurvivesAPause() {
+        // The veil sits ON the last composited frame. Re-keying the source task on pause
+        // cleared the image, so the veil had nothing to cover and the stage fell back to
+        // "Kayıt görüntüsü bekleniyor…" for the whole pause.
+        #expect(StageView.sourceKey(isArmed: false, state: .recording)
+            == StageView.sourceKey(isArmed: false, state: .paused))
+        // Everything else IS a change of what the stage shows.
+        #expect(StageView.sourceKey(isArmed: false, state: .idle)
+            != StageView.sourceKey(isArmed: false, state: .recording))
+        #expect(StageView.sourceKey(isArmed: true, state: .idle)
+            != StageView.sourceKey(isArmed: false, state: .idle))
+        // Arming wins over the state it is armed from.
+        #expect(StageView.sourceKey(isArmed: true, state: .idle)
+            == StageView.sourceKey(isArmed: true, state: .recording))
+    }
+
+    /// Every state the panel can be in composes and rasterises. The rendered size is the
+    /// `.frame` modifier and proves nothing on its own, so what this asserts is that each
+    /// state produces a real, non-empty image — and it writes the PNGs when
+    /// CAMCORD_RENDER_SHOTS is set, which is how the layout itself gets looked at.
+    @Test("every panel state composes and rasterises")
     func rendersEveryState() throws {
         _ = NSApplication.shared
         let shots = ProcessInfo.processInfo.environment["CAMCORD_RENDER_SHOTS"]
         let model = RecordingStateModel()
+        let finished = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("camcord-render-preview.mov")
 
-        let states: [(String, () -> Void, CGFloat)] = [
-            ("idle", { model.state = .idle; model.isArmed = false; model.finishedURL = nil; model.isFinishing = false },
-             CapturePanelView.panelHeight),
-            ("armed", { model.state = .idle; model.isArmed = true }, CapturePanelView.panelHeight),
-            ("recording", { model.isArmed = false; model.state = .recording; model.elapsed = "1:24" },
-             CapturePanelView.activeHeight),
-            ("paused", { model.state = .paused }, CapturePanelView.activeHeight),
+        let states: [(String, () -> Void)] = [
+            ("idle", { model.state = .idle; model.isArmed = false; model.finishedURL = nil; model.isFinishing = false }),
+            ("armed", { model.state = .idle; model.isArmed = true }),
+            ("recording", { model.isArmed = false; model.state = .recording; model.elapsed = "1:24" }),
+            ("paused", { model.state = .paused }),
+            ("finishing", { model.state = .idle; model.isFinishing = true }),
+            ("finished", { model.isFinishing = false; model.finishedURL = finished }),
         ]
 
-        for (name, apply, expectedHeight) in states {
+        for (name, apply) in states {
             apply()
             let renderer = ImageRenderer(
                 content: CapturePanelView(model: model, actions: PanelActions())
@@ -102,11 +130,13 @@ struct PanelLayoutTests {
             )
             renderer.scale = 2
             let image = try #require(renderer.nsImage, "\(name) rendered nothing")
-            #expect(image.size.width == CapturePanelView.panelWidth, "\(name) width")
-            #expect(image.size.height == expectedHeight, "\(name) height")
-            if let shots, let tiff = image.tiffRepresentation,
-               let rep = NSBitmapImageRep(data: tiff),
-               let png = rep.representation(using: .png, properties: [:]) {
+            let tiff = try #require(image.tiffRepresentation)
+            let rep = try #require(NSBitmapImageRep(data: tiff))
+            #expect(rep.pixelsWide > 0 && rep.pixelsHigh > 0, "\(name) rasterised empty")
+            // Not a blank sheet: the panel's own surface has to have painted something.
+            let sampled = try #require(rep.colorAt(x: rep.pixelsWide / 2, y: rep.pixelsHigh / 2))
+            #expect(sampled.alphaComponent > 0, "\(name) painted nothing at its centre")
+            if let shots, let png = rep.representation(using: .png, properties: [:]) {
                 try png.write(to: URL(fileURLWithPath: "\(shots)/panel-\(name).png"))
             }
         }

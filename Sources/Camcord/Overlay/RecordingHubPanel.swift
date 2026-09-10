@@ -168,6 +168,7 @@ final class RecordingHubPanel {
     private var dragSample: (point: CGPoint, time: CFTimeInterval)?
 
     private var previewObserver: NSObjectProtocol?
+    private var activationObserver: NSObjectProtocol?
 
     init(defaults: UserDefaults = .standard, panelPresenter: PanelPresenter? = nil) {
         self.defaults = defaults
@@ -194,12 +195,26 @@ final class RecordingHubPanel {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshPreviewState() }
         }
+        // Entering and LEAVING a game are both app switches. Without this the level was
+        // decided once, at show(), and on pointer-enter — and a hub that a game has covered
+        // can never BE entered, so it could not recover for the rest of the recording.
+        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.panel.isVisible else { return }
+                self.refreshElevation()
+            }
+        }
     }
 
     isolated deinit {
         collapseTask?.cancel()
         motionLink?.invalidate()
         if let previewObserver { NotificationCenter.default.removeObserver(previewObserver) }
+        if let activationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
+        }
     }
 
     // MARK: - Presentation
@@ -335,8 +350,11 @@ final class RecordingHubPanel {
         let x: CGFloat
         switch dock {
         case .topRight, .bottomRight: x = capsule.maxX - size.width
-        case .topCenter: x = capsule.midX - size.width / 2
-        case .topLeft, .bottomLeft: x = capsule.minX
+        // Top-centre grows to the RIGHT, not symmetrically: the cells are laid out from the
+        // capsule's leading edge, so a capsule that also moved left would slide 72 pt of
+        // controls under a stationary pointer mid-spring — moving the readout being read
+        // and losing the click the owner had already started.
+        case .topCenter, .topLeft, .bottomLeft: x = capsule.minX
         }
         capsule = clamped(CGRect(x: x, y: capsule.midY - size.height / 2,
                                  width: size.width, height: size.height))

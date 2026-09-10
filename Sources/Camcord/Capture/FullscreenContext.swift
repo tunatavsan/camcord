@@ -223,6 +223,15 @@ enum GameOverlayElevation {
 
     static func level(base: NSWindow.Level) -> NSWindow.Level { isActive ? shieldingLevel : base }
 
+    /// The level for a surface that appears once and goes — a toast. The camera tile holds
+    /// the flag only while it is on screen, so a toast cannot ride on it: with the preview
+    /// closed a confirmation inside a game would sit under the game, which is the exact
+    /// failure this exists to prevent. `covering(at:)` rather than `current()`, because
+    /// showing a toast may follow a click on our own panel, which makes Camcord frontmost.
+    static func levelForPassingSurface(base: NSWindow.Level, at point: CGPoint) -> NSWindow.Level {
+        isActive || FullscreenContext.covering(at: point).isGameLike ? shieldingLevel : base
+    }
+
     /// Raise when the context says a game owns the display, or when the panel we just put up
     /// is not on screen — the second is the measurement, the first is the prediction.
     static func shouldElevate(gameLike: Bool, probeVisible: Bool) -> Bool { gameLike || !probeVisible }
