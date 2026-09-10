@@ -67,7 +67,10 @@ final class HUDToast {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
-        panel.level = .statusBar
+        // G.4: while a fullscreen game owns the display the ordinary status-bar level is
+        // under it, and a confirmation nobody can see is not a confirmation. Read at show
+        // time, so leaving the game puts the next toast back at its usual level.
+        panel.level = GameOverlayElevation.level(base: .statusBar)
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
         panel.ignoresMouseEvents = true
         panel.isReleasedWhenClosed = false

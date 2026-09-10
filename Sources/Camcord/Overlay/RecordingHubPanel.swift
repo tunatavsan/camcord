@@ -256,9 +256,7 @@ final class RecordingHubPanel {
     /// Above a fullscreen game nothing at `.statusBar` is visible; the shielding level is
     /// the last one a nonactivating panel can reach.
     func setElevated(_ elevated: Bool) {
-        let level = elevated
-            ? NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
-            : NSWindow.Level.statusBar
+        let level = elevated ? GameOverlayElevation.shieldingLevel : NSWindow.Level.statusBar
         guard panel.level != level else { return }
         panel.level = level
     }

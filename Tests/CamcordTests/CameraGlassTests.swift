@@ -152,6 +152,43 @@ struct CameraGlassRenderTests {
     }
 }
 
+/// G.4: what raises the tile and the toast over a fullscreen game, and what the owner reads
+/// in the log afterwards.
+@MainActor
+@Suite("Game overlay elevation", .serialized)
+struct GameOverlayElevationTests {
+    @Test("a game-like context raises the surfaces, and an unseen panel raises them too")
+    func elevationRule() {
+        #expect(GameOverlayElevation.shouldElevate(gameLike: true, probeVisible: true))
+        // The probe is the measurement the prediction cannot make: the panel went up and is
+        // not on screen, so something is over it whatever the context said.
+        #expect(GameOverlayElevation.shouldElevate(gameLike: false, probeVisible: false))
+        #expect(!GameOverlayElevation.shouldElevate(gameLike: false, probeVisible: true))
+    }
+
+    @Test("the level is the shielding level while active and the ordinary one after")
+    func levelFollowsTheFlag() {
+        let base = CameraOverlayController.baseLevel
+        #expect(GameOverlayElevation.shieldingLevel.rawValue == Int(CGShieldingWindowLevel()))
+        #expect(GameOverlayElevation.shieldingLevel > base)
+        GameOverlayElevation.set(false)
+        #expect(GameOverlayElevation.level(base: base) == base)
+        #expect(GameOverlayElevation.level(base: .statusBar) == .statusBar)
+        GameOverlayElevation.set(true)
+        #expect(GameOverlayElevation.level(base: base) == GameOverlayElevation.shieldingLevel)
+        #expect(GameOverlayElevation.level(base: .statusBar) == GameOverlayElevation.shieldingLevel)
+        GameOverlayElevation.set(false)
+    }
+
+    @Test("the toggle line names the preview's visibility and its level")
+    func toggleLogLine() {
+        let line = GameOverlayElevation.logLine(
+            surface: "preview", visible: false, level: GameOverlayElevation.shieldingLevel
+        )
+        #expect(line == "preview.visible=false level=\(Int(CGShieldingWindowLevel()))")
+    }
+}
+
 private func softwareCompositor() -> CameraCompositor {
     CameraCompositor(context: CIContext(options: [
         .useSoftwareRenderer: true,

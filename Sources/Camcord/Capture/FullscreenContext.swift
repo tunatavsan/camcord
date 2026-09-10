@@ -18,6 +18,10 @@ struct FullscreenContext: Equatable {
     /// `kCGWindowLayer` of that covering window (0 = normal window).
     let windowLayer: Int
     let displayCaptured: Bool
+    /// The measurement the decision came out of, for the trigger log: the display and the
+    /// candidate windows in ONE coordinate space at the SAME scale, so a points-vs-pixels
+    /// mismatch or an empty frontmost window set is visible in the line instead of guessed.
+    var survey: String = ""
 
     static let finderBundleID = "com.apple.finder"
 
@@ -30,7 +34,8 @@ struct FullscreenContext: Equatable {
     }
 
     var logLine: String {
-        "display=\(displayID) front=\(frontmostBundleID ?? "-") covers=\(coversDisplay) layer=\(windowLayer) captured=\(displayCaptured) game=\(isGameLike)"
+        let measurement = survey.isEmpty ? "" : " \(survey)"
+        return "display=\(displayID) front=\(frontmostBundleID ?? "-") covers=\(coversDisplay) layer=\(windowLayer) captured=\(displayCaptured) game=\(isGameLike)\(measurement)"
     }
 
     /// Measures the display under `point` (AppKit global coordinates).
@@ -42,17 +47,23 @@ struct FullscreenContext: Equatable {
         let displayBounds = CGDisplayBounds(displayID)
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
             as? [[String: Any]] ?? []
-        let covering = frontmost.flatMap {
-            coveringLayer(in: windows, pid: $0.processIdentifier, displayBounds: displayBounds)
-        }
+        let cover = cover(
+            in: windows,
+            frontmostPID: frontmost?.processIdentifier,
+            ownPID: ProcessInfo.processInfo.processIdentifier,
+            displayBounds: displayBounds
+        )
         return FullscreenContext(
             displayID: displayID,
-            frontmostBundleID: frontmost?.bundleIdentifier,
-            coversDisplay: covering != nil,
-            windowLayer: covering ?? 0,
+            frontmostBundleID: frontmost?.bundleIdentifier
+                ?? cover?.pid.flatMap { NSRunningApplication(processIdentifier: $0)?.bundleIdentifier },
+            coversDisplay: cover != nil,
+            windowLayer: cover?.layer ?? 0,
             // `CGDisplayIsCaptured` is unavailable in Swift; a captured display is the
             // one that owns a shielding window, which is exactly what the id reports.
-            displayCaptured: CGShieldingWindowID(displayID) != kCGNullWindowID
+            displayCaptured: CGShieldingWindowID(displayID) != kCGNullWindowID,
+            survey: survey(in: windows, pid: frontmost?.processIdentifier, displayBounds: displayBounds,
+                           source: cover?.source ?? "none")
         )
     }
 
@@ -77,13 +88,39 @@ struct FullscreenContext: Equatable {
             frontmostBundleID: covering.flatMap { NSRunningApplication(processIdentifier: $0.pid)?.bundleIdentifier },
             coversDisplay: covering != nil,
             windowLayer: covering?.layer ?? 0,
-            displayCaptured: CGShieldingWindowID(displayID) != kCGNullWindowID
+            displayCaptured: CGShieldingWindowID(displayID) != kCGNullWindowID,
+            survey: survey(in: windows, pid: covering?.pid, displayBounds: displayBounds,
+                           source: covering != nil ? "list" : "none")
         )
+    }
+
+    /// The cover read behind `current()`, pure over the window list so the Valheim case can
+    /// be tested without a game on screen. The frontmost app answers first. When it owns no
+    /// covering window the list's own front-to-back order answers instead: a game running
+    /// under a translation layer registers ONE app with the Dock and draws from ANOTHER
+    /// process, so the frontmost PID owned nothing and a full screen of game reported
+    /// `covers=false layer=0`.
+    static func cover(
+        in list: [[String: Any]],
+        frontmostPID: pid_t?,
+        ownPID: pid_t,
+        displayBounds: CGRect
+    ) -> (layer: Int, pid: pid_t?, source: String)? {
+        if let frontmostPID,
+           let layer = coveringLayer(in: list, pid: frontmostPID, displayBounds: displayBounds) {
+            return (layer, frontmostPID, "front")
+        }
+        if let fallback = firstCovering(in: list, excludingPID: ownPID, displayBounds: displayBounds) {
+            return (fallback.layer, fallback.pid, "list")
+        }
+        return nil
     }
 
     /// `kCGWindowLayer` of the frontmost app's first on-screen window that contains the
     /// display's bounds. Fully transparent windows and Finder's desktop are not cover.
     /// Pure over the window list so the filtering itself is testable with fake dictionaries.
+    /// The frontmost app is trusted at ANY level: it is in front, so whatever it draws over
+    /// the display is what the owner is looking at.
     static func coveringLayer(in list: [[String: Any]], pid: pid_t, displayBounds: CGRect) -> Int? {
         for window in list where window[kCGWindowOwnerPID as String] as? pid_t == pid {
             if let layer = layerIfCovering(window, displayBounds: displayBounds) { return layer }
@@ -91,7 +128,14 @@ struct FullscreenContext: Equatable {
         return nil
     }
 
-    /// The frontmost covering window that is NOT ours, in the list's own z-order.
+    /// The frontmost covering window that is NOT ours, in the list's own z-order, and NOT
+    /// system chrome. Measured on this machine: the Dock owns a full-display window at
+    /// level 20, the Window Server one at 24 and Control Center a row at 25 — reading any
+    /// of those as cover would declare a fullscreen game every time the app in front
+    /// happened to own no full-display window of its own. Ordinary application content
+    /// lives below the Dock's level; a wallpaper or desktop agent sits below zero.
+    static let ordinaryLayers = 0..<Int(CGWindowLevelForKey(.dockWindow))
+
     static func firstCovering(
         in list: [[String: Any]],
         excludingPID: pid_t,
@@ -99,18 +143,92 @@ struct FullscreenContext: Equatable {
     ) -> (pid: pid_t, layer: Int)? {
         for window in list {
             guard let pid = window[kCGWindowOwnerPID as String] as? pid_t, pid != excludingPID else { continue }
-            if let layer = layerIfCovering(window, displayBounds: displayBounds) { return (pid, layer) }
+            guard let layer = layerIfCovering(window, displayBounds: displayBounds) else { continue }
+            if ordinaryLayers.contains(layer) { return (pid, layer) }
         }
         return nil
     }
+
+    /// A fullscreen-exclusive app can report its window in backing PIXELS while
+    /// `CGDisplayBounds` is in points, so the same full-screen window reads as 2x or 3x the
+    /// display and — off the main display, where the origin is scaled too — misses the
+    /// containment test entirely. Dividing by the scale can only ever shrink a window, so a
+    /// window measured in points is unaffected and 1 keeps the original comparison.
+    private static let coverScales: [CGFloat] = [1, 2, 3]
 
     private static func layerIfCovering(_ window: [String: Any], displayBounds: CGRect) -> Int? {
         if let owner = window[kCGWindowOwnerName as String] as? String, owner == "Finder" { return nil }
         if let alpha = window[kCGWindowAlpha as String] as? Double, alpha == 0 { return nil }
         guard let boundsDict = window[kCGWindowBounds as String] as? [String: Any],
               let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
-              bounds.insetBy(dx: -2, dy: -2).contains(displayBounds) else { return nil }
+              coverScales.contains(where: { scale in
+                  CGRect(x: bounds.minX / scale, y: bounds.minY / scale,
+                         width: bounds.width / scale, height: bounds.height / scale)
+                      .insetBy(dx: -2, dy: -2).contains(displayBounds)
+              }) else { return nil }
         return window[kCGWindowLayer as String] as? Int ?? 0
+    }
+
+    /// The evidence behind `coversDisplay`, on one line: the display, how many windows the
+    /// frontmost app owns on screen, and the first few candidates with their bounds, layer
+    /// and alpha — all in CoreGraphics points, top-left origin, unscaled. `cover` says which
+    /// read decided: the frontmost PID's own windows, the list's z-order, or neither.
+    static func survey(
+        in list: [[String: Any]],
+        pid: pid_t?,
+        displayBounds: CGRect,
+        source: String,
+        limit: Int = 3
+    ) -> String {
+        let owned = pid.map { pid in
+            list.filter { $0[kCGWindowOwnerPID as String] as? pid_t == pid }
+        } ?? []
+        let rows = (owned.isEmpty ? Array(list.prefix(limit)) : Array(owned.prefix(limit))).map(row)
+        return "cover=\(source) bounds=\(rectLine(displayBounds)) front=\(owned.count)/\(list.count)"
+            + " [\(rows.joined(separator: " | "))]"
+    }
+
+    private static func row(_ window: [String: Any]) -> String {
+        let owner = window[kCGWindowOwnerName as String] as? String ?? "-"
+        let pid = window[kCGWindowOwnerPID as String] as? pid_t ?? -1
+        let layer = window[kCGWindowLayer as String] as? Int ?? 0
+        let alpha = window[kCGWindowAlpha as String] as? Double ?? 1
+        let bounds = (window[kCGWindowBounds as String] as? [String: Any])
+            .flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) } ?? .zero
+        return "\(owner)/\(pid) layer=\(layer) alpha=\(String(format: "%.2f", alpha)) win=\(rectLine(bounds))"
+    }
+
+    private static func rectLine(_ rect: CGRect) -> String {
+        "\(Int(rect.minX)),\(Int(rect.minY)) \(Int(rect.width))x\(Int(rect.height))"
+    }
+}
+
+/// Phase G.4. A game-like context owns the display and sits above every ordinary panel
+/// level, so Camcord's own transient surfaces have to be raised to the shielding level to be
+/// seen at all. The flag lives next to the measurement that decides it because more than one
+/// surface reads it — the camera tile, its shadow, the HUD toast — and each reads it as it
+/// orders itself in, so leaving the game restores the ordinary level with no extra teardown.
+@MainActor
+enum GameOverlayElevation {
+    /// Above a fullscreen game's own window, and above the shielding window of a captured
+    /// display — the highest level AppKit will hand out.
+    static let shieldingLevel = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
+    /// `show()` has already ordered the panels in, so 50 ms later the tile is either on
+    /// screen or something is over it. Short enough to stay inside the same gesture.
+    static let probeDelay = Duration.milliseconds(50)
+
+    private(set) static var isActive = false
+
+    static func set(_ active: Bool) { isActive = active }
+
+    static func level(base: NSWindow.Level) -> NSWindow.Level { isActive ? shieldingLevel : base }
+
+    /// Raise when the context says a game owns the display, or when the panel we just put up
+    /// is not on screen — the second is the measurement, the first is the prediction.
+    static func shouldElevate(gameLike: Bool, probeVisible: Bool) -> Bool { gameLike || !probeVisible }
+
+    static func logLine(surface: String, visible: Bool, level: NSWindow.Level) -> String {
+        "\(surface).visible=\(visible) level=\(level.rawValue)"
     }
 }
 

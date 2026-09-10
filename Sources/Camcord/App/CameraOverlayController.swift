@@ -49,6 +49,15 @@ final class CameraOverlayController: NSObject {
     private(set) var hapticWidthStop: Double?
     /// Guards a fade-out completion against a show() that raced it.
     private var visibilityToken = 0
+    /// G.4: true while the tile is raised above a fullscreen game. Kept as state because the
+    /// reveal and the fade also write `ignoresMouseEvents`, and a raised tile stays
+    /// click-through — at the shielding level our own hit test would take clicks meant for
+    /// the game underneath.
+    private var elevated = false
+    private var previewProbe: Task<Void, Never>?
+
+    /// The ordinary level: above the status bar, below a fullscreen game.
+    static let baseLevel = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
 
     private override init() {
         panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -58,7 +67,7 @@ final class CameraOverlayController: NSObject {
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
         panel.acceptsMouseMovedEvents = true
-        panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
+        panel.level = Self.baseLevel
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         shadowPanel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
@@ -90,6 +99,17 @@ final class CameraOverlayController: NSObject {
         NotificationCenter.default.publisher(for: RecordingSettings.didChangeNotification)
             .sink { @Sendable [weak self] _ in
                 Task { @MainActor [weak self] in self?.settingsChanged() }
+            }.store(in: &observations)
+        // Entering and LEAVING a game are both app switches, so the activation notice is
+        // what raises the tile over a game and what puts it back afterwards. Measured only
+        // while the tile is actually on screen, so an idle menu-bar app sweeps nothing.
+        NSWorkspace.shared.notificationCenter
+            .publisher(for: NSWorkspace.didActivateApplicationNotification)
+            .sink { @Sendable [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.panel.isVisible else { return }
+                    self.applyContext(FullscreenContext.current())
+                }
             }.store(in: &observations)
     }
 
@@ -131,6 +151,7 @@ final class CameraOverlayController: NSObject {
         guard previewVisible != visible else { return }
         previewVisible = visible
         if visible { showPreview(requestPermission: requestPermission) } else { hide(animated: true) }
+        logPreviewState()
         NotificationCenter.default.post(name: Self.previewVisibilityDidChange, object: nil)
     }
 
@@ -190,6 +211,10 @@ final class CameraOverlayController: NSObject {
         let appearing = !panel.isVisible || fadingOut
         fadingOut = false
         layout()
+        // The level is chosen BEFORE the panel is ordered in: a game-like context is known
+        // from the measurement, and everything else is settled by the probe below.
+        applyContext(FullscreenContext.current())
+        probeVisibility()
         // Opening onto a black rectangle while the device warms up is the ugliest second of
         // the whole flow. The panel goes up (so confinement, layout and every caller's
         // notion of "shown" are unchanged) but stays fully transparent and click-through
@@ -259,10 +284,54 @@ final class CameraOverlayController: NSObject {
         }
     }
 
-    /// One place for the two reasons the tile refuses the mouse: it is waiting for its
-    /// first frame, or it is fading out from under the pointer.
+    /// G.4. Raises the tile and its shadow to the shielding level (and hands the same level
+    /// to the HUD toast), or puts both back. A raised tile is click-through: at that level it
+    /// sits over a game the owner is playing, and it must never take their clicks.
+    func setElevated(_ active: Bool) {
+        guard elevated != active else { return }
+        elevated = active
+        GameOverlayElevation.set(active)
+        panel.level = GameOverlayElevation.level(base: Self.baseLevel)
+        shadowPanel.level = panel.level
+        updateInteractivity()
+    }
+
+    /// Raise over a game; put back only once the display is plainly ours again, so an
+    /// elevation the probe earned is not dropped by the next app switch inside the game.
+    private func applyContext(_ context: FullscreenContext) {
+        if context.isGameLike { setElevated(true) }
+        else if !context.displayCaptured { setElevated(false) }
+    }
+
+    /// G.4's probe, the same shape as G.1's: `show()` has ordered the panels in, so 50 ms
+    /// later the tile is either on screen or something is over it. `isVisible` stays true
+    /// under a fullscreen game — occlusion is the measurement that does not.
+    private func probeVisibility() {
+        previewProbe?.cancel()
+        let token = visibilityToken
+        previewProbe = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: GameOverlayElevation.probeDelay)
+            guard let self, !Task.isCancelled, self.visibilityToken == token, self.panel.isVisible else { return }
+            if GameOverlayElevation.shouldElevate(gameLike: false, probeVisible: self.probedVisible) {
+                self.setElevated(true)
+            }
+            self.logPreviewState()
+        }
+    }
+
+    private var probedVisible: Bool { panel.isVisible && panel.occlusionState.contains(.visible) }
+
+    /// The line the owner reads after toggling the preview inside a game.
+    private func logPreviewState() {
+        DiagnosticsLog.append(
+            "camera " + GameOverlayElevation.logLine(surface: "preview", visible: probedVisible, level: panel.level)
+        )
+    }
+
+    /// One place for the three reasons the tile refuses the mouse: it is raised over a game,
+    /// it is waiting for its first frame, or it is fading out from under the pointer.
     private func updateInteractivity() {
-        panel.ignoresMouseEvents = pendingReveal || fadingOut
+        panel.ignoresMouseEvents = elevated || pendingReveal || fadingOut
     }
 
     /// `animated` is the owner dismissing the preview. Every other caller (recording
@@ -276,6 +345,8 @@ final class CameraOverlayController: NSObject {
         pendingReveal = false
         revealTimeout?.cancel()
         revealTimeout = nil
+        previewProbe?.cancel()
+        previewProbe = nil
         cameraView.resetIndication()
         visibilityToken &+= 1
         guard animated, panel.isVisible, !Self.reducesMotion else {
@@ -310,6 +381,9 @@ final class CameraOverlayController: NSObject {
     }
 
     private func orderOutPanels() {
+        // Leaving the screen also leaves the game's level — dropped here rather than at the
+        // top of `hide()`, so a tile fading out over a game fades instead of vanishing.
+        setElevated(false)
         shadowPanel.orderOut(nil)
         panel.orderOut(nil)
         panel.alphaValue = 1
