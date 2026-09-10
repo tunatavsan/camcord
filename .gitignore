@@ -7,3 +7,4 @@ dist/
 
 .playwright-mcp/
 .claude/
+skills-lock.json
