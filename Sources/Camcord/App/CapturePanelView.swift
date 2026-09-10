@@ -397,29 +397,22 @@ struct CapturePanelView: View {
         HStack(spacing: 8) {
             Image(systemName: cameraEnabled ? "video.fill" : "video.slash")
                 .foregroundStyle(cameraEnabled ? Color.accentColor : Color.secondary)
-            Text("Kamerayı kaydet").font(.system(size: 11, weight: .medium))
-            Spacer()
+            Text("Kamerayı kaydet")
+                .font(.system(size: 11, weight: .medium))
+                .lineLimit(1)
+            Spacer(minLength: 0)
             if cameraRunning { Circle().fill(.green).frame(width: 6, height: 6) }
-            // A real, visible control: the record switch alone left the preview
-            // unreachable (the owner never found the bare text button next to it).
-            HoverScaleButton(action: togglePreviewWindow) { hovering in
-                HStack(spacing: 4) {
-                    Image(systemName: previewVisible ? "eye.fill" : "eye.slash")
-                    Text("Önizleme")
-                }
-                .font(.system(size: 10, weight: .medium))
-                // `.secondary` off, not `.tertiary`: this is an available control, not a
-                // disabled one — reading as disabled is how the old text button was missed.
-                .foregroundStyle(previewVisible ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-                .padding(.horizontal, 8)
-                .frame(height: 22)
-                .background(
-                    RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous)
-                        .fill(Color.primary.opacity(previewVisible ? (hovering ? 0.16 : 0.12) : (hovering ? 0.10 : 0.06)))
-                )
-            }
-            .help("Kamera önizleme penceresini açar veya gizler — kayda kamera gömmekten bağımsızdır")
-            .accessibilityLabel("Kamera önizlemesi")
+            // The same round eye the recording row already offers, rather than a labelled
+            // chip: in a 276 pt column the chip's label was the thing that pushed
+            // "Kamerayı kaydet" onto two lines and truncated itself to "Önizle…". A filled
+            // round button is still a real, visible control — the mistake this replaced was
+            // a BARE text button, which read as disabled.
+            RoundIconButton(
+                symbol: previewVisible ? "eye.fill" : "eye.slash",
+                tint: previewVisible ? CamcordStyle.accent : nil,
+                help: "Kamera önizleme penceresini açar veya gizler — kayda kamera gömmekten bağımsızdır",
+                action: togglePreviewWindow
+            )
             .accessibilityValue(previewVisible ? "Açık" : "Kapalı")
             Toggle("Kamerayı kaydet", isOn: Binding(
                 get: { cameraEnabled },
