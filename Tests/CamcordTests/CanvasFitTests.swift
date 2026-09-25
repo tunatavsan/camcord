@@ -32,6 +32,21 @@ struct CanvasFitTests {
         #expect(fit.backdrop.contains(CGRect(origin: .zero, size: canvas)))
     }
 
+    /// DENETIM-1 R1, measured 2026-09-25 with the SCK probe on a 1× (`.oneX`) buffer: a
+    /// 600×482 pt window captured into a 600×482 px buffer reports `contentRect`
+    /// (0,0,300,241), `contentScale` 0.5, `scaleFactor` 2 — output points, like the native
+    /// case — and shrunk to 400 pt wide it reports (0,0,200,241) with pixels lit at x 0…399.
+    /// So `contentRect × scaleFactor` is the content in buffer pixels at 1× too.
+    @Test("at 1× (SCK measured): contentRect × scaleFactor is the lit area, and the fit engages")
+    func oneXBuffer() {
+        let canvas = CGSize(width: 600, height: 482)
+        #expect(CanvasFit(canvas: canvas, contentRect: CGRect(x: 0, y: 0, width: 300, height: 241), scaleFactor: 2).isPassThrough)
+        let shrunk = CanvasFit(canvas: canvas, contentRect: CGRect(x: 0, y: 0, width: 200, height: 241), scaleFactor: 2)
+        #expect(shrunk.content == CGRect(x: 0, y: 0, width: 400, height: 482))
+        #expect(!shrunk.isPassThrough)
+        #expect(shrunk.fitted == CGRect(x: 100, y: 0, width: 400, height: 482))
+    }
+
     @Test("fit is aspect-true, centred and inside the canvas; the backdrop always covers it", arguments: [
         CGRect(x: 0, y: 0, width: 300, height: 700),
         CGRect(x: 0, y: 0, width: 1200, height: 100),
