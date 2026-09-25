@@ -119,9 +119,6 @@ struct RecordingHubHover: Equatable, Sendable {
         self.collapseAt = nil
         expanded = false
     }
-
-    /// The idle hub sits back so it never demands attention; hovering brings it forward.
-    var alpha: CGFloat { expanded ? 1 : 0.55 }
 }
 
 /// The disc → capsule morph: one spring, integrated with `CameraDragMotion.integrate` so
@@ -265,7 +262,8 @@ final class RecordingHubPanel {
         expansion = RecordingHubExpansion()
         capsule = dock.rect(size: RecordingHubLayout.size(mode: mode, progress: 0, growth: dock.growth), in: area)
         applyGeometry()
-        panel.alphaValue = hover.alpha
+        // The hub is a solid dark object at rest too: an idle dim made it read as pale grey.
+        panel.alphaValue = 1
         refreshPreviewState()
         refreshElevation()
         present(panel)
@@ -347,16 +345,6 @@ final class RecordingHubPanel {
             applyGeometry()
         } else {
             startMotion()
-        }
-        let alpha = hover.alpha
-        guard panel.alphaValue != alpha else { return }
-        if Self.reducesMotion {
-            panel.alphaValue = alpha
-        } else {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.16
-                panel.animator().alphaValue = alpha
-            }
         }
     }
 

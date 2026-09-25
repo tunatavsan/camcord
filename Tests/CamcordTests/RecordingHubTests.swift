@@ -104,12 +104,10 @@ struct RecordingHubTests {
     func hoverStateMachine() {
         var hover = RecordingHubHover()
         #expect(!hover.expanded)
-        #expect(hover.alpha == 0.55)
 
         hover.pointerEntered(at: 10)
         #expect(hover.expanded)
         #expect(hover.pointerInside)
-        #expect(hover.alpha == 1)
 
         hover.pointerExited(at: 10)
         #expect(!hover.pointerInside)
@@ -122,7 +120,6 @@ struct RecordingHubTests {
         #expect(hover.expanded)
         hover.advance(to: 10.4)
         #expect(!hover.expanded)
-        #expect(hover.alpha == 0.55)
     }
 
     @Test("coming back inside the grace period cancels the collapse")

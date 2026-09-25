@@ -175,9 +175,9 @@ enum RecordingHubLayout {
 /// The round, hover-expanding recording hub. Collapsed it is a 44 pt disc showing the
 /// elapsed time under one steady dot — never a blink. Hovering springs it open into a
 /// capsule with pause, stop, the camera-preview eye and a mic level; the pointer leaving
-/// closes it again. It draws itself (no vibrancy) so it stays legible at full frame rate
-/// over a game, and lives in a nonactivating panel that the owner can drag to one of five
-/// docks.
+/// closes it again. The capsule is a dark, tinted Liquid Glass surface (`NSGlassEffectView`)
+/// with the cells drawn inside it; this view owns hit testing, hover and accessibility, and
+/// lives in a nonactivating panel that the owner can drag to one of five docks.
 @MainActor
 final class RecordingHubView: NSView {
     enum DragPhase { case began, changed, ended }
@@ -192,7 +192,7 @@ final class RecordingHubView: NSView {
     var elapsed: String? {
         didSet {
             guard elapsed != oldValue else { return }
-            needsDisplay = true
+            content.needsDisplay = true
             // The drawn label ticks every second while nothing about the geometry changes,
             // so the accessibility value has to be written here or VoiceOver reads the time
             // the hub had when it opened for the whole recording.
@@ -207,7 +207,7 @@ final class RecordingHubView: NSView {
             // The dot only exists in the expanded capsule; while collapsed this would be a
             // full repaint of the hub up to 30x a second, for the length of a recording.
             guard progress > 0.001, abs(micLevel - oldValue) > 0.04 else { return }
-            needsDisplay = true
+            content.needsDisplay = true
         }
     }
     /// 0 = disc, 1 = capsule. Driven by the panel's expansion spring.
@@ -221,9 +221,10 @@ final class RecordingHubView: NSView {
     /// True when the hub is docked against the right edge.
     private var mirrored: Bool { growth == .trailing }
 
-    /// The hub's own chrome: dark, near-opaque, and independent of the wallpaper or the
-    /// game behind it, so the 11 pt time never has to compete for contrast.
-    private static let chrome = NSColor(calibratedWhite: 0.13, alpha: 0.94)
+    /// The glass's tint: toward near-black and strong enough that the hub reads as a solid
+    /// dark object over any wallpaper or game, so the 11 pt time never competes for
+    /// contrast. Interim — the palette comes from the design direction chosen in UI-2.
+    static let glassTint = NSColor(calibratedWhite: 0.06, alpha: 0.72)
     /// The app's one hairline (`CamcordStyle.innerBorder`), resolved on dark chrome.
     private static let hairline = NSColor.labelColor.withAlphaComponent(0.09)
     private static let recordingTint = NSColor(CamcordStyle.recording)
@@ -231,18 +232,25 @@ final class RecordingHubView: NSView {
 
     private var symbolCache: [String: NSImage] = [:]
 
+    /// The capsule's surface. Liquid Glass draws its own edge and shadow.
+    let glass = NSGlassEffectView()
+    /// The cells, drawn inside the glass.
+    private let content = HubContentView()
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        // A HUD is dark in both appearances; fixing it here makes `labelColor` and the
-        // hairline resolve light without a second palette.
+        // A HUD is dark in both appearances; fixing it here makes the glass, `labelColor`
+        // and the hairline resolve as light marks on dark glass without a second palette.
         appearance = NSAppearance(named: .darkAqua)
-        layer?.shadowColor = NSColor.black.cgColor
-        layer?.shadowOpacity = 0.42
-        layer?.shadowRadius = 9
-        layer?.shadowOffset = CGSize(width: 0, height: -3)
+        glass.style = .regular
+        glass.tintColor = Self.glassTint
+        content.owner = self
+        glass.contentView = content
+        addSubview(glass)
         setAccessibilityRole(.group)
         setAccessibilityLabel("Kayıt merkezi")
+        layoutGlass()
     }
 
     @available(*, unavailable)
@@ -286,27 +294,33 @@ final class RecordingHubView: NSView {
     }
 
     private func refresh() {
-        needsDisplay = true
+        layoutGlass()
+        content.needsDisplay = true
         rebuildAccessibility()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        layoutGlass()
+    }
+
+    /// The glass IS the capsule: same rect, fully round ends, redrawn with every spring step.
+    private func layoutGlass() {
+        let capsule = capsuleRect
+        glass.isHidden = capsule.width < 1 || capsule.height < 1
+        glass.frame = capsule
+        glass.cornerRadius = capsule.height / 2
+        content.frame = CGRect(origin: .zero, size: capsule.size)
     }
 
     // MARK: - Drawing
 
-    override func draw(_ dirtyRect: NSRect) {
+    /// Draws the cells in this view's coordinates; `HubContentView` translates into them.
+    fileprivate func drawCells() {
         let capsule = capsuleRect
         guard capsule.width > 1, capsule.height > 1 else { return }
         let radius = capsule.height / 2
         let outline = NSBezierPath(roundedRect: capsule, xRadius: radius, yRadius: radius)
-        Self.chrome.setFill()
-        outline.fill()
-        Self.hairline.setStroke()
-        let edge = NSBezierPath(
-            roundedRect: capsule.insetBy(dx: 0.5, dy: 0.5),
-            xRadius: radius - 0.5,
-            yRadius: radius - 0.5
-        )
-        edge.lineWidth = 1
-        edge.stroke()
 
         NSGraphicsContext.saveGraphicsState()
         outline.addClip()
@@ -537,5 +551,27 @@ private final class HubControlElement: NSAccessibilityElement {
         guard let press else { return false }
         MainActor.assumeIsolated { press() }
         return true
+    }
+}
+
+/// The glass's content: a transparent layer the hub's cells are drawn into. It takes no
+/// events — the hub view above it owns hit testing — and draws in the hub view's
+/// coordinates so the cell maths stays in one place.
+private final class HubContentView: NSView {
+    weak var owner: RecordingHubView?
+
+    override var isFlipped: Bool { false }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let owner else { return }
+        let offset = owner.capsuleRect.origin
+        NSGraphicsContext.saveGraphicsState()
+        let transform = NSAffineTransform()
+        transform.translateX(by: -offset.x, yBy: -offset.y)
+        transform.concat()
+        owner.drawCells()
+        NSGraphicsContext.restoreGraphicsState()
     }
 }

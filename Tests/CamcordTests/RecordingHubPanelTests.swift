@@ -167,4 +167,38 @@ struct RecordingHubPanelTests {
             #expect(dock.rect(size: large.size, anchoredAt: dock.anchor(of: small)) == large)
         }
     }
+
+    @Test("the hub is Liquid Glass: one dark tinted glass capsule that follows the spring, never dimmed at rest")
+    func glassSurface() throws {
+        _ = NSApplication.shared
+        let hub = RecordingHubPanel(defaults: try freshDefaults(), panelPresenter: { _ in })
+        hub.showForTesting(mode: .recording, area: area)
+        let view = hub.viewForTesting
+        let glass = view.glass
+        #expect(glass.superview === view)
+        #expect(glass.style == .regular)
+        #expect(glass.tintColor == RecordingHubView.glassTint)
+        #expect(view.appearance?.name == .darkAqua)
+
+        // Idle, not hovered: fully opaque.
+        #expect(hub.panelForTesting.alphaValue == 1)
+        #expect(glass.frame == view.capsuleRect)
+        #expect(glass.cornerRadius == RecordingHubLayout.disc / 2)
+
+        hub.setHoveredForTesting(true)
+        hub.settleForTesting()
+        #expect(glass.frame == view.capsuleRect)
+        #expect(glass.frame.width == RecordingHubLayout.expandedWidth(mode: .recording, growth: .centered))
+        #expect(hub.panelForTesting.alphaValue == 1)
+
+        hub.setHoveredForTesting(false)
+        hub.settleForTesting()
+        #expect(glass.frame == view.capsuleRect)
+        #expect(glass.frame.width == RecordingHubLayout.disc)
+        #expect(hub.panelForTesting.alphaValue == 1)
+        // Hit testing still belongs to the hub view, not the glass it hosts.
+        let center = CGPoint(x: view.frame.midX, y: view.frame.midY)
+        #expect(view.hitTest(center) === view)
+        hub.hide()
+    }
 }

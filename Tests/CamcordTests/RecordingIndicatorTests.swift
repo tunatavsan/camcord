@@ -43,14 +43,14 @@ struct RecordingIndicatorTests {
         #expect(abs(hub.frame.midX - screen.visibleFrame.midX) < 0.5)
         #expect(hub.frame.maxY < screen.visibleFrame.maxY)
         #expect(hub.frame.midY > screen.visibleFrame.midY)
-        #expect(hub.alphaValue == 0.55)
+        #expect(hub.alphaValue == 1)
 
         // Occluding the recorded window hides the frame; the hub is docked to the display,
         // so the only way to stop the recording never goes away.
         indicator.setOccludedForTesting(true)
         #expect(indicator.frameAlphaForTesting == 0)
         #expect(!hub.ignoresMouseEvents)
-        #expect(hub.alphaValue == 0.55)
+        #expect(hub.alphaValue == 1)
         indicator.hide()
     }
 
