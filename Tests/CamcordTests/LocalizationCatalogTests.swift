@@ -42,36 +42,73 @@ struct LocalizationCatalogTests {
         }
     }
 
-    @Test("every English-first key in the code is in the catalog")
-    @MainActor
-    func codeKeysAreInTheCatalog() throws {
-        let keys = Set(try catalog().strings.keys)
-        // The typed ones, straight from the code.
-        var used = Set<String>()
-        for module in ModuleRegistry.all { used.insert(module.title.key) }
-        for mode in DockIconMode.allCases { used.insert(mode.title.key) }
-        // The literal ones: every String(localized:), LocalizedStringResource(…) and
-        // Text(…, comment:) in Sources, plus the SwiftUI labels that take a key directly.
-        let pattern = try NSRegularExpression(
-            pattern: #"(?:String\(localized: |LocalizedStringResource\(|Text\()"((?:[^"\\]|\\.)+)"(?:,\s*comment|\)|,)"#)
-        let sources = Self.root.appendingPathComponent("Sources")
-        let files = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil)?
-            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" } ?? []
-        for file in files {
-            let text = try String(contentsOf: file, encoding: .utf8)
-            for match in pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-                let full = String(text[Range(match.range, in: text)!])
-                // Only English-first keys: Text("…", comment:) and the two localized APIs.
-                guard full.hasPrefix("String(localized:") || full.hasPrefix("LocalizedStringResource(")
-                        || full.hasSuffix("comment") else { continue }
-                used.insert(String(text[Range(match.range(at: 1), in: text)!]))
-            }
+    /// Every key the compiler saw in `Sources/Camcord`: `Text`, `Button`, `Toggle`, `Label`,
+    /// `Picker`, `.help`, `String(localized:)`, `LocalizedStringResource` … all of them.
+    /// The Camcord target is built with `-emit-localized-strings` (Package.swift), so
+    /// `swift test` refreshes these files before the tests run.
+    private func compiledKeys() throws -> Set<String> {
+        let directory = Self.root.appendingPathComponent(".build/localized-strings")
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "stringsdata" }
+        struct StringsData: Decodable {
+            struct Entry: Decodable { let key: String }
+            let source: String
+            let tables: [String: [Entry]]
         }
-        used.formUnion(["Canvas", "Format", "Dock icon",
-                        "Window recordings: the file keeps this shape; a resized window is centred on a blurred backdrop.",
-                        "Auto picks the smallest 1080p-or-taller format at up to 60 fps."])
-        #expect(used.count >= 20)
-        let missing = used.subtracting(keys)
+        var keys = Set<String>()
+        for file in files {
+            let data = try JSONDecoder().decode(StringsData.self, from: Data(contentsOf: file))
+            // A deleted source leaves its old file behind; it no longer counts.
+            guard FileManager.default.fileExists(atPath: data.source) else { continue }
+            for entry in data.tables["Localizable"] ?? [] { keys.insert(entry.key) }
+        }
+        return keys
+    }
+
+    /// Keys that predate the catalog (Turkish literals used as keys). The list may only
+    /// shrink; K8 of docs/RUN-UI-2.md empties it by P6.
+    private func legacyKeys() throws -> Set<String> {
+        let url = Self.root.appendingPathComponent("Tests/CamcordTests/Fixtures/legacy-uncatalogued-keys.json")
+        return Set(try JSONDecoder().decode([String].self, from: Data(contentsOf: url)))
+    }
+
+    @Test("every key the compiler sees in the code is in the catalog (or on the shrinking legacy list)")
+    func codeKeysAreInTheCatalog() throws {
+        let catalogKeys = Set(try catalog().strings.keys)
+        let used = try compiledKeys()
+        #expect(used.count >= 100, "the compiler's key files look empty; is -emit-localized-strings still set?")
+        let missing = used.subtracting(catalogKeys).subtracting(try legacyKeys())
         #expect(missing.isEmpty, "not in Localizable.xcstrings: \(missing.sorted())")
+    }
+
+    @Test("every source file has its own, fresh key file (the flag is on; no two sources share a name)")
+    func keyFilesAreFresh() throws {
+        let directory = Self.root.appendingPathComponent(".build/localized-strings")
+        let sources = FileManager.default.enumerator(at: Self.root.appendingPathComponent("Sources/Camcord"),
+                                                     includingPropertiesForKeys: [.contentModificationDateKey])?
+            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" } ?? []
+        #expect(sources.count > 50)
+        struct Source: Decodable { let source: String }
+        for source in sources {
+            let keyFile = directory.appendingPathComponent(source.deletingPathExtension().lastPathComponent + ".stringsdata")
+            let data = try? Data(contentsOf: keyFile)
+            let owner = data.flatMap { try? JSONDecoder().decode(Source.self, from: $0) }?.source
+            #expect(owner.map { URL(fileURLWithPath: $0).standardizedFileURL } == source.standardizedFileURL,
+                    "no key file of its own for \(source.lastPathComponent)")
+            let sourceDate = try source.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+            let keyDate = try? keyFile.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+            #expect(keyDate != nil && keyDate! >= sourceDate!, "stale key file for \(source.lastPathComponent)")
+        }
+    }
+
+    @Test("the legacy list names only keys that are still in the code and still missing from the catalog")
+    func legacyListOnlyShrinks() throws {
+        let legacy = try legacyKeys()
+        let used = try compiledKeys()
+        let catalogKeys = Set(try catalog().strings.keys)
+        let gone = legacy.subtracting(used)
+        #expect(gone.isEmpty, "no longer in the code; remove from the legacy list: \(gone.sorted())")
+        let catalogued = legacy.intersection(catalogKeys)
+        #expect(catalogued.isEmpty, "now in the catalog; remove from the legacy list: \(catalogued.sorted())")
     }
 }
