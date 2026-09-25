@@ -437,6 +437,12 @@ final class CameraOverlayController: NSObject {
 
     private var bounds: CGRect { recordingBounds ?? previewBounds }
 
+    /// The tile's frame while it is on screen (not while fading out), so the recording hub
+    /// can keep off the dock it holds.
+    var visibleTileFrame: CGRect? {
+        previewVisible && panel.isVisible && !fadingOut ? panel.frame : nil
+    }
+
     private func layout() {
         guard !bounds.isEmpty else { return }
         let local = options.rect(in: bounds.size)

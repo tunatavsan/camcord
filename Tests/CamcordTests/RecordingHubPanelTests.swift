@@ -201,4 +201,137 @@ struct RecordingHubPanelTests {
         #expect(view.hitTest(center) === view)
         hub.hide()
     }
+
+    // MARK: - Inside the recorded window (K3)
+
+    private let window = CGRect(x: 300, y: 200, width: 900, height: 600)
+
+    @Test("a window target docks inside the window, on the camera tile's margin")
+    func docksInsideWindow() throws {
+        _ = NSApplication.shared
+        let hub = RecordingHubPanel(defaults: try freshDefaults(), panelPresenter: { _ in })
+        hub.tileFrame = { nil }
+        hub.showForTesting(mode: .armed, area: area, window: window)
+        #expect(hub.areaForTesting == window)
+        let margin = CameraOptions.margin(in: window.size)
+        #expect(window.contains(hub.capsuleForTesting))
+        #expect(abs(hub.capsuleForTesting.midX - window.midX) <= 1)
+        #expect(abs(hub.capsuleForTesting.maxY - (window.maxY - margin)) <= 0.5)
+        // The hub sits above the camera tile.
+        #expect(hub.panelForTesting.level.rawValue > CameraOverlayController.baseLevel.rawValue)
+        hub.hide()
+    }
+
+    @Test("the docks move with the window, and a hub being dragged keeps the pointer")
+    func followsWindow() throws {
+        _ = NSApplication.shared
+        let hub = RecordingHubPanel(defaults: try freshDefaults(), panelPresenter: { _ in })
+        hub.tileFrame = { nil }
+        hub.showForTesting(mode: .recording, area: area, window: window)
+        let moved = window.offsetBy(dx: 180, dy: -120)
+        hub.updateWindowForTesting(moved)
+        #expect(hub.areaForTesting == moved)
+        #expect(abs(hub.capsuleForTesting.midX - moved.midX) <= 1)
+        #expect(abs(hub.capsuleForTesting.maxY - (moved.maxY - CameraOptions.margin(in: moved.size))) <= 0.5)
+
+        // Resized smaller: the docks are recomputed for the new size.
+        let resized = CGRect(x: moved.minX, y: moved.minY, width: 520, height: 400)
+        hub.updateWindowForTesting(resized)
+        #expect(abs(hub.capsuleForTesting.midX - resized.midX) <= 1)
+        #expect(resized.contains(hub.capsuleForTesting))
+
+        // Mid-drag the window moving does not yank the hub from under the pointer; the drop
+        // then settles on the new window's dock.
+        let grip = CGPoint(x: hub.capsuleForTesting.midX, y: hub.capsuleForTesting.midY)
+        hub.dragForTesting(.began, to: grip, at: 1)
+        hub.dragForTesting(.changed, to: CGPoint(x: grip.x + 10, y: grip.y - 8), at: 1.5)
+        let held = hub.capsuleForTesting
+        let later = resized.offsetBy(dx: 40, dy: 0)
+        hub.updateWindowForTesting(later)
+        #expect(hub.capsuleForTesting == held)
+        hub.dragForTesting(.ended, to: CGPoint(x: grip.x + 10, y: grip.y - 8), at: 2.5)
+        hub.settleForTesting()
+        #expect(abs(hub.capsuleForTesting.midX - later.midX) <= 1)
+        hub.hide()
+    }
+
+    @Test("a drag snaps only inside the window")
+    func dragConfinedToWindow() throws {
+        _ = NSApplication.shared
+        let hub = RecordingHubPanel(defaults: try freshDefaults(), panelPresenter: { _ in })
+        hub.tileFrame = { nil }
+        hub.showForTesting(mode: .recording, area: area, window: window)
+        let grip = CGPoint(x: hub.capsuleForTesting.midX, y: hub.capsuleForTesting.midY)
+        hub.dragForTesting(.began, to: grip, at: 1)
+        // Far outside the window, down and to the left.
+        hub.dragForTesting(.changed, to: CGPoint(x: grip.x - 1200, y: grip.y - 900), at: 2)
+        #expect(window.contains(hub.capsuleForTesting))
+        hub.dragForTesting(.changed, to: CGPoint(x: grip.x - 1200, y: grip.y - 900), at: 3)
+        hub.dragForTesting(.ended, to: CGPoint(x: grip.x - 1200, y: grip.y - 900), at: 4)
+        hub.settleForTesting()
+        #expect(hub.dockForTesting == .bottomLeft)
+        #expect(window.contains(hub.capsuleForTesting))
+        #expect(abs(hub.capsuleForTesting.minX - (window.minX + CameraOptions.margin(in: window.size))) <= 0.5)
+        hub.hide()
+    }
+
+    @Test("the camera tile's dock is taken: the hub rests on the nearest free dock, and a drop there too")
+    func avoidsCameraTile() throws {
+        _ = NSApplication.shared
+        let hub = RecordingHubPanel(defaults: try freshDefaults(), panelPresenter: { _ in })
+        // A tile sitting at the top middle of the window.
+        let tile = CGRect(x: window.midX - 120, y: window.maxY - 150, width: 240, height: 135)
+        hub.tileFrame = { tile }
+        hub.showForTesting(mode: .recording, area: area, window: window)
+        #expect(hub.dockForTesting != .topCenter)
+        #expect([.topLeft, .topRight].contains(hub.dockForTesting))
+        let open = RecordingHubLayout.size(mode: .recording, progress: 1, growth: hub.dockForTesting.growth)
+        #expect(!hub.dockForTesting.rect(size: open, in: window).intersects(tile))
+
+        // The pure rule: free preferred stays, held preferred moves to the NEAREST free dock
+        // (in a 900×600 window, up the right edge rather than across the bottom).
+        let bottomRightTile = CGRect(x: window.maxX - 260, y: window.minY + 10, width: 250, height: 140)
+        #expect(RecordingHubPlacement.dock(preferred: .topCenter, in: window, mode: .recording,
+                                           avoiding: bottomRightTile) == .topCenter)
+        #expect(RecordingHubPlacement.dock(preferred: .bottomRight, in: window, mode: .recording,
+                                           avoiding: bottomRightTile) == .topRight)
+        #expect(RecordingHubPlacement.dock(preferred: .bottomRight, in: window, mode: .recording,
+                                           avoiding: nil) == .bottomRight)
+
+        // A slow drop right onto the tile's dock rests beside it instead.
+        hub.tileFrame = { bottomRightTile }
+        let grip = CGPoint(x: hub.capsuleForTesting.midX, y: hub.capsuleForTesting.midY)
+        let aim = CGPoint(x: window.maxX - 60, y: window.minY + 40)
+        hub.dragForTesting(.began, to: grip, at: 1)
+        hub.dragForTesting(.changed, to: aim, at: 2)
+        hub.dragForTesting(.changed, to: aim, at: 3)
+        hub.dragForTesting(.ended, to: aim, at: 4)
+        hub.settleForTesting()
+        #expect(hub.dockForTesting != .bottomRight)
+        #expect(!hub.capsuleForTesting.intersects(bottomRightTile))
+        hub.hide()
+    }
+
+    @Test("a window too small for the open capsule plus its margins docks on its display instead")
+    func smallWindowFallsBack() throws {
+        _ = NSApplication.shared
+        let small = CGRect(x: 500, y: 400, width: 200, height: 90)
+        #expect(RecordingHubPlacement.area(window: small, display: area, mode: .recording) == area)
+        let short = CGRect(x: 500, y: 400, width: 900, height: 46)
+        #expect(RecordingHubPlacement.area(window: short, display: area, mode: .armed) == area)
+        #expect(RecordingHubPlacement.area(window: window, display: area, mode: .recording) == window)
+        // Clipped to the display's visible frame: no dock under the menu bar or off screen.
+        let overhanging = CGRect(x: -200, y: 300, width: 1000, height: 900)
+        #expect(RecordingHubPlacement.area(window: overhanging, display: area, mode: .recording)
+            == CGRect(x: 0, y: 300, width: 800, height: 700))
+        // No window: the display.
+        #expect(RecordingHubPlacement.area(window: nil, display: area, mode: .recording) == area)
+
+        let hub = RecordingHubPanel(defaults: try freshDefaults(), panelPresenter: { _ in })
+        hub.tileFrame = { nil }
+        hub.showForTesting(mode: .recording, area: area, window: small)
+        #expect(hub.areaForTesting == area)
+        #expect(abs(hub.capsuleForTesting.midX - area.midX) <= 1)
+        hub.hide()
+    }
 }

@@ -47,8 +47,9 @@ struct RecordingFrameVisibility: Equatable, Sendable {
 /// rebuilds the layer path.
 ///
 /// The border panel is ALWAYS click-through so the window underneath stays usable. When a
-/// stop action is provided, a SEPARATE round control hub (interactive, draggable, docked to
-/// the display) floats above it.
+/// stop action is provided, a SEPARATE round control hub (interactive, draggable) floats
+/// above it: docked inside a recorded window and following it, or docked to the display for
+/// display and region targets.
 @MainActor
 final class CaptureAreaIndicator {
     typealias PanelPresenter = @MainActor (NSPanel) -> Void
@@ -67,8 +68,8 @@ final class CaptureAreaIndicator {
 
     /// Live window-follow state (window recording): a CADisplayLink repositions the border
     /// as the recorded window moves/resizes, and fades it while the window is occluded so
-    /// the border never floats over the app that covered it. The hub is docked to the
-    /// DISPLAY, not the window, so it never follows and never hides.
+    /// the border never floats over the app that covered it. The hub docks inside the window
+    /// and follows it the same frame, but never hides: it is the way to stop the recording.
     private var followWindowID: CGWindowID?
     private var displayLink: CADisplayLink?
     private var displayLinkProxy: DisplayLinkProxy?
@@ -159,8 +160,8 @@ final class CaptureAreaIndicator {
     }
 
     /// Window-recording surface that never loses its stop affordance. The optional
-    /// border follows target movement and occlusion, while the hub stays docked to the
-    /// display, visible and clickable.
+    /// border follows target movement and occlusion; the hub docks inside the window,
+    /// follows it, and stays visible and clickable.
     func showRecordingWindow(
         _ windowID: CGWindowID,
         initialCGRect: CGRect,
@@ -188,6 +189,7 @@ final class CaptureAreaIndicator {
         hub = makeHub(
             mode: mode,
             target: target,
+            insideWindow: true,
             onStop: onStop,
             onPauseResume: onPauseResume,
             onTogglePreview: onTogglePreview,
@@ -293,6 +295,9 @@ final class CaptureAreaIndicator {
                 lastFollowedBounds = predicted
                 reposition(to: predicted)
                 onTrackedBoundsChange?(bounds)
+                // After the tile has moved with the window, so the hub's collision check
+                // sees where the tile is now.
+                moveHub(to: predicted)
             }
         }
         if followTick % occlusionCheckInterval == 0 {
@@ -375,6 +380,13 @@ final class CaptureAreaIndicator {
         }
     }
 
+    /// The hub follows the same led bounds as the border, so the two stay glued together.
+    private func moveHub(to cgBounds: CGRect) {
+        guard let hub, let primaryHeight = NSScreen.screens.first?.frame.height else { return }
+        let target = Geometry.cgToAppKit(cgBounds, primaryScreenHeight: primaryHeight)
+        hub.updateWindow(target, on: relevantScreen(for: target))
+    }
+
     // MARK: - Panels
 
     private func makeBorderPanel(target: CGRect, color: NSColor) -> NSPanel {
@@ -398,6 +410,7 @@ final class CaptureAreaIndicator {
     private func makeHub(
         mode: RecordingHubMode,
         target: CGRect,
+        insideWindow: Bool = false,
         onStop: @escaping () -> Void,
         onPauseResume: (() -> Void)?,
         onTogglePreview: (() -> Void)?,
@@ -413,7 +426,7 @@ final class CaptureAreaIndicator {
             self.frame.hoveringHub = hovering
             self.applyFrameVisibility(animated: true)
         }
-        hub.show(mode: mode, on: relevantScreen(for: target))
+        hub.show(mode: mode, on: relevantScreen(for: target), window: insideWindow ? target : nil)
         return hub
     }
 

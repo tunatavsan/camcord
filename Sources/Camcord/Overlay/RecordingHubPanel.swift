@@ -92,6 +92,51 @@ enum RecordingHubDock: String, Codable, CaseIterable, Sendable {
     }
 }
 
+/// Where the hub docks for a target, kept pure. A recorded WINDOW puts the five docks inside
+/// the window — the same model as the camera tile — so the controls sit on the thing being
+/// recorded and follow it; a window too small to hold the open capsule falls back to its
+/// display. The hub is never recorded there: a window capture sees only that window.
+enum RecordingHubPlacement {
+    /// The dock area: the window's frame clipped to its display's visible frame (so no dock
+    /// sits under the menu bar or off screen), or the display's visible frame when there is no
+    /// window or it cannot hold the open capsule plus a margin on each side.
+    static func area(window: CGRect?, display: CGRect, mode: RecordingHubMode) -> CGRect {
+        guard let window else { return display }
+        let inside = window.intersection(display)
+        guard !inside.isNull, !inside.isEmpty else { return display }
+        let margin = CameraOptions.margin(in: inside.size)
+        let widest = RecordingHubDock.allCases
+            .map { RecordingHubLayout.expandedWidth(mode: mode, growth: $0.growth) }
+            .max() ?? RecordingHubLayout.disc
+        guard inside.width >= widest + margin * 2,
+              inside.height >= RecordingHubLayout.disc + margin * 2 else { return display }
+        return inside
+    }
+
+    /// The dock to rest on: `preferred`, unless the camera tile holds it — then the free dock
+    /// nearest to it. A dock is held when the open capsule there would touch the tile. With
+    /// every dock held, `preferred` wins; the hub's level keeps it above the tile.
+    static func dock(
+        preferred: RecordingHubDock,
+        in area: CGRect,
+        mode: RecordingHubMode,
+        avoiding obstacle: CGRect?
+    ) -> RecordingHubDock {
+        guard let obstacle, !obstacle.isEmpty else { return preferred }
+        func isFree(_ dock: RecordingHubDock) -> Bool {
+            let open = RecordingHubLayout.size(mode: mode, progress: 1, growth: dock.growth)
+            return !dock.rect(size: open, in: area).intersects(obstacle)
+        }
+        if isFree(preferred) { return preferred }
+        let disc = CGSize(width: RecordingHubLayout.disc, height: RecordingHubLayout.disc)
+        let from = preferred.rect(size: disc, in: area)
+        return RecordingHubDock.allCases.filter(isFree).min {
+            let a = $0.rect(size: disc, in: area), b = $1.rect(size: disc, in: area)
+            return hypot(a.midX - from.midX, a.midY - from.midY) < hypot(b.midX - from.midX, b.midY - from.midY)
+        } ?? preferred
+    }
+}
+
 /// Hover expand/collapse, pure and clock-injected. Expanding is immediate; collapsing
 /// waits, so crossing the gap between two controls — or slipping off the capsule for a
 /// frame — never snaps the hub shut under the pointer.
@@ -156,13 +201,19 @@ struct RecordingHubExpansion: Equatable, Sendable {
     }
 }
 
-/// The hub's own window: nonactivating, on every Space, above full-screen chrome, and
-/// raised to the shielding level when a game owns the display — otherwise a fullscreen
-/// game draws straight over the only way to stop a recording. Owns the drag (five docks,
-/// the tile's magnet and fling rules) and the expansion spring.
+/// The hub's own window: nonactivating, on every Space, above full-screen chrome and the
+/// camera tile, and raised to the shielding level when a game owns the display — otherwise a
+/// fullscreen game draws straight over the only way to stop a recording. Owns the drag (five
+/// docks, the tile's magnet and fling rules) and the expansion spring.
 @MainActor
 final class RecordingHubPanel {
     typealias PanelPresenter = @MainActor (NSPanel) -> Void
+
+    /// One above the camera tile, so a tile that shares a dock can never cover the hub.
+    static let baseLevel = NSWindow.Level(rawValue: CameraOverlayController.baseLevel.rawValue + 1)
+
+    /// The camera tile's frame on screen while it shows, for dock collisions.
+    var tileFrame: () -> CGRect? = { CameraOverlayController.shared.visibleTileFrame }
 
     var onStop: (() -> Void)?
     var onPauseResume: (() -> Void)?
@@ -178,7 +229,14 @@ final class RecordingHubPanel {
     private let present: PanelPresenter
 
     private var mode: RecordingHubMode = .recording
+    /// The dock the hub rests on now, and the one the owner chose (persisted): they differ
+    /// only while the camera tile holds the chosen one.
     private var dock: RecordingHubDock = .topCenter
+    private var preferredDock: RecordingHubDock = .topCenter
+    /// The recorded window's frame (window targets only) and its display's visible frame;
+    /// `area` is the dock area resolved from the two.
+    private var windowFrame: CGRect?
+    private var displayFrame: CGRect = .zero
     private var area: CGRect = .zero
     private var capsule: CGRect = .zero
 
@@ -215,7 +273,7 @@ final class RecordingHubPanel {
         panel.ignoresMouseEvents = false
         panel.isReleasedWhenClosed = false
         panel.animationBehavior = .none
-        panel.level = .statusBar
+        panel.level = Self.baseLevel
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
         panel.contentView = view
         view.onHover = { [weak self] inside in self?.setHovered(inside) }
@@ -224,7 +282,12 @@ final class RecordingHubPanel {
         previewObserver = NotificationCenter.default.addObserver(
             forName: CameraOverlayController.previewVisibilityDidChange, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshPreviewState() }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.refreshPreviewState()
+                // The tile appearing or leaving can free or take the hub's dock.
+                if self.panel.isVisible { self.relayout() }
+            }
         }
         // Entering and LEAVING a game are both app switches. Without this the level was
         // decided once, at show(), and on pointer-enter — and a hub that a game has covered
@@ -250,16 +313,33 @@ final class RecordingHubPanel {
 
     // MARK: - Presentation
 
-    func show(mode: RecordingHubMode, on screen: NSScreen?) {
-        self.mode = mode
-        view.mode = mode
+    /// Shows the hub docked to `screen`, or — for a window target — inside `window`
+    /// (AppKit coordinates) on that screen.
+    func show(mode: RecordingHubMode, on screen: NSScreen?, window: CGRect? = nil) {
         // The VISIBLE frame: a hub resting on the live menu bar would eat clicks meant
         // for the status items.
-        area = (screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? .zero
-        dock = RecordingSettings.load(from: defaults).hubDock
-        view.growth = dock.growth
+        let display = (screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? .zero
+        presentHub(mode: mode, display: display, window: window)
+    }
+
+    /// The recorded window moved or resized: the docks move with it, and a hub at rest
+    /// follows in the same frame, like the border. A hub being dragged keeps the pointer.
+    func updateWindow(_ window: CGRect, on screen: NSScreen?) {
+        guard windowFrame != nil else { return }
+        windowFrame = window
+        if let screen { displayFrame = screen.visibleFrame }
+        relayout()
+    }
+
+    private func presentHub(mode: RecordingHubMode, display: CGRect, window: CGRect?) {
+        self.mode = mode
+        view.mode = mode
+        displayFrame = display
+        windowFrame = window
+        preferredDock = RecordingSettings.load(from: defaults).hubDock
         hover = RecordingHubHover()
         expansion = RecordingHubExpansion()
+        resolveDock()
         capsule = dock.rect(size: RecordingHubLayout.size(mode: mode, progress: 0, growth: dock.growth), in: area)
         applyGeometry()
         // The hub is a solid dark object at rest too: an idle dim made it read as pale grey.
@@ -303,7 +383,7 @@ final class RecordingHubPanel {
     /// Above a fullscreen game nothing at `.statusBar` is visible; the shielding level is
     /// the last one a nonactivating panel can reach.
     func setElevated(_ elevated: Bool) {
-        let level = elevated ? GameOverlayElevation.shieldingLevel : NSWindow.Level.statusBar
+        let level = elevated ? GameOverlayElevation.shieldingLevel : Self.baseLevel
         guard panel.level != level else { return }
         panel.level = level
     }
@@ -360,6 +440,29 @@ final class RecordingHubPanel {
     }
 
     // MARK: - Geometry
+
+    /// Re-reads the area and the dock (window frame, display, camera tile).
+    private func resolveDock() {
+        area = RecordingHubPlacement.area(window: windowFrame, display: displayFrame, mode: mode)
+        dock = RecordingHubPlacement.dock(preferred: preferredDock, in: area, mode: mode, avoiding: tileFrame())
+        view.growth = dock.growth
+    }
+
+    /// Puts the hub back on its dock after the area or the tile changed: at once when it is
+    /// at rest (it follows the window like the border does), by retargeting the spring when
+    /// it is still settling, and not at all mid-drag.
+    private func relayout() {
+        resolveDock()
+        guard dragStart == nil else { return }
+        let target = dock.anchor(of: dock.rect(size: capsule.size, in: area))
+        if var running = settle {
+            running.target = target
+            settle = running
+            return
+        }
+        capsule = dock.rect(size: capsule.size, anchoredAt: target)
+        applyGeometry()
+    }
 
     private static var reducesMotion: Bool {
         NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -443,7 +546,11 @@ final class RecordingHubPanel {
     }
 
     private func land() {
-        let landed = RecordingHubDock.dock(forDrop: capsule, velocity: dragVelocity, in: area)
+        let dropped = RecordingHubDock.dock(forDrop: capsule, velocity: dragVelocity, in: area)
+        // A drop onto the camera tile's dock rests on the nearest free one — and that is
+        // what is remembered, because that is where the owner sees it land.
+        let landed = RecordingHubPlacement.dock(preferred: dropped, in: area, mode: mode, avoiding: tileFrame())
+        preferredDock = landed
         dock = landed
         view.growth = landed.growth
         persist(landed)
@@ -521,13 +628,14 @@ final class RecordingHubPanel {
 
     func setHoveredForTesting(_ inside: Bool) { setHovered(inside) }
 
-    /// `show` on an explicit area instead of a display's visible frame.
-    func showForTesting(mode: RecordingHubMode, area: CGRect) {
-        show(mode: mode, on: nil)
-        self.area = area
-        capsule = dock.rect(size: RecordingHubLayout.size(mode: mode, progress: 0, growth: dock.growth), in: area)
-        applyGeometry()
+    /// `show` on an explicit display area (and window) instead of a real screen.
+    func showForTesting(mode: RecordingHubMode, area: CGRect, window: CGRect? = nil) {
+        presentHub(mode: mode, display: area, window: window)
     }
+
+    func updateWindowForTesting(_ window: CGRect) { updateWindow(window, on: nil) }
+
+    var areaForTesting: CGRect { area }
 
     /// A drag with explicit timestamps, so the fling test sees a real speed.
     func dragForTesting(_ phase: RecordingHubView.DragPhase, to point: CGPoint, at time: CFTimeInterval) {
