@@ -349,6 +349,23 @@ struct RecordingSettingsView: View {
     @State private var recents: [RecordingItem] = []
     @State private var audioInputs: [AVCaptureDevice] = []
     @State private var cameraInputs: [AVCaptureDevice] = []
+
+    /// The selected camera's formats, reduced for the Format picker.
+    private var cameraFormats: [CameraFormatDescriptor] {
+        let device = settings.camera.deviceID.flatMap { id in cameraInputs.first { $0.uniqueID == id } }
+            ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
+            ?? AVCaptureDevice.default(for: .video)
+        return device?.formats.map(CameraFormatDescriptor.init) ?? []
+    }
+
+    private var manualFormats: [CameraFormatChoice] { CameraFormatSelection.manualOptions(cameraFormats) }
+
+    /// "Auto (1920×1080 @ 30)": what Auto means on this camera.
+    private var autoFormatLabel: String {
+        let auto = CameraFormatSelection.label(.auto)
+        guard let resolved = CameraFormatSelection.auto(cameraFormats) else { return auto }
+        return "\(auto) (\(resolved.label))"
+    }
     @ObservedObject private var cameraMonitor = CameraPreviewMonitor.shared
     @ObservedObject private var microphoneMonitor = MicrophoneMonitor.shared
 
@@ -544,6 +561,14 @@ struct RecordingSettingsView: View {
                         }
                     }
                     .disabled(cameraMonitor.recordingLocked)
+                    Picker("Format", selection: $settings.camera.format) {
+                        Text(verbatim: autoFormatLabel).tag(CameraFormatChoice.auto)
+                        ForEach(manualFormats, id: \.self) { choice in
+                            Text(verbatim: CameraFormatSelection.label(choice)).tag(choice)
+                        }
+                    }
+                    .disabled(cameraMonitor.recordingLocked)
+                    .help(Text("Auto picks the smallest 1080p-or-taller format at up to 60 fps."))
                     HStack {
                         Picker("Konum", selection: $settings.camera.corner) {
                             Text("Sol üst").tag(CameraCorner.topLeft)

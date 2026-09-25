@@ -137,6 +137,25 @@ struct LiveWindowRecordingTests {
         #expect(perFrame < 8, "\(perFrame) ms per 4K frame")
     }
 
+    /// The owner's own camera, through the real `CameraCapture`, on Auto.
+    @Test("the built-in camera starts on Auto and delivers frames of the format it reports")
+    func builtInCameraOnAuto() async throws {
+        let device = try #require(AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .unspecified))
+        let capture = CameraCapture()
+        try await capture.start(deviceID: device.uniqueID, format: .auto)
+        try await capture.waitForFirstFrame()
+        let active = try #require(capture.activeFormat)
+        let frame = try #require(capture.latestFrame())
+        let size = (CVPixelBufferGetWidth(frame), CVPixelBufferGetHeight(frame))
+        await capture.stop()
+        if let path = ProcessInfo.processInfo.environment["CAMCORD_LIVE_REPORT"] {
+            try "\(device.localizedName): \(active.label), frames \(size.0)x\(size.1)"
+                .write(to: URL(fileURLWithPath: path).appendingPathComponent("camera-auto.txt"), atomically: true, encoding: .utf8)
+        }
+        #expect(active.width >= active.height)
+        #expect(size.0 == active.width && size.1 == active.height)
+    }
+
     private func countFrames(asset: AVAsset, track: AVAssetTrack) throws -> Int {
         let reader = try AVAssetReader(asset: asset)
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)

@@ -178,7 +178,7 @@ final class CameraOverlayController: NSObject {
         restartTask = Task {
             await CameraPreviewMonitor.shared.start(
                 deviceID: options.deviceID,
-                fps: settings.fps,
+                format: options.format,
                 requestPermission: requestPermission
             )
         }
@@ -414,7 +414,9 @@ final class CameraOverlayController: NSObject {
 
     private func settingsChanged() {
         let updated = RecordingSettings.load(from: .standard).camera.resolved()
-        let deviceChanged = options.deviceID != updated.deviceID
+        // A new format restarts the preview just like a new camera: the running one would
+        // otherwise be refused at the recording handoff.
+        let deviceChanged = options.deviceID != updated.deviceID || options.format != updated.format
         let displayed = options
         options = updated
         if motion != nil || dragStart != nil {
@@ -430,7 +432,7 @@ final class CameraOverlayController: NSObject {
             restartTask = Task {
                 await CameraPreviewMonitor.shared.stop()
                 guard !Task.isCancelled else { return }
-                await CameraPreviewMonitor.shared.start(deviceID: updated.deviceID, fps: RecordingSettings.load(from: .standard).fps)
+                await CameraPreviewMonitor.shared.start(deviceID: updated.deviceID, format: updated.format)
             }
         }
     }

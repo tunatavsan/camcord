@@ -47,6 +47,18 @@ struct CameraOptions: Codable, Equatable, Sendable {
     var mirrored: Bool
     /// Unit coordinates in the available travel area, with the origin at bottom-left.
     var position: CameraPosition?
+    /// The owner's manual format per camera, keyed by `formatKey(deviceID)`; a camera with
+    /// no entry is on Auto.
+    var formats: [String: CameraFormatChoice] = [:]
+
+    /// The format choice for the selected camera.
+    var format: CameraFormatChoice {
+        get { formats[Self.formatKey(deviceID)] ?? .auto }
+        set { formats[Self.formatKey(deviceID)] = newValue == .auto ? nil : newValue }
+    }
+
+    /// The system default camera has no stored ID; it gets its own key.
+    static func formatKey(_ deviceID: String?) -> String { deviceID ?? "default" }
 
     init(
         enabled: Bool = false,
@@ -75,6 +87,14 @@ struct CameraOptions: Codable, Equatable, Sendable {
             ?? defaults.widthFraction
         mirrored = try container.decodeIfPresent(Bool.self, forKey: .mirrored) ?? defaults.mirrored
         position = try container.decodeIfPresent(CameraPosition.self, forKey: .position)
+        // Older settings have no formats; an entry this build cannot read is dropped alone.
+        formats = (try? container.decodeIfPresent([String: FailableChoice].self, forKey: .formats))?
+            .compactMapValues(\.choice) ?? [:]
+    }
+
+    private struct FailableChoice: Decodable {
+        let choice: CameraFormatChoice?
+        init(from decoder: Decoder) throws { choice = try? CameraFormatChoice(from: decoder) }
     }
 
     /// Sanitizes persisted/external values before they reach capture or layout math.

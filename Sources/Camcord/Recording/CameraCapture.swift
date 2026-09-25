@@ -56,7 +56,16 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         lossHandler.withLock { $0 = handler }
     }
 
-    func start(deviceID: String?, fps: Int) async throws {
+    /// The format the session runs, once started. Written on `sessionQueue`.
+    private let resolvedFormat = OSAllocatedUnfairLock<CameraFormatResolution?>(initialState: nil)
+    /// The choice this capture was started with, for the preview → recording handoff.
+    private let started = OSAllocatedUnfairLock<CameraFormatChoice?>(initialState: nil)
+
+    var activeFormat: CameraFormatResolution? { resolvedFormat.withLock { $0 } }
+    var startedChoice: CameraFormatChoice? { started.withLock { $0 } }
+
+    func start(deviceID: String?, format: CameraFormatChoice) async throws {
+        started.withLock { $0 = format }
         let generation = control.withLock { state -> UInt64 in
             state.generation &+= 1
             state.wantsRunning = true
@@ -67,7 +76,7 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
             try await withCheckedThrowingContinuation { continuation in
                 sessionQueue.async { [self] in
                     do {
-                        try startOnQueue(deviceID: deviceID, fps: fps, generation: generation)
+                        try startOnQueue(deviceID: deviceID, format: format, generation: generation)
                         continuation.resume()
                     } catch {
                         continuation.resume(throwing: error)
@@ -127,7 +136,7 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         return result
     }
 
-    private func startOnQueue(deviceID: String?, fps: Int, generation: UInt64) throws {
+    private func startOnQueue(deviceID: String?, format: CameraFormatChoice, generation: UInt64) throws {
         dispatchPrecondition(condition: .onQueue(sessionQueue))
         guard isCurrent(generation) else { throw CancellationError() }
         stopOnQueue()
@@ -157,8 +166,14 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         session.addInput(input)
         // Choose the format after attaching the input: adding it may select a
         // different default format on the device.
-        do { try Self.configure(device: device, requestedFPS: fps) }
-        catch { session.commitConfiguration(); throw error }
+        resolvedFormat.withLock { $0 = nil }
+        do {
+            let resolution = try Self.configure(device: device, choice: format)
+            resolvedFormat.withLock { $0 = resolution }
+        } catch {
+            session.commitConfiguration()
+            throw error
+        }
         session.addOutput(output)
         output.setSampleBufferDelegate(self, queue: sessionQueue)
         session.commitConfiguration()
@@ -264,42 +279,29 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         }
     }
 
-    private static func configure(device: AVCaptureDevice, requestedFPS: Int) throws {
-        let targetFPS = Double(min(max(requestedFPS, 1), 120))
-        guard let choice = device.formats.min(by: { lhs, rhs in
-            formatScore(lhs, targetFPS: targetFPS) < formatScore(rhs, targetFPS: targetFPS)
-        }) else { throw CameraCaptureError.cannotConfigure }
-
-        let ranges = choice.videoSupportedFrameRateRanges
-        guard let range = ranges.min(by: {
-            distance(from: targetFPS, to: $0) < distance(from: targetFPS, to: $1)
-        }) else { throw CameraCaptureError.cannotConfigure }
-        let actualFPS = min(max(targetFPS, range.minFrameRate), range.maxFrameRate)
+    /// Applies the owner's choice (Auto or a manual `W×H @ fps`) through the pure rules in
+    /// `CameraFormatSelection`, and returns what the device now runs.
+    private static func configure(device: AVCaptureDevice, choice: CameraFormatChoice) throws -> CameraFormatResolution {
+        let formats = device.formats
+        guard let resolution = CameraFormatSelection.resolve(choice, formats: formats.map(CameraFormatDescriptor.init)),
+              formats.indices.contains(resolution.index)
+        else { throw CameraCaptureError.cannotConfigure }
+        let format = formats[resolution.index]
+        // A rate a range reaches exactly; clamped in case the range is 29.97-style.
+        let range = format.videoSupportedFrameRateRanges.first {
+            resolution.fps >= $0.minFrameRate && resolution.fps <= $0.maxFrameRate
+        } ?? format.videoSupportedFrameRateRanges.max { $0.maxFrameRate < $1.maxFrameRate }
+        guard let range else { throw CameraCaptureError.cannotConfigure }
+        let actualFPS = min(max(resolution.fps, range.minFrameRate), range.maxFrameRate)
 
         try device.lockForConfiguration()
         defer { device.unlockForConfiguration() }
-        device.activeFormat = choice
+        device.activeFormat = format
         let duration = CMTimeMakeWithSeconds(1 / actualFPS, preferredTimescale: 60_000)
         device.activeVideoMinFrameDuration = duration
         device.activeVideoMaxFrameDuration = duration
-    }
-
-    private static func formatScore(_ format: AVCaptureDevice.Format, targetFPS: Double) -> Double {
-        let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
-        let supportsTarget = format.videoSupportedFrameRateRanges.contains {
-            targetFPS >= $0.minFrameRate && targetFPS <= $0.maxFrameRate
-        }
-        let widthDistance = abs(Double(dimensions.width) - 1920)
-        let heightDistance = abs(Double(dimensions.height) - 1080)
-        return (supportsTarget ? 0 : 10_000_000) + widthDistance + heightDistance * 1.5
-    }
-
-    private static func distance(
-        from fps: Double,
-        to range: AVFrameRateRange
-    ) -> Double {
-        if fps < range.minFrameRate { return range.minFrameRate - fps }
-        if fps > range.maxFrameRate { return fps - range.maxFrameRate }
-        return 0
+        var active = resolution
+        active.fps = actualFPS
+        return active
     }
 }

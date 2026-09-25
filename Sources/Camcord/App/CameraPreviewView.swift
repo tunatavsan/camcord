@@ -39,9 +39,10 @@ final class CameraPreviewMonitor: ObservableObject {
     private var visibleOwners = Set<String>()
     private var visible: Bool { !visibleOwners.isEmpty }
     private var ownedDeviceID: String?
+    private var ownedFormat: CameraFormatChoice?
     private var generation: UInt64 = 0
 
-    func start(deviceID: String?, fps: Int, requestPermission: Bool = false) async {
+    func start(deviceID: String?, format: CameraFormatChoice, requestPermission: Bool = false) async {
         guard !Task.isCancelled, !recordingLocked, !isStarting, ownedCapture == nil else { return }
         generation &+= 1
         let token = generation
@@ -76,8 +77,9 @@ final class CameraPreviewMonitor: ObservableObject {
         ownedCapture = capture
         ownedCaptureID = captureID
         ownedDeviceID = deviceID
+        ownedFormat = format
         do {
-            try await capture.start(deviceID: deviceID, fps: fps)
+            try await capture.start(deviceID: deviceID, format: format)
             try await capture.waitForFirstFrame()
             guard generation == token, !recordingLocked, ownedCapture === capture else {
                 if ownedCapture === capture {
@@ -120,8 +122,16 @@ final class CameraPreviewMonitor: ObservableObject {
         if let capture { await capture.stop() }
     }
 
+    /// Only a preview running the SAME camera in the SAME format becomes the recording's
+    /// camera; anything else is stopped and the recording opens its own.
+    nonisolated static func canHandOff(running: Bool, deviceID: String?, format: CameraFormatChoice?,
+                                       to options: CameraOptions) -> Bool {
+        let resolved = options.resolved()
+        return resolved.enabled && running && deviceID == resolved.deviceID && format == resolved.format
+    }
+
     func prepareForRecording(options: CameraOptions) async -> CameraCapture? {
-        let canTransfer = options.enabled && isRunning && ownedDeviceID == options.resolved().deviceID
+        let canTransfer = Self.canHandOff(running: isRunning, deviceID: ownedDeviceID, format: ownedFormat, to: options)
         recordingLocked = true
         generation &+= 1
         let capture = ownedCapture
@@ -353,7 +363,7 @@ struct CameraPreviewView: View {
                             } else {
                                 await monitor.start(
                                     deviceID: options.resolved().deviceID,
-                                    fps: 30,
+                                    format: options.resolved().format,
                                     requestPermission: true
                                 )
                             }

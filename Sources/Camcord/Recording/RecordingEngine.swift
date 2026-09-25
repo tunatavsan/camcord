@@ -123,16 +123,20 @@ final class RecordingEngine: NSObject {
             }
             cameraSource = source
             let options = settings.camera.resolved()
-            let fps = settings.fps
             do {
                 if preparedCamera == nil {
                     try await withHardTimeout(.seconds(5), onTimeout: CameraCaptureError.didNotStart) {
-                        try await source.start(deviceID: options.deviceID, fps: fps)
+                        try await source.start(deviceID: options.deviceID, format: options.format)
                         try await source.waitForFirstFrame()
                     }
                 }
                 guard !startCancelled else { throw CancellationError() }
                 CameraPreviewMonitor.shared.useRecordingSource(source)
+                // The diagnostics file is what the owner can read back after a recording.
+                let line = "camera format=\(source.activeFormat?.label ?? "unknown") "
+                    + "choice=\(CameraFormatSelection.label(options.format)) handoff=\(preparedCamera != nil)"
+                logger.notice("\(line, privacy: .public)")
+                DiagnosticsLog.append(line)
             } catch {
                 cameraSource = nil
                 cameraToken = nil
