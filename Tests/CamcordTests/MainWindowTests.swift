@@ -100,6 +100,30 @@ struct MainWindowTests {
         #expect(ModuleSelection.load(from: defaults) == .library)
     }
 
+    @Test("the window model persists its selection, refuses an unavailable module, and show(module:) moves it")
+    func modelSelection() throws {
+        _ = NSApplication.shared
+        let defaults = try freshDefaults()
+        let model = MainWindowModel(defaults: defaults)
+        #expect(model.selection == .library)
+        model.select(.settings)
+        #expect(model.selection == .settings)
+        #expect(ModuleSelection.load(from: defaults) == .settings)
+        let unavailable = ModuleRegistry.all.first { !$0.isAvailable }?.id
+        if let unavailable {
+            model.select(unavailable)
+            #expect(model.selection == .library)
+        }
+        let dock = DockController(defaults: defaults) { _ in }
+        let controller = MainWindowController(defaults: defaults, dock: dock) { $0.orderFront(nil) }
+        controller.show(module: .studio, activate: false)
+        #expect(controller.model.selection == .studio)
+        #expect(ModuleSelection.load(from: defaults) == .studio)
+        // Free the autosave name: only one live window may hold it, and the next test needs it.
+        controller.windowForTesting?.setFrameAutosaveName("")
+        controller.windowForTesting?.close()
+    }
+
     @Test("opening the window gives the Dock icon, closing it takes it away and keeps the window")
     func windowOpensAndCloses() throws {
         _ = NSApplication.shared

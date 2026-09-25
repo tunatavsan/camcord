@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var dockController: DockController?
     private var mainWindowController: MainWindowController?
     private let designLab = DesignLabWindowController()
+    private var liveCheck: LiveCheck?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Warm the feedback-sound cache so the first cue has zero setup latency.
@@ -180,6 +181,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         registerLoginItemOnFirstRun()
+        liveCheck = LiveCheck(defaults: .standard) { [weak self] command in self?.performLiveCheck(command) }
+    }
+
+    /// Focus-safe surfaces for the run's screenshots (LiveCheck); never activates the app.
+    private func performLiveCheck(_ command: LiveCheck.Command) {
+        switch command {
+        case .window(let module):
+            panelController?.close()
+            mainWindowController?.show(module: module, activate: false)
+        case .appearance(let name):
+            NSApp.appearance = name.flatMap(NSAppearance.init(named:))
+        case .contrast(let high):
+            ThemeColor.highContrastOverride = high
+            // Re-resolve every dynamic colour: an appearance round trip redraws all windows.
+            let appearance = NSApp.appearance
+            NSApp.appearance = NSAppearance(named: .aqua)
+            NSApp.appearance = appearance
+        case .lab(let page):
+            designLab.show(page: page, activate: false)
+        case .close:
+            mainWindowController?.close()
+            designLab.close()
+        }
     }
 
     /// The Dock icon, Finder and Spotlight open the main window — Camcord's home, and the way

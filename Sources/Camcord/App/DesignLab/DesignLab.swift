@@ -355,26 +355,74 @@ private struct HostView: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
+/// The Lab's pages: the RUN UI-2 token and component galleries, and the UI-1 direction spike.
+enum DesignLabPage: String, CaseIterable, Identifiable {
+    case tokens, components, directions
+    var id: String { rawValue }
+}
+
+@MainActor @Observable
+final class DesignLabState {
+    var page: DesignLabPage = .tokens
+}
+
+struct DesignLabRoot: View {
+    @Bindable var state: DesignLabState
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker(selection: $state.page) {
+                ForEach(DesignLabPage.allCases) { Text(verbatim: $0.rawValue.capitalized).tag($0) }
+            } label: {
+                Text(verbatim: "Page")
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .padding(.top, Theme.Space.xxl)
+            .padding(.bottom, Theme.Space.m)
+            switch state.page {
+            case .tokens: TokenGallery()
+            case .components: ComponentGallery()
+            case .directions: DesignLabView(directions: LabDirection.all)
+            }
+        }
+        .background(Theme.Palette.window.color)
+        .frame(minWidth: 1080, minHeight: 700)
+    }
+}
+
 /// The Design Lab's window. Hidden: reached from the status menu with ⌥ held.
 @MainActor
 final class DesignLabWindowController {
     private var window: NSWindow?
+    let state = DesignLabState()
 
-    func show() {
+    var windowForTesting: NSWindow? { window }
+
+    /// `activate: false` (LiveCheck) puts the window behind the owner's windows, without focus.
+    func show(page: DesignLabPage? = nil, activate: Bool = true) {
+        if let page { state.page = page }
         let window = window ?? {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 760),
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 820),
                                   styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
                                   backing: .buffered, defer: false)
             window.title = "Design Lab"
             window.titlebarAppearsTransparent = true
             window.isReleasedWhenClosed = false
-            window.contentViewController = NSHostingController(rootView: DesignLabView(directions: LabDirection.all))
+            window.contentViewController = NSHostingController(rootView: DesignLabRoot(state: state))
             window.center()
             window.setFrameAutosaveName("CamcordDesignLab")
             return window
         }()
         self.window = window
-        NSApp.activate()
-        window.makeKeyAndOrderFront(nil)
+        if activate {
+            NSApp.activate()
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            window.orderBack(nil)
+        }
     }
+
+    func close() { window?.close() }
 }

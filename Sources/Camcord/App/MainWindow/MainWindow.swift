@@ -1,22 +1,44 @@
 import AppKit
+import Observation
 import SwiftUI
+
+/// The window's module selection, owned by the controller so the menu (⌘, and ⌘1…⌘4) and the
+/// live check can move it from outside the view tree. Every change is persisted.
+@MainActor @Observable
+final class MainWindowModel {
+    @ObservationIgnored let defaults: UserDefaults
+    var selection: ModuleID {
+        didSet { if selection != oldValue { ModuleSelection.save(selection, to: defaults) } }
+    }
+
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
+        selection = ModuleSelection.load(from: defaults)
+    }
+
+    /// Selects `id`, or the first available module when `id` cannot be selected.
+    func select(_ id: ModuleID) { selection = ModuleRegistry.selectable(id) }
+}
 
 /// The main window: a sidebar of modules (the registry) and the selected module's view.
 /// Visual-neutral in this run — the system's own split view, sidebar and empty states.
 struct MainWindowView: View {
-    let defaults: UserDefaults
+    @Bindable var model: MainWindowModel
     let services: AppServices?
-    @State private var selection: ModuleID
 
-    init(defaults: UserDefaults, services: AppServices? = nil) {
-        self.defaults = defaults
+    init(model: MainWindowModel, services: AppServices? = nil) {
+        self.model = model
         self.services = services
-        _selection = State(initialValue: ModuleSelection.load(from: defaults))
+    }
+
+    /// A window of its own for offscreen renders and tests.
+    init(defaults: UserDefaults, services: AppServices? = nil) {
+        self.init(model: MainWindowModel(defaults: defaults), services: services)
     }
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $selection) {
+            List(selection: $model.selection) {
                 ForEach(ModuleRegistry.sections, id: \.self) { section in
                     Section {
                         ForEach(ModuleRegistry.modules(in: section), id: \.id) { module in
@@ -30,10 +52,9 @@ struct MainWindowView: View {
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 260)
         } detail: {
-            (ModuleRegistry.module(selection) ?? ModuleRegistry.all[0]).makeView()
-                .id(selection)
+            (ModuleRegistry.module(model.selection) ?? ModuleRegistry.all[0]).makeView()
+                .id(model.selection)
         }
-        .onChange(of: selection) { _, id in ModuleSelection.save(id, to: defaults) }
         .frame(minWidth: 760, minHeight: 520)
         .environment(\.appServices, services)
     }
@@ -66,6 +87,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     private let defaults: UserDefaults
     private let dock: DockController
     private let services: AppServices?
+    let model: MainWindowModel
     private let present: @MainActor (NSWindow) -> Void
     private var window: NSWindow?
 
@@ -74,6 +96,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         self.defaults = defaults
         self.dock = dock
         self.services = services
+        self.model = MainWindowModel(defaults: defaults)
         self.present = present ?? { window in
             NSApp.activate()
             window.makeKeyAndOrderFront(nil)
@@ -84,20 +107,26 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     var isOpen: Bool { window?.isVisible == true }
     var windowForTesting: NSWindow? { window }
 
-    func show() {
+    /// Opens the window, on `module` when one is given. `activate: false` (LiveCheck) neither
+    /// takes the owner's focus nor covers their work: the window goes behind their windows,
+    /// where a window-ID capture still sees all of it.
+    func show(module: ModuleID? = nil, activate: Bool = true) {
+        if let module { model.select(module) }
         let window = window ?? makeWindow()
         self.window = window
         if window.contentViewController == nil { installContent(in: window) }
         // The Dock icon first, so the window opens as a regular app's window, in front.
         dock.windowDidOpen()
-        present(window)
+        if activate { present(window) } else { window.orderBack(nil) }
     }
+
+    func close() { window?.close() }
 
     /// A fresh SwiftUI tree. Setting a content view controller resizes the window to the
     /// controller's view, so the frame the owner left is put back afterwards.
     private func installContent(in window: NSWindow) {
         let frame = window.frame
-        window.contentViewController = NSHostingController(rootView: MainWindowView(defaults: defaults, services: services))
+        window.contentViewController = NSHostingController(rootView: MainWindowView(model: model, services: services))
         window.setFrame(frame, display: false)
     }
 

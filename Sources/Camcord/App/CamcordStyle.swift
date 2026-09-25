@@ -1,26 +1,20 @@
 import AppKit
 import SwiftUI
 
+/// The pre-Graphite-II style names, now a thin alias layer onto `Theme` (docs/RUN-UI-2.md K3).
+/// Only surfaces that are not restyled yet read these; each restyle moves its surface to
+/// `Theme` directly, and the whole layer is deleted in P6.4.
 enum CamcordStyle {
-    static let accent = Color(red: 0.35, green: 0.43, blue: 0.86)
-    static let recording = Color(red: 0.94, green: 0.30, blue: 0.33)
+    static let accent = Theme.Palette.legacyAccent.color
+    static let recording = Theme.Palette.record.color
 
     static let innerBorder = Color.primary.opacity(0.09)
     static let quietFill = Color.primary.opacity(0.055)
 
-    /// ONE corner curve for the whole app. Every floating surface -- the capture panel, the
-    /// Settings boxes, the screenshot preview card, the camera tile, the recording frame --
-    /// draws `Radius.surface`; anything nested inside one derives its curve from the same
-    /// number with `Radius.inset(by:)` so the corners stay concentric instead of drifting
-    /// into a fourth and a fifth value. Nothing in the app should carry a bare literal.
     enum Radius {
-        /// The app's corner. Every surface that floats over something else uses exactly this.
-        static let surface: CGFloat = 18
-        /// A box drawn INSIDE a surface, `inset` points in from its edge: concentric corners
-        /// share a centre, so the inner curve is the outer one minus the gap between them.
-        static func inset(by inset: CGFloat) -> CGFloat { max(5, surface - inset) }
-        /// Controls that sit on their own (chips, pills, thumbnails, meters).
-        static let control: CGFloat = 10
+        static let surface: CGFloat = Theme.Radius.floating
+        static func inset(by inset: CGFloat) -> CGFloat { Theme.Radius.inset(surface, by: inset) }
+        static let control: CGFloat = Theme.Radius.well
     }
 }
 
