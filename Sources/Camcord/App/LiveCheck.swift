@@ -21,6 +21,9 @@ final class LiveCheck {
         case contrast(Bool?)
         /// Show the Design Lab on a page, without activating.
         case lab(DesignLabPage)
+        /// Show the first-run window, as if Screen Recording were not yet allowed (`ask`), allowed
+        /// (`granted`), or as it really is (nil).
+        case firstRun(simulatedGrant: Bool?)
         /// Close what the live check opened.
         case close
 
@@ -47,6 +50,13 @@ final class LiveCheck {
                 }
             case "lab":
                 return DesignLabPage(rawValue: argument ?? "tokens").map(Command.lab)
+            case "firstrun":
+                switch argument {
+                case "ask": return .firstRun(simulatedGrant: false)
+                case "granted": return .firstRun(simulatedGrant: true)
+                case nil: return .firstRun(simulatedGrant: nil)
+                default: return nil
+                }
             case "close":
                 return .close
             default:

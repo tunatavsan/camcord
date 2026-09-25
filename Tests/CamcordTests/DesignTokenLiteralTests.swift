@@ -15,6 +15,7 @@ struct DesignTokenLiteralTests {
         "Sources/Camcord/App/DesignLab/TokenGallery.swift",
         "Sources/Camcord/App/DesignLab/ComponentGallery.swift",
         "Sources/Camcord/App/MainWindow",
+        "Sources/Camcord/App/FirstRun",
     ]
     /// Where the literals are defined.
     static let definitions: Set<String> = [

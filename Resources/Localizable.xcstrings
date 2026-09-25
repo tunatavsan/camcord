@@ -19,6 +19,60 @@
         }
       }
     },
+    "Accessibility": {
+      "comment": "Permission name",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accessibility"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erişilebilirlik"
+          }
+        }
+      }
+    },
+    "Allowed": {
+      "comment": "A permission that is granted",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allowed"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İzin verildi"
+          }
+        }
+      }
+    },
+    "Allow…": {
+      "comment": "Button: grant a permission",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İzin ver…"
+          }
+        }
+      }
+    },
     "Always": {
       "comment": "Dock icon setting",
       "extractionState": "manual",
@@ -87,6 +141,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Otomatik: en az 1080p olan en küçük biçimi, en fazla 60 fps ile seçer."
+          }
+        }
+      }
+    },
+    "Camcord captures your screen": {
+      "comment": "First-run title",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camcord captures your screen"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camcord ekranını çeker"
           }
         }
       }
@@ -307,6 +379,60 @@
         }
       }
     },
+    "For mouse buttons and auto-scroll": {
+      "comment": "Why Accessibility is needed",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "For mouse buttons and auto-scroll"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fare tuşları ve otomatik kaydırma için"
+          }
+        }
+      }
+    },
+    "For the camera tile": {
+      "comment": "Why the camera is needed",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "For the camera tile"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera karesi için"
+          }
+        }
+      }
+    },
+    "For your voice in recordings": {
+      "comment": "Why the microphone is needed",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "For your voice in recordings"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıtlarda sesin için"
+          }
+        }
+      }
+    },
     "Format": {
       "comment": "Camera setting: capture format",
       "extractionState": "manual",
@@ -415,6 +541,24 @@
         }
       }
     },
+    "Microphone": {
+      "comment": "Permission name",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon"
+          }
+        }
+      }
+    },
     "Minimize": {
       "comment": "Window menu",
       "extractionState": "manual",
@@ -447,6 +591,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Modüller"
+          }
+        }
+      }
+    },
+    "Needed for every capture": {
+      "comment": "Why Screen Recording is needed",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Needed for every capture"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Her çekim için gerekli"
           }
         }
       }
@@ -519,6 +681,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kapalı"
+          }
+        }
+      }
+    },
+    "One permission and you're ready. The rest are asked for when you first use them.": {
+      "comment": "First-run subtitle",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "One permission and you're ready. The rest are asked for when you first use them."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tek bir izin yeter. Diğerleri, onları ilk kullandığında sorulur."
           }
         }
       }
@@ -645,6 +825,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ekran"
+          }
+        }
+      }
+    },
+    "Screen Recording": {
+      "comment": "Permission name",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screen Recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekran Kaydı"
           }
         }
       }
@@ -897,6 +1095,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Görüntü"
+          }
+        }
+      }
+    },
+    "Welcome to Camcord": {
+      "comment": "First-run window title",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Welcome to Camcord"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camcord'a hoş geldin"
+          }
+        }
+      }
+    },
+    "When you turn it on": {
+      "comment": "A permission asked for later, when its feature is first used",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "When you turn it on"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Açtığında sorulur"
           }
         }
       }

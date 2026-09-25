@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindowController: MainWindowController?
     private let designLab = DesignLabWindowController()
     private var liveCheck: LiveCheck?
+    private var firstRun: FirstRunWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Warm the feedback-sound cache so the first cue has zero setup latency.
@@ -185,6 +186,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         registerLoginItemOnFirstRun()
         liveCheck = LiveCheck(defaults: .standard) { [weak self] command in self?.performLiveCheck(command) }
+
+        // The first run: Screen Recording is the one gate; the primary action is a region capture.
+        let firstRun = FirstRunWindowController { [weak coordinator] in
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(200))   // the window leaves the screen first
+                await coordinator?.captureRegionInteractive()
+            }
+        }
+        self.firstRun = firstRun
+        firstRun.showIfNeeded()
     }
 
     /// Focus-safe surfaces for the run's screenshots (LiveCheck); never activates the app.
@@ -203,9 +214,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.appearance = appearance
         case .lab(let page):
             designLab.show(page: page, activate: false)
+        case .firstRun(let simulatedGrant):
+            firstRun?.permission.simulated = simulatedGrant
+            firstRun?.show(activate: false)
         case .close:
             mainWindowController?.close()
             designLab.close()
+            firstRun?.permission.simulated = nil
+            firstRun?.close()
         }
     }
 
