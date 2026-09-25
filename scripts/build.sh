@@ -12,13 +12,18 @@ build_number="$(git rev-list --count HEAD)"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build_number" dist/Camcord.app/Contents/Info.plist
 cp Resources/AppIcon.icns dist/Camcord.app/Contents/Resources/AppIcon.icns
 
-# SPM resource bundles (e.g. KeyboardShortcuts' localized strings) are built next to
-# the executable, NOT into it. Bundle.module finds them in Contents/Resources — without
-# this copy the app hard-crashes (assertionFailure) the instant a view backed by those
-# resources appears (the shortcut recorders in Settings › Fare ve Kısayollar).
-for bundle in .build/release/*.bundle; do
-    [ -e "$bundle" ] && cp -R "$bundle" dist/Camcord.app/Contents/Resources/
-done
+# No SwiftPM resource bundles: SwiftPM's Bundle.module looks at the .app ROOT and then
+# at the absolute .build path of the machine that built it, never in Contents/Resources,
+# so a release crashed wherever that path did not exist. The vendored KeyboardShortcuts
+# (Packages/KeyboardShortcuts/VENDORED.md) excludes its strings from the target; they are
+# copied here and read from Bundle.main.resourceURL.
+if compgen -G ".build/release/*.bundle" >/dev/null; then
+    echo "SwiftPM resource bundle found in .build/release; Bundle.module is not allowed (docs/RUN-UI-1.md K2)." >&2
+    exit 1
+fi
+mkdir -p dist/Camcord.app/Contents/Resources/KeyboardShortcuts.bundle
+cp -R Packages/KeyboardShortcuts/Sources/KeyboardShortcuts/Localization/*.lproj \
+    dist/Camcord.app/Contents/Resources/KeyboardShortcuts.bundle/
 printf 'APPL????' > dist/Camcord.app/Contents/PkgInfo
 
 IDENTITY="${CAMCORD_SIGN_IDENTITY:-Apple Development}"

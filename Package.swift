@@ -3,9 +3,9 @@ import PackageDescription
 
 let package = Package(
     name: "camcord",
-    platforms: [.macOS("15.2")],
+    platforms: [.macOS(.v26)],
     dependencies: [
-        .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", from: "3.0.0")
+        .package(path: "Packages/KeyboardShortcuts")
     ],
     targets: [
         .executableTarget(

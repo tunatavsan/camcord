@@ -1,7 +1,7 @@
 # Camcord
 
 Camcord, menü çubuğunda yaşayan native bir macOS ekran görüntüsü ve ekran kaydı
-uygulamasıdır. Swift 6 ile yazılmıştır ve macOS 15.2 veya yenisini gerektirir.
+uygulamasıdır. Swift 6 ile yazılmıştır ve macOS 26 veya yenisini gerektirir.
 
 ## Özellikler
 
