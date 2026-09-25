@@ -21,6 +21,9 @@ if compgen -G ".build/release/*.bundle" >/dev/null; then
     echo "SwiftPM resource bundle found in .build/release; Bundle.module is not allowed (docs/RUN-UI-1.md K2)." >&2
     exit 1
 fi
+# The app's own strings (docs/RUN-UI-1.md K2): one catalog, compiled into
+# Contents/Resources/{en,tr}.lproj and read through Bundle.main — never Bundle.module.
+xcrun xcstringstool compile Resources/Localizable.xcstrings --output-directory dist/Camcord.app/Contents/Resources
 mkdir -p dist/Camcord.app/Contents/Resources/KeyboardShortcuts.bundle
 cp -R Packages/KeyboardShortcuts/Sources/KeyboardShortcuts/Localization/*.lproj \
     dist/Camcord.app/Contents/Resources/KeyboardShortcuts.bundle/

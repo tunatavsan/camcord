@@ -6,6 +6,8 @@
 	<string>dev.tavsan.camcord</string>
 	<key>CFBundleName</key>
 	<string>Camcord</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
 	<key>CFBundleDisplayName</key>
 	<string>Camcord</string>
 	<key>CFBundleExecutable</key>
