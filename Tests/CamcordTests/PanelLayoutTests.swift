@@ -67,6 +67,53 @@ struct PanelLayoutTests {
                                options: options, frameSize: .zero, thumbnail: thumbnail).movesCamera)
     }
 
+    @Test("stage grips: a press on a grip resizes, in the body moves, outside does nothing")
+    func stageGripHitTest() {
+        let frameSize = CGSize(width: 1600, height: 1000)
+        let thumbnail = CGRect(x: 0, y: 0, width: 1600, height: 1000)   // 1:1, so points are easy
+        var options = CameraOptions(enabled: true, corner: .bottomRight, widthFraction: 0.125)
+        options.position = CameraPosition(x: 0.5, y: 0.5)
+        let rect = StageView.cameraRect(options: options, frameSize: frameSize, thumbnail: thumbnail)
+        #expect(abs(rect.width - 200) < 0.01 && abs(rect.height - 112.5) < 0.01)
+        func hit(_ x: CGFloat, _ y: CGFloat) -> StageHit {
+            StageView.hit(at: CGPoint(x: x, y: y), options: options, frameSize: frameSize, thumbnail: thumbnail)
+        }
+
+        // On a grip, just inside each corner: resize that corner (thumbnail space is y-down).
+        #expect(hit(rect.minX + 4, rect.minY + 4) == StageHit(corner: .topLeft, movesCamera: true))
+        #expect(hit(rect.maxX - 4, rect.minY + 4) == StageHit(corner: .topRight, movesCamera: true))
+        #expect(hit(rect.minX + 4, rect.maxY - 4) == StageHit(corner: .bottomLeft, movesCamera: true))
+        #expect(hit(rect.maxX - 4, rect.maxY - 4) == StageHit(corner: .bottomRight, movesCamera: true))
+        // The zone is 22% of each side: 44 × 24.75 here. 30 pt down from a corner is body — the
+        // old 44 pt square zones made it a resize.
+        #expect(hit(rect.minX + 30, rect.minY + 30) == StageHit(corner: nil, movesCamera: true))
+        #expect(hit(rect.midX, rect.midY) == StageHit(corner: nil, movesCamera: true))
+        // Outside the rectangle — even right next to a corner — nothing.
+        #expect(hit(rect.maxX + 2, rect.maxY + 2) == StageHit(corner: nil, movesCamera: false))
+        #expect(hit(rect.minX - 1, rect.midY) == StageHit(corner: nil, movesCamera: false))
+    }
+
+    @Test("stage corner zones are max(12 pt, 22% of the side), never more than half of it")
+    func stageGripZones() {
+        let small = CGRect(x: 0, y: 0, width: 54, height: 31)
+        #expect(StageGrip.zone(.topLeft, in: small).size == CGSize(width: 12, height: 12))
+        let large = CGRect(x: 0, y: 0, width: 200, height: 112.5)
+        #expect(StageGrip.zone(.bottomRight, in: large) == CGRect(x: 156, y: 0, width: 44, height: 24.75))
+        let tiny = CGRect(x: 0, y: 0, width: 20, height: 10)
+        #expect(StageGrip.zone(.topRight, in: tiny).size == CGSize(width: 10, height: 5))
+        // y-down puts the top zones at the small y.
+        #expect(StageGrip.zone(.topLeft, in: large, yDown: true).minY == 0)
+        #expect(StageGrip.zone(.topLeft, in: large, yDown: false).maxY == large.maxY)
+        // The grips sit inside the rectangle.
+        for corner in CameraCorner.allCases {
+            #expect(large.contains(StageGrip.arc(corner, in: large).boundingRect))
+        }
+        // Cursor: open hand on the body, a resize arrow on a grip, nothing outside.
+        #expect(StageGrip.cursor(for: StageHit(corner: nil, movesCamera: true)) == .move)
+        #expect(StageGrip.cursor(for: StageHit(corner: .topLeft, movesCamera: true)) == .resize(.topLeft))
+        #expect(StageGrip.cursor(for: StageHit(corner: nil, movesCamera: false)) == nil)
+    }
+
     @Test("the stage renders at twice its canvas points, so a Retina panel is not upscaled")
     func stageRenderWidth() {
         // The rule the sink actually applies — reverting it to the old fixed 360 fails here.

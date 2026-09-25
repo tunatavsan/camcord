@@ -30,6 +30,80 @@ struct StageHit: Equatable, Sendable {
     let movesCamera: Bool
 }
 
+/// The stage's camera rectangle is ~54×31 pt: the floating tile's 44 pt corner zones would
+/// cover almost all of it. Here the whole body moves and only small corner zones resize —
+/// `max(12 pt, 22% of the side)` on each axis, never more than half of it — and the grips
+/// that mark them are drawn INSIDE the rectangle, where a press actually lands.
+enum StageGrip {
+    static let minimumZone: CGFloat = 12
+    static let zoneFraction: CGFloat = 0.22
+    /// Radius of the corner curve the grip arcs follow, and their gap inside it.
+    static let arcRadius: CGFloat = 5
+    static let arcGap: CGFloat = 1.5
+    static let strokeWidth: CGFloat = 1
+
+    /// A corner's resize zone, inside `rect` (any y direction: the zones are symmetric).
+    static func zone(_ corner: CameraCorner, in rect: CGRect, yDown: Bool = false) -> CGRect {
+        let width = min(max(minimumZone, rect.width * zoneFraction), rect.width / 2)
+        let height = min(max(minimumZone, rect.height * zoneFraction), rect.height / 2)
+        let right = corner == .topRight || corner == .bottomRight
+        let top = corner == .topLeft || corner == .topRight
+        let atMaxY = yDown ? !top : top
+        return CGRect(x: right ? rect.maxX - width : rect.minX,
+                      y: atMaxY ? rect.maxY - height : rect.minY, width: width, height: height)
+    }
+
+    /// The zones lie inside `rect`, so a point outside it is never on a grip.
+    static func corner(at point: CGPoint, in rect: CGRect, yDown: Bool = false) -> CameraCorner? {
+        CameraCorner.allCases.first { zone($0, in: rect, yDown: yDown).contains(point) }
+    }
+
+    /// A quarter arc just inside `corner`, concentric with the rectangle's own corner curve
+    /// (y-down, the SwiftUI canvas).
+    static func arc(_ corner: CameraCorner, in rect: CGRect) -> Path {
+        let radius = max(arcRadius, CameraOptions.cornerRadius(for: rect.size))
+        let right = corner == .topRight || corner == .bottomRight
+        let top = corner == .topLeft || corner == .topRight
+        let center = CGPoint(x: right ? rect.maxX - radius : rect.minX + radius,
+                             y: top ? rect.minY + radius : rect.maxY - radius)
+        let start: Double
+        switch corner {
+        case .topLeft: start = 180
+        case .topRight: start = 270
+        case .bottomRight: start = 0
+        case .bottomLeft: start = 90
+        }
+        var path = Path()
+        path.addArc(center: center, radius: radius - arcGap, startAngle: .degrees(start),
+                    endAngle: .degrees(start + 90), clockwise: false)
+        return path
+    }
+
+    /// The pointer a hover shows: open hand over the body, a resize arrow on a grip.
+    static func cursor(for hit: StageHit) -> StageCursor? {
+        guard hit.movesCamera else { return nil }
+        return hit.corner.map(StageCursor.resize) ?? .move
+    }
+}
+
+enum StageCursor: Equatable {
+    case move
+    case resize(CameraCorner)
+
+    var style: PointerStyle {
+        switch self {
+        case .move: return .grabIdle
+        case .resize(let corner):
+            switch corner {
+            case .topLeft: return .frameResize(position: .topLeading)
+            case .topRight: return .frameResize(position: .topTrailing)
+            case .bottomLeft: return .frameResize(position: .bottomLeading)
+            case .bottomRight: return .frameResize(position: .bottomTrailing)
+            }
+        }
+    }
+}
+
 /// One still frame of the armed window, with the size the recording will composite
 /// into — enough for the panel to draw the camera rectangle before a recording exists.
 struct ArmedStageFrame: Sendable {
@@ -653,6 +727,7 @@ struct StageView: View {
     @State private var generation: UInt64 = 0
     @State private var canvasWidth: CGFloat = 0
     @State private var drag: Drag?
+    @State private var pointer: PointerStyle?
     @Environment(\.camcordDesignPreview) private var designPreview
 
     private var isLive: Bool { !isArmed && state != .idle }
@@ -730,6 +805,17 @@ struct StageView: View {
                 // The canvas — which never moves — owns the gesture and the hit area.
                 .contentShape(Rectangle())
                 .gesture(stageDrag(thumbnail: thumbnail))
+                .onContinuousHover(coordinateSpace: .named(Self.space)) { phase in
+                    guard drag == nil else { return }
+                    switch phase {
+                    case .active(let location):
+                        pointer = StageGrip.cursor(for: Self.hit(at: location, options: options,
+                                                                 frameSize: frameSize, thumbnail: thumbnail))?.style
+                    case .ended:
+                        pointer = nil
+                    }
+                }
+                .pointerStyle(drag.map { $0.corner == nil && $0.movesCamera ? .grabActive : pointer } ?? pointer)
                 .clipShape(RoundedRectangle(cornerRadius: CamcordStyle.Radius.control, style: .continuous))
                 .onAppear { canvasWidth = geometry.size.width }
                 .onChange(of: geometry.size.width) { _, width in canvasWidth = width }
@@ -760,16 +846,14 @@ struct StageView: View {
     private func cameraOverlay(in thumbnail: CGRect) -> some View {
         let rect = options.enabled ? Self.cameraRect(options: options, frameSize: frameSize, thumbnail: thumbnail) : .zero
         if !rect.isEmpty {
+            let local = CGRect(origin: .zero, size: rect.size)
             ZStack {
                 RoundedRectangle(cornerRadius: max(3, CameraOptions.cornerRadius(for: rect.size)))
-                    .stroke(Color.accentColor, lineWidth: 2)
+                    .inset(by: StageGrip.strokeWidth / 2)
+                    .stroke(CamcordStyle.accent, lineWidth: StageGrip.strokeWidth)
                 ForEach(CameraCorner.allCases.indices, id: \.self) { index in
-                    let corner = CameraCorner.allCases[index]
-                    Circle()
-                        .fill(Color(nsColor: .windowBackgroundColor))
-                        .overlay(Circle().stroke(Color.accentColor, lineWidth: 2))
-                        .frame(width: 9, height: 9)
-                        .position(Self.handlePoint(corner, in: CGRect(origin: .zero, size: rect.size)))
+                    StageGrip.arc(CameraCorner.allCases[index], in: local.insetBy(dx: 2, dy: 2))
+                        .stroke(CamcordStyle.accent, style: StrokeStyle(lineWidth: StageGrip.strokeWidth, lineCap: .round))
                 }
             }
             .frame(width: rect.width, height: rect.height)
@@ -823,8 +907,8 @@ struct StageView: View {
             x: start.x - thumbnail.minX,
             y: thumbnail.height - (start.y - thumbnail.minY)
         )
-        let corner = CameraResizeGeometry.corner(at: point, in: scaled)
-        return StageHit(corner: corner, movesCamera: corner != nil || scaled.contains(point))
+        let corner = StageGrip.corner(at: point, in: scaled)
+        return StageHit(corner: corner, movesCamera: scaled.contains(point))
     }
 
     private func updatePlacement(_ start: Drag, translation: CGSize, thumbnail: CGRect, persists: Bool) {
@@ -963,12 +1047,6 @@ struct StageView: View {
         let scale = thumbnail.width / frameSize.width
         return CGRect(x: rect.minX * scale, y: rect.minY * scale,
                       width: rect.width * scale, height: rect.height * scale)
-    }
-
-    private static func handlePoint(_ corner: CameraCorner, in rect: CGRect) -> CGPoint {
-        let right = corner == .topRight || corner == .bottomRight
-        let top = corner == .topLeft || corner == .topRight
-        return CGPoint(x: right ? rect.maxX : rect.minX, y: top ? rect.minY : rect.maxY)
     }
 }
 
