@@ -11,6 +11,9 @@ final class MainWindowModel {
         didSet { if selection != oldValue { ModuleSelection.save(selection, to: defaults) } }
     }
 
+    /// The sidebar is shown (the toolbar button and ⌃⌘S hide it).
+    var sidebarVisible = true
+
     init(defaults: UserDefaults) {
         self.defaults = defaults
         selection = ModuleSelection.load(from: defaults)
@@ -20,9 +23,9 @@ final class MainWindowModel {
     func select(_ id: ModuleID) { selection = ModuleRegistry.selectable(id) }
 }
 
-/// The main window (docs/design/native/SPEC.md S1): the system's split view with its glass
-/// sidebar of modules, the selected module's page, and the capture keys and Record in the
-/// window's own toolbar. Native first (SPEC N1): nothing here draws its own chrome.
+/// The main window (docs/design/native/SPEC.md S1, the owner's reference): a whole-height,
+/// lighter frosted sidebar of modules beside a lightly frosted content area, both behind-window
+/// system materials so the desktop is faintly there (KARAR-2, NOTE-2); Record in the toolbar.
 struct MainWindowView: View {
     @Bindable var model: MainWindowModel
     let services: AppServices?
@@ -41,10 +44,13 @@ struct MainWindowView: View {
     private var module: any CamcordModule { ModuleRegistry.module(model.selection) ?? ModuleRegistry.all[0] }
 
     var body: some View {
-        NavigationSplitView {
-            MainWindowSidebar(selection: $model.selection)
-                .navigationSplitViewColumnWidth(min: 200, ideal: 228, max: 280)
-        } detail: {
+        HStack(spacing: 0) {
+            if model.sidebarVisible {
+                MainWindowSidebar(selection: $model.selection)
+                    .frame(width: MainWindowLayout.sidebarWidth)
+                    .windowBackdrop(.sidebar)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            }
             ZStack {
                 module.makeView()
                     .id(model.selection)
@@ -52,39 +58,44 @@ struct MainWindowView: View {
             }
             .animation(Theme.Motion.resolve(Theme.Motion.moduleSwitch, reduceMotion: reduceMotion), value: model.selection)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Theme.Palette.window.color)
-            .navigationTitle(Text(module.title))
-            .toolbar { CaptureToolbar(services: services) }
+            .windowBackdrop(.content)
         }
+        .animation(Theme.Motion.resolve(Theme.Motion.panel, reduceMotion: reduceMotion), value: model.sidebarVisible)
+        .navigationTitle(Text(module.title))
+        .toolbar { MainWindowToolbar(model: model, services: services) }
         .frame(minWidth: 880, minHeight: 560)
         .tint(Theme.Palette.ink.color)
         .environment(\.appServices, services)
     }
 }
 
-/// The sidebar: the mark, then the modules by section, each with its ⌘ key (K1). The system
-/// draws the glass and the selection; the rows are plain labels.
+enum MainWindowLayout {
+    static let sidebarWidth: CGFloat = 240
+}
+
+/// The sidebar: the mark, then the modules by section, each with its ⌘ key (K1), on its own
+/// frosted backdrop. The rows draw the ink selection capsule (KARAR-1), never the user's accent.
 private struct MainWindowSidebar: View {
     @Binding var selection: ModuleID
 
+    private var order: [ModuleID] { ModuleRegistry.all.filter(\.isAvailable).map(\.id) }
+
     var body: some View {
-        List(selection: $selection) {
+        InkNavigationList(selection: $selection, order: order) { focus in
             ForEach(ModuleRegistry.sections, id: \.self) { section in
-                Section {
-                    ForEach(ModuleRegistry.modules(in: section), id: \.id) { module in
+                if let title = section.title { InkNavigationHeader(title: title) }
+                ForEach(ModuleRegistry.modules(in: section), id: \.id) { module in
+                    InkNavigationRow(id: module.id, selection: $selection, focus: focus) {
                         SidebarRow(title: module.title, symbol: module.symbol,
                                    tag: (module as? any ModuleBadging)?.badge,
                                    key: ModuleShortcut.label(for: module.id))
-                            .tag(module.id)
-                            .selectionDisabled(!module.isAvailable)
                     }
-                } header: {
-                    if let title = section.title { Text(title) }
+                    .disabled(!module.isAvailable)
                 }
             }
         }
-        .listStyle(.sidebar)
         .safeAreaInset(edge: .top, spacing: 0) { SidebarHeader() }
+        .accessibilityLabel(Text("Modules", comment: "Accessibility: the main window's sidebar"))
     }
 }
 
@@ -129,36 +140,29 @@ enum ModuleShortcut {
     }
 }
 
-/// The window's capture entry (K1): the five capture keys as one toolbar group, then Record on
-/// its own. System toolbar items; the system draws their glass (K2.1).
-private struct CaptureToolbar: ToolbarContent {
+/// The window's toolbar: the sidebar button by the window controls, Record trailing. The five
+/// capture keys are not here (KARAR-2): capturing is one hotkey or one panel key away, and each
+/// module adds its own actions.
+private struct MainWindowToolbar: ToolbarContent {
+    @Bindable var model: MainWindowModel
     let services: AppServices?
 
     var body: some ToolbarContent {
-        // Trailing, as in Apple's own windows: the actions sit at the far end of the toolbar.
-        ToolbarItemGroup(placement: .automatic) {
-            ForEach(CaptureKind.allCases) { kind in
-                Button {
-                    services?.capture(kind)
-                } label: {
-                    Label { Text(kind.title) } icon: { Image(systemName: kind.symbol) }
+        ToolbarItem(placement: .navigation) {
+            Button {
+                model.sidebarVisible.toggle()
+            } label: {
+                Label { Text("Toggle Sidebar", comment: "Shows or hides the main window's sidebar") } icon: {
+                    Image(systemName: "sidebar.left")
                 }
-                .help(CaptureToolbar.help(for: kind))
-                .accessibilityLabel(Text(kind.actionTitle))
             }
+            .help(Text("Toggle Sidebar", comment: "Shows or hides the main window's sidebar"))
         }
-        ToolbarSpacer(.fixed, placement: .automatic)
+        ToolbarSpacer(.flexible)
         ToolbarItem(placement: .automatic) {
             ToolbarRecordButton(services: services)
                 .labelStyle(.titleAndIcon)
         }
-    }
-
-    /// "Region  ⇧⌘2": the name and, when one is set, the hotkey.
-    @MainActor static func help(for kind: CaptureKind) -> String {
-        let name = String(localized: kind.title)
-        guard let shortcut = kind.shortcut else { return name }
-        return "\(name)  \(shortcut.description)"
     }
 }
 
@@ -265,7 +269,12 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         )
         window.title = "Camcord"
         window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
         window.toolbarStyle = .unified
+        // Behind-window transparency (K1): the window itself is clear, so the system sidebar's
+        // Liquid Glass shows the desktop through; the content paints its own opaque ground.
+        window.isOpaque = false
+        window.backgroundColor = .clear
         window.isReleasedWhenClosed = false
         window.delegate = self
         installContent(in: window)

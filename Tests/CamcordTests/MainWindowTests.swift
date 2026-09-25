@@ -94,10 +94,15 @@ struct MainWindowTests {
         #expect(ModuleRegistry.all.map { ModuleShortcut.label(for: $0.id) } == ["⌘1", "⌘2", "⌘3", "⌘4"])
         final class Target: NSObject { @objc func go(_ sender: Any?) {} }
         let target = Target()
-        let menu = try #require(AppMenus.viewMenuItem(target: target, action: #selector(Target.go(_:))).submenu)
-        #expect(menu.items.map(\.keyEquivalent) == ["1", "2", "3", "4"])
-        #expect(menu.items.compactMap { $0.representedObject as? String } == ["library", "studio", "edit", "settings"])
-        #expect(menu.items.allSatisfy { $0.target === target && $0.keyEquivalentModifierMask == .command })
+        let menu = try #require(AppMenus.viewMenuItem(target: target, action: #selector(Target.go(_:)),
+                                                      toggleSidebar: #selector(Target.go(_:))).submenu)
+        let modules = menu.items.filter { $0.representedObject != nil }
+        #expect(modules.map(\.keyEquivalent) == ["1", "2", "3", "4"])
+        #expect(modules.compactMap { $0.representedObject as? String } == ["library", "studio", "edit", "settings"])
+        #expect(modules.allSatisfy { $0.target === target && $0.keyEquivalentModifierMask == .command })
+        // Show or hide the sidebar: ⌃⌘S, as in Apple's apps.
+        let sidebar = try #require(menu.items.last)
+        #expect(sidebar.keyEquivalent == "s" && sidebar.keyEquivalentModifierMask == [.command, .control])
     }
 
     @Test("a capture from the window steps the window out of the way, then brings it back")

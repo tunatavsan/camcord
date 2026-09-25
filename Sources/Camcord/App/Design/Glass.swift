@@ -84,3 +84,85 @@ extension NSGlassEffectView {
         if style == .hud { appearance = NSAppearance(named: .darkAqua) }
     }
 }
+
+// MARK: - Window backdrops (KARAR-2 §3, NOTE-2)
+
+/// The main window's frosted backdrops: a behind-window system material (the desktop faintly
+/// visible through it) under a token tint that sets how much frost there is. Not glass on
+/// content: thumbnails, previews, video and form cards stay opaque on top of it. Each backdrop is
+/// ONE token, so "more or less frost" is a one-line change.
+enum WindowBackdrop: CaseIterable, Sendable {
+    /// The whole-height sidebar, lighter (the owner's reference: a lighter frosted pane).
+    case sidebar
+    /// The content area behind pages: lightly frosted graphite.
+    case content
+
+    var material: NSVisualEffectView.Material {
+        switch self {
+        case .sidebar: .sidebar
+        case .content: .underWindowBackground
+        }
+    }
+
+    /// The tint over the material. Its alpha is the frost dial.
+    var tint: ThemeColor {
+        switch self {
+        case .sidebar: Theme.Palette.backdropSidebar
+        case .content: Theme.Palette.backdropContent
+        }
+    }
+
+    /// Reduce Transparency: the opaque window colours.
+    var solid: ThemeColor {
+        switch self {
+        case .sidebar: Theme.Palette.glassSolidSidebar
+        case .content: Theme.Palette.window
+        }
+    }
+}
+
+private struct WindowBackdropView: NSViewRepresentable {
+    let backdrop: WindowBackdrop
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.blendingMode = .behindWindow
+        // Active even while the window is not key: the frost must not flatten to grey.
+        view.state = .active
+        view.material = backdrop.material
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {
+        view.material = backdrop.material
+    }
+}
+
+private struct WindowBackdropModifier: ViewModifier {
+    let backdrop: WindowBackdrop
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    func body(content: Content) -> some View {
+        content.background {
+            Group {
+                if reduceTransparency {
+                    backdrop.solid.color
+                } else {
+                    ZStack {
+                        WindowBackdropView(backdrop: backdrop)
+                        backdrop.tint.color
+                    }
+                }
+            }
+            // Under the transparent titlebar and toolbar too: the backdrop is the window's.
+            .ignoresSafeArea()
+        }
+    }
+}
+
+extension View {
+    /// Paints a frosted window backdrop behind this view (see `WindowBackdrop`).
+    func windowBackdrop(_ backdrop: WindowBackdrop) -> some View {
+        modifier(WindowBackdropModifier(backdrop: backdrop))
+    }
+}

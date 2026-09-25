@@ -433,6 +433,24 @@
         }
       }
     },
+    "Modules": {
+      "comment": "Accessibility: the main window's sidebar",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modules"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modüller"
+          }
+        }
+      }
+    },
     "Never": {
       "comment": "Dock icon setting",
       "extractionState": "manual",
@@ -825,6 +843,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Metin"
+          }
+        }
+      }
+    },
+    "Toggle Sidebar": {
+      "comment": "Shows or hides the main window's sidebar",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toggle Sidebar"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kenar çubuğunu göster/gizle"
           }
         }
       }

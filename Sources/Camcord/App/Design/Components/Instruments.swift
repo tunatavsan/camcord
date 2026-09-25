@@ -174,7 +174,7 @@ struct SidebarRow: View {
             if let tag {
                 Text(tag)
                     .font(Theme.Font.caption)
-                    .foregroundStyle(Theme.Palette.ink3.color)
+                    .foregroundStyle(Theme.Palette.ink2.color)
                     .padding(.horizontal, Theme.Space.s - 2)
                     .padding(.vertical, 1)
                     .overlay(Capsule().strokeBorder(Theme.Palette.hairlineStrong.color))
@@ -182,7 +182,7 @@ struct SidebarRow: View {
             if let key {
                 Text(verbatim: key)
                     .font(Theme.Font.dataSmall)
-                    .foregroundStyle(Theme.Palette.ink3.color)
+                    .foregroundStyle(Theme.Palette.ink2.color)
             }
         }
         .accessibilityElement(children: .combine)

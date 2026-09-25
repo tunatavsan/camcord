@@ -83,4 +83,32 @@ struct ComponentKitTests {
         let rest = CondenseTransition.values(identity: true, reduceMotion: false)
         #expect(rest.opacity == 1 && rest.scale == 1 && rest.blur == 0)
     }
+
+    @Test("ink navigation: arrows move one step among the ids and stop at the ends (KARAR-1)")
+    func inkNavigation() {
+        let order = ["library", "studio", "edit", "settings"]
+        #expect(InkNavigation.move(from: "library", by: 1, in: order) == "studio")
+        #expect(InkNavigation.move(from: "studio", by: -1, in: order) == "library")
+        #expect(InkNavigation.move(from: "library", by: -1, in: order) == "library")
+        #expect(InkNavigation.move(from: "settings", by: 1, in: order) == "settings")
+        #expect(InkNavigation.move(from: "timeline", by: 1, in: order) == "library")
+        #expect(InkNavigation.move(from: "x", by: 1, in: [String]()) == "x")
+    }
+
+    @Test("window backdrops: a translucent tint over a system material, opaque under Reduce Transparency")
+    func windowBackdrops() {
+        for backdrop in WindowBackdrop.allCases {
+            for variant in ThemeColor.Variant.allCases {
+                #expect(backdrop.tint.value(variant).alpha < 1, "\(backdrop) \(variant)")
+                #expect(backdrop.solid.value(variant).alpha == 1, "\(backdrop) \(variant)")
+            }
+        }
+        #expect(WindowBackdrop.sidebar.material == .sidebar)
+        #expect(WindowBackdrop.content.material == .underWindowBackground)
+        // The sidebar reads lighter than the content, in both appearances.
+        for variant in [ThemeColor.Variant.dark, .light] {
+            let sidebar = WindowBackdrop.sidebar.tint.value(variant), content = WindowBackdrop.content.tint.value(variant)
+            #expect(variant == .dark ? sidebar.luminance > content.luminance : sidebar.luminance < content.luminance)
+        }
+    }
 }

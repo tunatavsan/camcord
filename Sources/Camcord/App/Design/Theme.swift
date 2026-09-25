@@ -171,6 +171,16 @@ extension Theme {
                                                 light: C(0xECEEF1, alpha: 0.45))
         static let glassTintHUD = ThemeColor("glassTintHUD", dark: C(0x0E0F11, alpha: 0.72),
                                              light: C(0x0E0F11, alpha: 0.72))
+        /// The frost dials of the window backdrops (Glass.swift `WindowBackdrop`): a tint over a
+        /// behind-window system material. Lower alpha = more desktop through (NOTE-2).
+        static let backdropContent = ThemeColor("backdropContent", dark: C(0x16181B, alpha: 0.80),
+                                                light: C(0xE3E6EA, alpha: 0.78),
+                                                highContrastDark: C(0x0E0F11, alpha: 0.92),
+                                                highContrastLight: C(0xEEF0F2, alpha: 0.92))
+        static let backdropSidebar = ThemeColor("backdropSidebar", dark: C(0x2E333A, alpha: 0.62),
+                                                light: C(0xD8DCE1, alpha: 0.60),
+                                                highContrastDark: C(0x2E333A, alpha: 0.88),
+                                                highContrastLight: C(0xD8DCE1, alpha: 0.88))
         /// Reduce Transparency: the opaque stand-ins for glass (K2.7).
         static let glassSolidChrome = ThemeColor("glassSolidChrome", dark: C(0x1E2125), light: C(0xECEEF1))
         static let glassSolidSidebar = ThemeColor("glassSolidSidebar", dark: C(0x24282D), light: C(0xD8DCE1))
@@ -182,7 +192,7 @@ extension Theme {
         static let all: [ThemeColor] = [
             window, surface, raised, field, hairline, hairlineStrong, ink, ink2, ink3, onInk,
             selection, selectionStrong, hover, pressed, record, recordHover, onRecord, ok, warn, well,
-            meterOff, meterLow, meterMid, meterHigh, glassTintChrome, glassTintHUD,
+            meterOff, meterLow, meterMid, meterHigh, glassTintChrome, glassTintHUD, backdropContent, backdropSidebar,
             glassSolidChrome, glassSolidSidebar, glassSolidHUD,
         ]
     }
