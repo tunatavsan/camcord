@@ -68,6 +68,35 @@ struct RecordingHubPanelTests {
         hub.hide()
     }
 
+    @Test("a collapse halfway through the release settle still lands the disc on the dock's centre")
+    func collapseDuringSettleLandsCentred() throws {
+        _ = NSApplication.shared
+        let hub = RecordingHubPanel(defaults: try freshDefaults(), panelPresenter: { _ in })
+        hub.showForTesting(mode: .recording, area: area)
+        let dockCenter = RecordingHubDock.topCenter.rect(size: CGSize(width: 44, height: 44), in: area).midX
+        hub.setHoveredForTesting(true)
+        hub.settleForTesting()
+
+        // Drop the open hub well off-centre, so the release spring has a long way to travel.
+        let grip = CGPoint(x: dockCenter, y: hub.capsuleForTesting.midY)
+        hub.dragForTesting(.began, to: grip, at: 20)
+        hub.dragForTesting(.changed, to: CGPoint(x: grip.x + 90, y: grip.y - 20), at: 20.3)
+        hub.dragForTesting(.ended, to: CGPoint(x: grip.x + 90, y: grip.y - 20), at: 20.6)
+        #expect(hub.dockForTesting == .topCenter)
+
+        // A few ticks in, the pointer leaves and the capsule collapses while the anchor moves.
+        hub.advanceMotionForTesting(seconds: 0.08)
+        #expect(abs(hub.capsuleForTesting.midX - dockCenter) > 1, "the settle should still be travelling")
+        hub.setHoveredForTesting(false)
+        hub.expireHoverGraceForTesting()
+        hub.advanceMotionForTesting(seconds: 10)
+
+        #expect(hub.capsuleForTesting.width == RecordingHubLayout.disc)
+        #expect(abs(hub.capsuleForTesting.midX - dockCenter) <= 1)
+        #expect(abs(try discCenter(hub) - dockCenter) <= 1)
+        hub.hide()
+    }
+
     @Test("a corner dock keeps its edge: the disc stays on the edge it was dropped at")
     func cornerKeepsEdge() throws {
         _ = NSApplication.shared
@@ -185,16 +214,18 @@ struct RecordingHubPanelTests {
         #expect(glass.frame == view.capsuleRect)
         #expect(glass.cornerRadius == RecordingHubLayout.disc / 2)
 
+        // The springs now run tick by tick; the window server rounds the panel's frame to
+        // whole points, so the view (and its glass) can trail the exact width by a sub-pixel.
         hub.setHoveredForTesting(true)
         hub.settleForTesting()
         #expect(glass.frame == view.capsuleRect)
-        #expect(glass.frame.width == RecordingHubLayout.expandedWidth(mode: .recording, growth: .centered))
+        #expect(abs(glass.frame.width - RecordingHubLayout.expandedWidth(mode: .recording, growth: .centered)) < 0.5)
         #expect(hub.panelForTesting.alphaValue == 1)
 
         hub.setHoveredForTesting(false)
         hub.settleForTesting()
         #expect(glass.frame == view.capsuleRect)
-        #expect(glass.frame.width == RecordingHubLayout.disc)
+        #expect(abs(glass.frame.width - RecordingHubLayout.disc) < 0.5)
         #expect(hub.panelForTesting.alphaValue == 1)
         // Hit testing still belongs to the hub view, not the glass it hosts.
         let center = CGPoint(x: view.frame.midX, y: view.frame.midY)

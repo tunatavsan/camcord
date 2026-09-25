@@ -599,6 +599,11 @@ final class RecordingHubPanel {
     fileprivate func step(_ link: CADisplayLink) {
         let elapsed = link.timestamp - (motionTimestamp ?? link.timestamp - 1.0 / 120)
         motionTimestamp = link.timestamp
+        step(elapsed: elapsed)
+    }
+
+    /// One display-link tick of both springs: the expansion and the released anchor.
+    private func step(elapsed: CFTimeInterval) {
         if !expansion.isSettled { expansion.step(seconds: elapsed) }
         if var running = settle {
             let spring = CameraDragMotion.releasedSpring(distance: running.distance)
@@ -642,14 +647,26 @@ final class RecordingHubPanel {
         drag(phase, point: point, time: time)
     }
 
-    /// Runs the collapse grace period out and both springs to rest, as the display link would.
-    func settleForTesting() {
+    /// Runs the collapse grace period out, so the expansion spring takes its new target.
+    func expireHoverGraceForTesting() {
         hover.advance(to: .greatestFiniteMagnitude)
         expansion.target = hover.expanded ? 1 : 0
-        expansion.finishImmediately()
-        if let running = settle {
-            capsule = dock.rect(size: capsule.size, anchoredAt: running.target)
+    }
+
+    /// Runs both springs through the real integration in 1/120 s display-link ticks, for at
+    /// most `seconds` or until they rest — the path the owner's drifting-disc bug lived in.
+    func advanceMotionForTesting(seconds: Double) {
+        var elapsed = 0.0
+        while elapsed < seconds, !expansion.isSettled || settle != nil {
+            step(elapsed: 1.0 / 120)
+            elapsed += 1.0 / 120
         }
+    }
+
+    /// Runs the collapse grace period out and both springs to rest, as the display link would.
+    func settleForTesting() {
+        expireHoverGraceForTesting()
+        advanceMotionForTesting(seconds: 10)
         stopMotion()
         applyGeometry()
     }
