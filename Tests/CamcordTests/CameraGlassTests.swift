@@ -21,25 +21,53 @@ struct CameraGlassEdgeTests {
         // enough to read as a gradient rather than as one alpha with a rounding error.
         #expect(stops.bright < 1)
         #expect(stops.bright - stops.dim > 0.3)
-        // The dark companion line is half the hairline and sits inside it.
-        let tile = CGSize(width: 320, height: 180)
-        #expect(CameraOptions.edgeShadowWidth(for: tile) == CameraOptions.edgeHighlightWidth(for: tile) / 2)
-        #expect(CameraOptions.edgeShadowAlpha == 0.25)
     }
 
-    @Test("the preview's points and the file's pixels drop the same shadow")
-    func shadowScalesWithTheTile() {
-        // Tuned at the 320x180 reference tile, which is also where the tile's corner lands
-        // exactly on the app's one radius.
-        let reference = CameraOptions.shadow(for: CGSize(width: 320, height: 180))
-        #expect(abs(reference.blur - 18) < 0.001)
-        #expect(abs(reference.offsetY + 6) < 0.001)
-        #expect(reference.alpha == 0.35)
-        // A tile composited at twice the size drops the same shadow, twice as large.
-        let doubled = CameraOptions.shadow(for: CGSize(width: 640, height: 360))
-        #expect(abs(doubled.blur - reference.blur * 2) < 0.001)
-        #expect(abs(doubled.offsetY - reference.offsetY * 2) < 0.001)
-        #expect(doubled.alpha == reference.alpha)
+    @Test("the shadow is one spec in pixels: the screen's points and the file's pixels match, it grows, then caps")
+    func shadowInPixels() {
+        // The 320x180 pt reference tile on a Retina screen: blur 18 pt, drop 6 pt, as before.
+        let screen = CameraOptions.shadow(forTile: CGSize(width: 320, height: 180), pixelsPerUnit: 2)
+        #expect(abs(screen.blur - 18) < 0.001)
+        #expect(abs(screen.offsetY + 6) < 0.001)
+        #expect(screen.alpha == 0.35)
+        // The same tile in the file is 640x360 px and drops the same shadow, in pixels.
+        let file = CameraOptions.shadow(forTile: CGSize(width: 640, height: 360), pixelsPerUnit: 1)
+        #expect(abs(file.blur - screen.blur * 2) < 0.001)
+        #expect(abs(file.offsetY - screen.offsetY * 2) < 0.001)
+        // It grows with the tile up to the cap, then stops.
+        let big = CameraOptions.shadow(forTile: CGSize(width: 1920, height: 1080), pixelsPerUnit: 1)
+        #expect(big.blur == CameraOptions.shadowCap.blur)
+        #expect(big.offsetY == -CameraOptions.shadowCap.drop)
+        let small = CameraOptions.shadow(forTile: CGSize(width: 160, height: 90), pixelsPerUnit: 1)
+        #expect(small.blur < file.blur && file.blur <= big.blur)
+    }
+
+    @Test("tile rects land on whole device pixels")
+    func pixelAlignment() {
+        let aligned = CameraOptions.pixelAligned(CGRect(x: 10.3, y: 20.26, width: 100.4, height: 50.1), pixelsPerUnit: 2)
+        #expect(aligned == CGRect(x: 10.5, y: 20.5, width: 100, height: 50))
+        let file = CameraOptions.pixelAligned(CGRect(x: 10.3, y: 20.6, width: 100.4, height: 50.1), pixelsPerUnit: 1)
+        #expect(file == CGRect(x: 10, y: 21, width: 101, height: 50))
+    }
+
+    @Test("in the file the edge is one pixel wide at a small and at a large tile", arguments: [0.1, 0.55])
+    func fileEdgeIsOnePixel(widthFraction: Double) throws {
+        let screen = try sampleBuffer(buffer: solidBuffer(width: 1920, height: 1080, grey: 128))
+        let camera = solidBuffer(width: 64, height: 36, grey: 40)
+        let options = CameraOptions(enabled: true, corner: .bottomLeft, widthFraction: widthFraction, mirrored: false)
+        let output = try #require(CMSampleBufferGetImageBuffer(
+            try softwareCompositor().composite(screen: screen, camera: camera, options: options)
+        ))
+        let rect = CameraOptions.pixelAligned(options.rect(in: CGSize(width: 1920, height: 1080)), pixelsPerUnit: 1)
+        // Along the tile's middle row, from its left edge inward, and down from its top edge
+        // at the middle column: pixels lifted above the dark interior are the hairline.
+        let interior = grey(output, ciX: Int(rect.midX), ciY: Int(rect.midY))
+        var left = 0
+        for x in Int(rect.minX)..<Int(rect.minX) + 12 where grey(output, ciX: x, ciY: Int(rect.midY)) > interior + 6 { left += 1 }
+        var top = 0
+        for y in (Int(rect.maxY) - 12)..<Int(rect.maxY) where grey(output, ciX: Int(rect.midX), ciY: y) > interior + 6 { top += 1 }
+        #expect(left == 1, "left edge \(left) px at widthFraction \(widthFraction)")
+        #expect(top == 1, "top edge \(top) px at widthFraction \(widthFraction)")
     }
 
     @Test("the compositor writes the gradient hairline into the file")
@@ -130,16 +158,51 @@ struct CameraGlassRenderTests {
                     .write(to: URL(fileURLWithPath: "\(shots)/tile-\(name).png"))
             }
 
-            // Rows run top-down in the bitmap. Sample the edge clear of the rounded corners.
+            // Rows run top-down in the bitmap. Sample the edge clear of the rounded corners; the
+            // hairline is the outermost device pixel row.
             let inset = Int((CameraOptions.cornerRadius(for: size) + 6) * scale)
-            let top = try #require(rep.colorAt(x: inset, y: 1)).brightnessComponent
-            let bottom = try #require(rep.colorAt(x: rep.pixelsWide - inset, y: rep.pixelsHigh - 2)).brightnessComponent
+            let top = try #require(rep.colorAt(x: inset, y: 0)).brightnessComponent
+            let bottom = try #require(rep.colorAt(x: rep.pixelsWide - inset, y: rep.pixelsHigh - 1)).brightnessComponent
             let interior = try #require(rep.colorAt(x: rep.pixelsWide / 2, y: rep.pixelsHigh / 2)).brightnessComponent
             #expect(top > interior, "\(name): the lit edge must lift off the tile")
             #expect(top > bottom + 0.1, "\(name): the edge must fall off along the diagonal")
             // Never a flat white line: the brightest point of the edge stays translucent.
             #expect(top < 0.99, "\(name): the edge must stay glass, not white")
         }
+    }
+
+    @Test("on screen the edge is one device pixel at the smallest and the largest tile",
+          arguments: [CGSize(width: 128, height: 72), CGSize(width: 960, height: 540)])
+    func screenEdgeIsOneDevicePixel(size: CGSize) throws {
+        _ = NSApplication.shared
+        let view = FloatingCameraView(frame: CGRect(origin: .zero, size: size))
+        view.image = solidImage(size: size, color: NSColor(calibratedWhite: 0.2, alpha: 1))
+        view.layoutSubtreeIfNeeded()
+        let scale = view.pixelsPerPoint
+        let rep = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: Int(size.width * scale), pixelsHigh: Int(size.height * scale),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        let context = try #require(NSGraphicsContext(bitmapImageRep: rep))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        context.cgContext.scaleBy(x: scale, y: scale)
+        view.layer?.render(in: context.cgContext)
+        NSGraphicsContext.restoreGraphicsState()
+        if let shots = ProcessInfo.processInfo.environment["CAMCORD_RENDER_SHOTS"] {
+            try rep.representation(using: .png, properties: [:])?
+                .write(to: URL(fileURLWithPath: "\(shots)/tile-edge-\(Int(size.width)).png"))
+        }
+        let interior = try #require(rep.colorAt(x: rep.pixelsWide / 2, y: rep.pixelsHigh / 2)).brightnessComponent
+        func lifted(_ x: Int, _ y: Int) -> Bool {
+            (rep.colorAt(x: x, y: y)?.brightnessComponent ?? 0) > interior + 0.02
+        }
+        let midRow = rep.pixelsHigh / 2, midColumn = rep.pixelsWide / 2
+        let left = (0..<12).filter { lifted($0, midRow) }.count
+        let top = (0..<12).filter { lifted(midColumn, $0) }.count
+        #expect(left == 1, "\(Int(size.width)) pt tile: left edge \(left) device px")
+        #expect(top == 1, "\(Int(size.width)) pt tile: top edge \(top) device px")
     }
 
     private func solidImage(size: CGSize, color: NSColor) -> NSImage {

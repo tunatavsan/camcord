@@ -129,7 +129,7 @@ struct CameraOptionsTests {
         }
     }
 
-    @Test("the camera tile keeps a light, scale-free corner and a visible hairline")
+    @Test("the camera tile keeps a light, scale-free corner and a one-device-pixel hairline")
     func cameraTileEdgeGeometry() {
         let preview = CGSize(width: 320, height: 180)
         // A 320x180 self-view lands exactly on the app's one corner radius.
@@ -138,8 +138,12 @@ struct CameraOptionsTests {
         let composited = CGSize(width: 1280, height: 720)
         #expect(abs(CameraOptions.cornerRadius(for: composited) / composited.height
                     - CameraOptions.cornerRadius(for: preview) / preview.height) < 0.0001)
-        // The hairline never falls below one physical line, and scales up with the tile.
-        #expect(CameraOptions.edgeHighlightWidth(for: CGSize(width: 80, height: 45)) == 1)
-        #expect(CameraOptions.edgeHighlightWidth(for: composited) > 1)
+        // One device pixel at every size (the owner's spec, K8): half a point on a Retina
+        // screen, a third on a 3x one, one pixel in the file. It takes no size at all.
+        #expect(CameraOptions.edgeHairlinePixels == 1)
+        #expect(CameraOptions.edgeHighlightWidth(pixelsPerUnit: 2) == 0.5)
+        #expect(CameraOptions.edgeHighlightWidth(pixelsPerUnit: 3) == 1.0 / 3)
+        #expect(CameraOptions.edgeHighlightWidth(pixelsPerUnit: 1) == 1)
+        #expect(CameraOptions.edgeHighlightWidth(pixelsPerUnit: .nan) == 1)
     }
 }

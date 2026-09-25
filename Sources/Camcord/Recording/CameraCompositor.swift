@@ -89,8 +89,11 @@ final class CameraCompositor {
             return try makeSampleBuffer(imageBuffer: output, copying: screen)
         }
 
-        let cameraRect = options.rect(in: contentExtent.size)
-            .offsetBy(dx: contentExtent.minX, dy: contentExtent.minY)
+        // Whole pixels, so the one-pixel hairline on its edge lands on one pixel.
+        let cameraRect = CameraOptions.pixelAligned(
+            options.rect(in: contentExtent.size).offsetBy(dx: contentExtent.minX, dy: contentExtent.minY),
+            pixelsPerUnit: 1
+        )
         let radius = CameraOptions.cornerRadius(for: cameraRect.size)
 
         let sourceCameraImage = CIImage(cvPixelBuffer: camera)
@@ -113,7 +116,7 @@ final class CameraCompositor {
         // Apple-ish curve now, and a shadow derived from it would have shrunk with it —
         // the separation from the desktop behind is exactly what has to grow. One set of
         // numbers for both renderers, so the file lifts the tile the way the screen does.
-        let drop = CameraOptions.shadow(for: cameraRect.size)
+        let drop = CameraOptions.shadow(forTile: cameraRect.size, pixelsPerUnit: 1)
         let shadowMask = outerMask.transformed(by: CGAffineTransform(translationX: 0, y: drop.offsetY))
             .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: drop.blur])
             .cropped(to: screenExtent)
@@ -123,10 +126,9 @@ final class CameraCompositor {
             mask: shadowMask,
             background: transparent
         )
-        // The same glass edge `FloatingCameraView` strokes on screen: a diagonal gradient of
-        // light along the hairline, and a darker line immediately inside it so the boundary
-        // survives bright content instead of turning into a flat white border.
-        let hairline = CameraOptions.edgeHighlightWidth(for: cameraRect.size)
+        // The same glass edge `FloatingCameraView` draws on screen: ONE pixel of specular
+        // light along the tile's edge, brightest at the top-leading corner.
+        let hairline = CameraOptions.edgeHighlightWidth(pixelsPerUnit: 1)
         let innerRect = cameraRect.insetBy(dx: hairline, dy: hairline)
         let innerRadius = max(0, radius - hairline)
         let innerMask = try roundedMask(rect: innerRect, radius: innerRadius).cropped(to: screenExtent)
@@ -135,22 +137,9 @@ final class CameraCompositor {
             mask: band(outer: outerMask, inner: innerMask, extent: screenExtent),
             background: transparent
         )
-        let contrastWidth = CameraOptions.edgeShadowWidth(for: cameraRect.size)
-        let coreMask = try roundedMask(
-            rect: innerRect.insetBy(dx: contrastWidth, dy: contrastWidth),
-            radius: max(0, innerRadius - contrastWidth)
-        ).cropped(to: screenExtent)
-        let contrast = try masked(
-            CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: CameraOptions.edgeShadowAlpha))
-                .cropped(to: screenExtent),
-            mask: band(outer: innerMask, inner: coreMask, extent: screenExtent),
-            background: transparent
-        )
         let clippedCamera = try masked(cameraImage, mask: outerMask, background: transparent)
         let composed = ring
-            .composited(over: contrast.composited(
-                over: clippedCamera.composited(over: shadow.composited(over: screenImage))
-            ))
+            .composited(over: clippedCamera.composited(over: shadow.composited(over: screenImage)))
             .cropped(to: screenExtent)
 
         context.render(
@@ -249,8 +238,12 @@ final class CameraCompositor {
         let fittedSize = CGSize(width: image.extent.width * scale, height: image.extent.height * scale)
         let x = rect.midX - fittedSize.width / 2
         let y = rect.midY - fittedSize.height / 2
-        return image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        // Clamped before scaling: sampling past the frame's edge would blend in transparency
+        // and draw a soft seam just inside the tile, several pixels wide at a large tile.
+        return image.clampedToExtent()
+            .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
             .transformed(by: CGAffineTransform(translationX: x, y: y))
+            .cropped(to: rect)
     }
 
     private func roundedMask(rect: CGRect, radius: CGFloat) throws -> CIImage {

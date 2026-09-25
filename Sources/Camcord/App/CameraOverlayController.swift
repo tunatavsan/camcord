@@ -448,12 +448,16 @@ final class CameraOverlayController: NSObject {
     private func layout() {
         guard !bounds.isEmpty else { return }
         let local = options.rect(in: bounds.size)
-        let frame = local.offsetBy(dx: bounds.minX, dy: bounds.minY)
+        // On whole device pixels, so the one-pixel glass edge is one pixel, not two half-lit.
+        let scale = panel.screen?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        let frame = CameraOptions.pixelAligned(local.offsetBy(dx: bounds.minX, dy: bounds.minY), pixelsPerUnit: scale)
         let resized = panel.frame.size != frame.size
         if resized { panel.setFrame(frame, display: true) }
         else { panel.setFrameOrigin(frame.origin) }
-        // Room for the blur plus its drop, or the halo is clipped by its own panel.
-        let padding = ceil(min(local.width, local.height) * 0.30)
+        // Room for the blur plus its drop, or the halo is clipped by its own panel. The
+        // shadow stops growing at its cap, and so does this.
+        let drop = CameraOptions.shadow(forTile: frame.size, pixelsPerUnit: scale)
+        let padding = ceil(drop.blur * 3 + abs(drop.offsetY))
         shadowView.padding = padding
         let shadowFrame = frame.insetBy(dx: -padding, dy: -padding)
         if shadowPanel.frame.size != shadowFrame.size {
@@ -617,6 +621,8 @@ final class FloatingCameraView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        // Redrawn at its new size while it is being resized, never a stretched old bitmap.
+        layerContentsRedrawPolicy = .duringViewResize
         // Both badges are drawn, not filled: a hairline of white that carries its own soft
         // shadow, so they separate from bright video without putting a slab over it.
         handle.opacity = 0
@@ -870,11 +876,11 @@ final class FloatingCameraView: NSView {
         }
         NSGraphicsContext.restoreGraphicsState()
 
-        // The same glass edge the compositor draws into the file: light down the hairline,
-        // brightest at the top-leading corner, then a darker line immediately inside it so
-        // the boundary holds over a white window as well as over the desktop. Two bands
-        // rather than one stroke, because a stroke can only carry a single flat colour.
-        let hairline = CameraOptions.edgeHighlightWidth(for: bounds.size)
+        // The same glass edge the compositor draws into the file: ONE device pixel of
+        // specular light, brightest at the top-leading corner. A band clipped and filled with
+        // a gradient rather than a stroke, because a stroke carries one flat colour. Drawn
+        // here, every frame the tile is resized, so it is never a stretched bitmap.
+        let hairline = CameraOptions.edgeHighlightWidth(pixelsPerUnit: pixelsPerPoint)
         let stops = CameraOptions.edgeHighlight
         NSGraphicsContext.saveGraphicsState()
         Self.band(in: bounds, radius: radius, inset: 0, width: hairline).addClip()
@@ -883,14 +889,10 @@ final class FloatingCameraView: NSView {
             ending: NSColor.white.withAlphaComponent(stops.dim)
         )?.draw(in: bounds, angle: -45)
         NSGraphicsContext.restoreGraphicsState()
-
-        NSGraphicsContext.saveGraphicsState()
-        Self.band(in: bounds, radius: radius,
-                  inset: hairline, width: CameraOptions.edgeShadowWidth(for: bounds.size)).addClip()
-        NSColor.black.withAlphaComponent(CameraOptions.edgeShadowAlpha).setFill()
-        bounds.fill()
-        NSGraphicsContext.restoreGraphicsState()
     }
+
+    /// Device pixels per point where the tile is drawn; a Retina screen until it is on one.
+    var pixelsPerPoint: CGFloat { window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2 }
 
     /// The band between two concentric rounded rects — `inset` in from the tile's edge and
     /// `width` thick. Even-odd, so it can be clipped and filled with a gradient instead of
@@ -915,10 +917,10 @@ private final class CameraShadowView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let rect = bounds.insetBy(dx: padding, dy: padding)
         let radius = CameraOptions.cornerRadius(for: rect.size)
-        // Sized off the tile, not off the corner — the curve is light now, the separation
-        // from the desktop behind is not. Matches the compositor's shadow, so what the owner
-        // places on screen is what the file shows.
-        let drop = CameraOptions.shadow(for: rect.size)
+        // Sized off the tile, not off the corner, in the same pixels the compositor uses, so
+        // what the owner places on screen is what the file shows.
+        let drop = CameraOptions.shadow(forTile: rect.size,
+                                        pixelsPerUnit: window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2)
         let shadow = NSShadow()
         shadow.shadowColor = NSColor.black.withAlphaComponent(drop.alpha)
         shadow.shadowBlurRadius = drop.blur

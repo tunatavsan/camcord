@@ -15,29 +15,48 @@ struct CameraOptions: Codable, Equatable, Sendable {
     /// 320x180 preview lands exactly on `CamcordStyle.Radius.surface` -- the app's one corner.
     static func cornerRadius(for size: CGSize) -> CGFloat { min(size.width, size.height) * 0.10 }
 
-    /// Hairline that separates the tile from whatever is behind it — one physical line at
-    /// preview sizes, still visible after a 4K downscale.
-    static func edgeHighlightWidth(for size: CGSize) -> CGFloat {
-        max(1, min(size.width, size.height) * 0.006)
+    // MARK: The glass edge — one spec, in DEVICE PIXELS, for the screen and the file.
+    //
+    // Renderers pass `pixelsPerUnit`: the display's backing scale for a view drawing in
+    // points, 1 for the compositor drawing in the file's pixels. So the same pixels come
+    // out of both, at every tile size.
+
+    /// The hairline is one device pixel wide at every tile size.
+    static let edgeHairlinePixels: CGFloat = 1
+
+    /// The hairline's width in the renderer's own units: `1 / backingScale` points on
+    /// screen, one pixel in the file.
+    static func edgeHighlightWidth(pixelsPerUnit: CGFloat) -> CGFloat {
+        edgeHairlinePixels / (pixelsPerUnit.isFinite && pixelsPerUnit > 0 ? pixelsPerUnit : 1)
     }
 
-    /// The tile's edge is glass, not a border: the hairline carries a diagonal gradient of
-    /// light — bright where the light falls, almost gone at the opposite corner — so it
-    /// separates the tile from the desktop without laying a flat white line over the video.
-    /// Both renderers read these two numbers: the floating preview strokes them, the
-    /// compositor draws the same gradient into the file.
+    /// The hairline is glass, not a border: a diagonal specular highlight — bright where the
+    /// light falls at the top-leading corner, almost gone at the opposite one — so it
+    /// separates the tile without laying a flat white line over the video.
     static let edgeHighlight: (bright: CGFloat, dim: CGFloat) = (0.55, 0.10)
-    /// A darker line immediately inside the hairline. Light content behind the tile swallows
-    /// a light-only edge; this is what keeps the boundary readable over a white window.
-    static let edgeShadowAlpha: CGFloat = 0.25
-    static func edgeShadowWidth(for size: CGSize) -> CGFloat { edgeHighlightWidth(for: size) / 2 }
 
-    /// The tile's drop shadow, in fractions of its short side so the preview's points and
-    /// the encoded frame's pixels drop the SAME shadow. At the 320x180 reference tile the
-    /// numbers are blur 18, y -6, alpha 0.35 — soft and low, a lift rather than a border.
-    static func shadow(for size: CGSize) -> (blur: CGFloat, offsetY: CGFloat, alpha: CGFloat) {
-        let short = min(size.width, size.height)
-        return (blur: short / 10, offsetY: -short / 30, alpha: 0.35)
+    /// The elevation shadow, in pixels: the tile sits slightly above what is behind it and
+    /// never blends into it. It grows with the tile (blur a tenth of the short side, drop a
+    /// thirtieth — a 640×360 px tile gets 36 and 12) and stops growing at `shadowCap`.
+    static let shadowCap: (blur: CGFloat, drop: CGFloat) = (48, 16)
+    static let shadowAlpha: CGFloat = 0.35
+
+    /// The shadow for a tile of `size` renderer units, in renderer units.
+    static func shadow(forTile size: CGSize, pixelsPerUnit: CGFloat) -> (blur: CGFloat, offsetY: CGFloat, alpha: CGFloat) {
+        let scale = pixelsPerUnit.isFinite && pixelsPerUnit > 0 ? pixelsPerUnit : 1
+        let short = min(size.width, size.height) * scale
+        let blur = min(short / 10, shadowCap.blur)
+        let drop = min(short / 30, shadowCap.drop)
+        return (blur: blur / scale, offsetY: -drop / scale, alpha: shadowAlpha)
+    }
+
+    /// `rect` snapped to whole device pixels, so a one-pixel hairline on its edge is one
+    /// pixel and never two half-lit ones.
+    static func pixelAligned(_ rect: CGRect, pixelsPerUnit: CGFloat) -> CGRect {
+        let scale = pixelsPerUnit.isFinite && pixelsPerUnit > 0 ? pixelsPerUnit : 1
+        func snap(_ value: CGFloat) -> CGFloat { (value * scale).rounded() / scale }
+        let minX = snap(rect.minX), minY = snap(rect.minY)
+        return CGRect(x: minX, y: minY, width: snap(rect.maxX) - minX, height: snap(rect.maxY) - minY)
     }
 
     var enabled: Bool
