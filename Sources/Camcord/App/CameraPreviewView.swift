@@ -130,6 +130,25 @@ final class CameraPreviewMonitor: ObservableObject {
         return resolved.enabled && running && deviceID == resolved.deviceID && format == resolved.format
     }
 
+    /// The running preview no longer shows the chosen camera or format: the owner would not
+    /// see their choice, and the record start would refuse the hand-off and reopen the camera.
+    nonisolated static func isStale(deviceID: String?, format: CameraFormatChoice?,
+                                    for options: CameraOptions) -> Bool {
+        guard let format else { return false }   // nothing owned
+        let resolved = options.resolved()
+        return deviceID != resolved.deviceID || format != resolved.format
+    }
+
+    /// The camera or its format changed in Settings: a running preview restarts on the new
+    /// choice; a stopped one stays stopped.
+    func cameraSettingsChanged(_ options: CameraOptions) async {
+        guard ownedCapture != nil, !isStarting,
+              Self.isStale(deviceID: ownedDeviceID, format: ownedFormat, for: options) else { return }
+        await stop()
+        let resolved = options.resolved()
+        await start(deviceID: resolved.deviceID, format: resolved.format)
+    }
+
     func prepareForRecording(options: CameraOptions) async -> CameraCapture? {
         let canTransfer = Self.canHandOff(running: isRunning, deviceID: ownedDeviceID, format: ownedFormat, to: options)
         recordingLocked = true
@@ -389,7 +408,10 @@ struct CameraPreviewView: View {
             Task { await monitor.stopIfUnobserved() }
         }
         .onChange(of: options.resolved().deviceID) { _, _ in
-            Task { await monitor.stop() }
+            Task { await monitor.cameraSettingsChanged(options) }
+        }
+        .onChange(of: options.resolved().format) { _, _ in
+            Task { await monitor.cameraSettingsChanged(options) }
         }
     }
 

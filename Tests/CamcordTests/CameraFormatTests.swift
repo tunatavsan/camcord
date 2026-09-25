@@ -118,4 +118,16 @@ struct CameraFormatTests {
         options.enabled = false
         #expect(!CameraPreviewMonitor.canHandOff(running: true, deviceID: "cam-A", format: format, to: options))
     }
+
+    @Test("a new format or camera makes a running preview stale; nothing owned is never stale")
+    func formatChangeMakesThePreviewStale() {
+        var options = CameraOptions(enabled: true, deviceID: "cam-A")
+        let auto = options.format
+        #expect(!CameraPreviewMonitor.isStale(deviceID: "cam-A", format: auto, for: options))
+        options.format = .manual(width: 1280, height: 720, fps: 60)
+        #expect(CameraPreviewMonitor.isStale(deviceID: "cam-A", format: auto, for: options))
+        #expect(!CameraPreviewMonitor.isStale(deviceID: "cam-A", format: options.format, for: options))
+        #expect(CameraPreviewMonitor.isStale(deviceID: "cam-B", format: options.format, for: options))
+        #expect(!CameraPreviewMonitor.isStale(deviceID: nil, format: nil, for: options))
+    }
 }
