@@ -230,9 +230,11 @@ struct GeneralSettingsView: View {
     @State private var launchAtLogin = LoginItem.isEnabled
     @State private var soundEnabled: Bool
     @State private var toastEnabled: Bool
+    @State private var dockIconMode: DockIconMode
 
     init(defaultsSuite: UserDefaults) {
         self.defaultsSuite = defaultsSuite
+        _dockIconMode = State(initialValue: DockIconMode.load(from: defaultsSuite))
         _soundEnabled = State(initialValue: FeedbackSound.isEnabled(in: defaultsSuite))
         _toastEnabled = State(initialValue: HUDToast.isEnabled(in: defaultsSuite))
     }
@@ -246,6 +248,13 @@ struct GeneralSettingsView: View {
                         LoginItem.setEnabled(newValue)
                         launchAtLogin = LoginItem.isEnabled
                     }
+                // New copy is English-first (K2); Turkish comes from Localizable.xcstrings.
+                Picker("Dock icon", selection: $dockIconMode) {
+                    ForEach(DockIconMode.allCases, id: \.self) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .onChange(of: dockIconMode) { _, mode in mode.save(to: defaultsSuite) }
             }
             Section("Geri Bildirim") {
                 Toggle("Geri bildirim seslerini çal", isOn: $soundEnabled)

@@ -1,5 +1,6 @@
 import AppKit
 import ServiceManagement
+import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -15,6 +16,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hudToast: HUDToast?
     private var screenshotPreviewCard: ScreenshotPreviewCard?
     private var servicesProvider: ServicesProvider?
+    private var dockController: DockController?
+    private var mainWindowController: MainWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Warm the feedback-sound cache so the first cue has zero setup latency.
@@ -38,6 +41,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let settingsWindowController = SettingsWindowController(eventTapEngine: eventTapEngine)
         self.settingsWindowController = settingsWindowController
+
+        // The main window and the Dock icon. `.always` gets its icon now; the others wait
+        // for the window.
+        let dockController = DockController()
+        self.dockController = dockController
+        dockController.apply()
+        mainWindowController = MainWindowController(dock: dockController)
+        SettingsModule.content = {
+            AnyView(SettingsRootView(eventTapEngine: eventTapEngine, defaultsSuite: .standard))
+        }
         installMainMenu()
 
         let statusItemController = StatusItemController(
@@ -150,6 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let panelController = PanelController(model: recordingStateModel, actions: panelActions)
         self.panelController = panelController
 
+        statusItemController.onOpenMainWindow = { [weak self] in self?.showMainWindow() }
         statusItemController.onShowPanel = { [weak panelController, weak statusItemController] in
             guard let button = statusItemController?.anchorButton else { return }
             panelController?.present(relativeTo: button)
@@ -164,17 +178,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registerLoginItemOnFirstRun()
     }
 
-    /// Finder/Spotlight opens the actual capture controls, including when macOS has
-    /// crowded the status item out of the menu bar. Settings remains a separate action.
+    /// The Dock icon, Finder and Spotlight open the main window — Camcord's home, and the way
+    /// back when macOS has crowded the status item out of the menu bar.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        panelController?.presentDetached()
+        showMainWindow()
         return true
+    }
+
+    private func showMainWindow() {
+        panelController?.close()
+        mainWindowController?.show()
+    }
+
+    @objc private func openMainWindow(_ sender: Any?) {
+        showMainWindow()
     }
 
     private func installMainMenu() {
         let menu = NSMenu()
         let applicationItem = NSMenuItem()
         let applicationMenu = NSMenu(title: "Camcord")
+        let open = applicationMenu.addItem(withTitle: String(localized: "Open Camcord", comment: "Opens the main window"),
+                                           action: #selector(openMainWindow(_:)), keyEquivalent: "0")
+        open.target = self
         let controls = applicationMenu.addItem(withTitle: "Kontrol Paneli", action: #selector(showControlPanel(_:)), keyEquivalent: "")
         controls.target = self
         let settings = applicationMenu.addItem(withTitle: "Ayarlar…", action: #selector(showSettings(_:)), keyEquivalent: ",")
@@ -184,6 +210,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applicationItem.submenu = applicationMenu
         menu.addItem(applicationItem)
         menu.addItem(AppMenus.editingMenuItem())
+        let windowMenu = AppMenus.windowMenuItem()
+        menu.addItem(windowMenu)
+        NSApp.windowsMenu = windowMenu.submenu
         NSApp.mainMenu = menu
     }
 
@@ -261,6 +290,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         actions.reportError = { [weak self] message in
             self?.hudToast?.show(text: message, systemSymbol: "exclamationmark.triangle", tint: .systemOrange, respectsSetting: false)
         }
+        actions.openMainWindow = { [weak self] in self?.showMainWindow() }
         actions.openSettings = { [weak self] in
             self?.panelController?.close()
             self?.settingsWindowController?.show()

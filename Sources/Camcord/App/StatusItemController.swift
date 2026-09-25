@@ -38,6 +38,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     /// context menu with the permission/login rows.
     var onPrimaryClick: (() -> Void)?
     var onShowPanel: (() -> Void)?
+    var onOpenMainWindow: (() -> Void)?
 
     /// Anchor for the popover panel.
     var anchorButton: NSStatusBarButton? { statusItem.button }
@@ -158,6 +159,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(tapStatusItem)
 
         menu.addItem(.separator())
+
+        let openItem = NSMenuItem(title: String(localized: "Open Camcord", comment: "Opens the main window"),
+                                  action: #selector(openMainWindow), keyEquivalent: "0")
+        openItem.keyEquivalentModifierMask = .command
+        openItem.target = self
+        menu.addItem(openItem)
 
         settingsItem.target = self
         settingsItem.action = #selector(openSettings)
@@ -527,6 +534,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     @objc private func tapStatusClicked() {
         guard !AccessibilityPermission.isTrusted() else { return }
         AccessibilityPermission.requestAccess()
+    }
+
+    @objc private func openMainWindow() {
+        onOpenMainWindow?()
     }
 
     @objc private func openSettings() {

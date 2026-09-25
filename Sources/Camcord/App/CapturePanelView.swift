@@ -136,6 +136,7 @@ struct PanelActions {
     /// Reveal the newest saved screenshot in Finder.
     var revealScreenshot: (URL) -> Void = { _ in }
     var openSettings: () -> Void = {}
+    var openMainWindow: () -> Void = {}
     var reportError: (String) -> Void = { _ in }
 }
 
@@ -356,6 +357,9 @@ struct CapturePanelView: View {
             Text("Camcord")
                 .font(.system(size: 16, weight: .semibold))
             Spacer()
+            HeaderButton(symbol: "macwindow",
+                         title: String(localized: "Open Camcord", comment: "Opens the main window"),
+                         action: actions.openMainWindow)
             HeaderButton(symbol: "gearshape", title: "Ayarlar", action: actions.openSettings)
         }
         .frame(height: 28)

@@ -18,4 +18,16 @@ enum AppMenus {
         item.submenu = menu
         return item
     }
+
+    /// ⌘W closes the main window (it never quits the app) and ⌘M minimises it.
+    static func windowMenuItem() -> NSMenuItem {
+        let item = NSMenuItem()
+        let menu = NSMenu(title: String(localized: "Window", comment: "Menu title"))
+        menu.addItem(withTitle: String(localized: "Minimize", comment: "Window menu"),
+                     action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        menu.addItem(withTitle: String(localized: "Close", comment: "Window menu"),
+                     action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        item.submenu = menu
+        return item
+    }
 }
