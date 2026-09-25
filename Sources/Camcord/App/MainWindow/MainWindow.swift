@@ -82,9 +82,18 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     func show() {
         let window = window ?? makeWindow()
         self.window = window
+        if window.contentViewController == nil { installContent(in: window) }
         // The Dock icon first, so the window opens as a regular app's window, in front.
         dock.windowDidOpen()
         present(window)
+    }
+
+    /// A fresh SwiftUI tree. Setting a content view controller resizes the window to the
+    /// controller's view, so the frame the owner left is put back afterwards.
+    private func installContent(in window: NSWindow) {
+        let frame = window.frame
+        window.contentViewController = NSHostingController(rootView: MainWindowView(defaults: defaults))
+        window.setFrame(frame, display: false)
     }
 
     private func makeWindow() -> NSWindow {
@@ -97,7 +106,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         window.title = "Camcord"
         window.isReleasedWhenClosed = false
         window.delegate = self
-        window.contentViewController = NSHostingController(rootView: MainWindowView(defaults: defaults))
+        installContent(in: window)
         window.setContentSize(NSSize(width: 980, height: 640))
         window.center()
         // After the first placement, so a saved frame wins over the centred default.
@@ -106,7 +115,12 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         return window
     }
 
+    /// The window is kept for its frame, but its SwiftUI tree is dropped: a closed window that
+    /// keeps its tree never runs `onDisappear` and never cancels `.task`, so a camera preview,
+    /// a mic meter or a permission poll inside a module would run on, unseen, until quit.
+    /// `show()` builds a fresh tree.
     func windowWillClose(_ notification: Notification) {
+        window?.contentViewController = nil
         dock.windowDidClose()
     }
 }

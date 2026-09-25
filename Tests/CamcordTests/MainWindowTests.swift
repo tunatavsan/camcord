@@ -118,14 +118,36 @@ struct MainWindowTests {
         #expect(!window.isReleasedWhenClosed)
         #expect(window.styleMask.contains(.closable))
 
+        #expect(window.contentViewController != nil)
+        window.setFrame(NSRect(x: 120, y: 140, width: 1010, height: 660), display: false)
+        let frame = window.frame
+
         window.performClose(nil)
         #expect(applied == [.regular, .accessory])
         #expect(!controller.isOpen)
+        // The SwiftUI tree goes with the close, so nothing inside it keeps running unseen.
+        #expect(window.contentViewController == nil)
 
-        // Reopening reuses the same window (its frame, its state).
+        // Reopening reuses the same window (its frame) with a fresh tree.
         controller.show()
         #expect(controller.windowForTesting === window)
+        #expect(window.contentViewController != nil)
+        #expect(window.frame == frame)
         #expect(applied == [.regular, .accessory, .regular])
         window.close()
+    }
+
+    @Test("two preview surfaces hold the camera preview independently")
+    func previewOwnersAreIndependent() {
+        let monitor = CameraPreviewMonitor()
+        let module = CameraPreviewMonitor.makeOwnerID("settings")
+        let window = CameraPreviewMonitor.makeOwnerID("settings")
+        #expect(module != window)
+        monitor.setVisible(true, owner: module)
+        monitor.setVisible(true, owner: window)
+        monitor.setVisible(false, owner: window)
+        #expect(monitor.isObserved)
+        monitor.setVisible(false, owner: module)
+        #expect(!monitor.isObserved)
     }
 }

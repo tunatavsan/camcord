@@ -171,8 +171,11 @@ final class CameraPreviewMonitor: ObservableObject {
         stopPolling()
     }
 
+    /// A name for one on-screen instance of a preview surface.
+    static func makeOwnerID(_ surface: String) -> String { "\(surface)-\(UUID().uuidString)" }
+
     /// Each visible surface owns its rendering subscription independently.
-    func setVisible(_ visible: Bool, owner: String = "settings") {
+    func setVisible(_ visible: Bool, owner: String) {
         if visible { visibleOwners.insert(owner) } else { visibleOwners.remove(owner) }
         if self.visible {
             startPollingIfNeeded()
@@ -310,6 +313,9 @@ struct CameraPreviewView: View {
 
     @ObservedObject private var monitor = CameraPreviewMonitor.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Each shown instance holds the preview under its own name, so one host closing never
+    /// takes the preview away from another that is still on screen.
+    @State private var owner = CameraPreviewMonitor.makeOwnerID("settings")
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -377,9 +383,9 @@ struct CameraPreviewView: View {
                 }
             }
         }
-        .onAppear { monitor.setVisible(true) }
+        .onAppear { monitor.setVisible(true, owner: owner) }
         .onDisappear {
-            monitor.setVisible(false)
+            monitor.setVisible(false, owner: owner)
             Task { await monitor.stopIfUnobserved() }
         }
         .onChange(of: options.resolved().deviceID) { _, _ in
