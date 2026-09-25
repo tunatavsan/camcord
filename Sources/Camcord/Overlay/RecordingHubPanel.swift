@@ -25,6 +25,39 @@ enum RecordingHubDock: String, Codable, CaseIterable, Sendable {
     /// A dock on the right edge: the capsule grows inward so it never expands off screen.
     var mirrored: Bool { self == .topRight || self == .bottomRight }
 
+    /// Corners grow away from their edge; top-centre grows to both sides so the disc
+    /// stays on the dock's centre.
+    var growth: RecordingHubGrowth {
+        switch self {
+        case .topLeft, .bottomLeft: .leading
+        case .topRight, .bottomRight: .trailing
+        case .topCenter: .centered
+        }
+    }
+
+    /// The point of the capsule that stays put while it opens and closes: the docked
+    /// edge's middle, or the centre at top-centre. Every dock rect puts it at the same
+    /// place whatever the capsule's width, which is what lets the settle spring aim at it
+    /// while the capsule is still changing size.
+    func anchor(of rect: CGRect) -> CGPoint {
+        switch growth {
+        case .leading: CGPoint(x: rect.minX, y: rect.midY)
+        case .trailing: CGPoint(x: rect.maxX, y: rect.midY)
+        case .centered: CGPoint(x: rect.midX, y: rect.midY)
+        }
+    }
+
+    /// A `size` capsule whose anchor is at `anchor`.
+    func rect(size: CGSize, anchoredAt anchor: CGPoint) -> CGRect {
+        let x: CGFloat
+        switch growth {
+        case .leading: x = anchor.x
+        case .trailing: x = anchor.x - size.width
+        case .centered: x = anchor.x - size.width / 2
+        }
+        return CGRect(x: x, y: anchor.y - size.height / 2, width: size.width, height: size.height)
+    }
+
     /// The resting rect inside `area`, using the camera tile's own margin so the two
     /// floating surfaces sit the same distance off the edge.
     func rect(size: CGSize, in area: CGRect) -> CGRect {
@@ -159,8 +192,9 @@ final class RecordingHubPanel {
     private var motionLink: CADisplayLink?
     private var motionProxy: HubMotionProxy?
     private var motionTimestamp: CFTimeInterval?
-    /// The released dock spring: where it is going, how fast, and the throw distance the
-    /// shared spring was chosen for.
+    /// The released dock spring, run on the dock's ANCHOR rather than the capsule's origin
+    /// so a hub that collapses while it settles still lands on its dock: where the anchor is
+    /// going, how fast, and the throw distance the shared spring was chosen for.
     private var settle: (target: CGPoint, velocity: CGPoint, distance: CGFloat)?
 
     private var dragStart: (capsule: CGRect, point: CGPoint)?
@@ -226,10 +260,10 @@ final class RecordingHubPanel {
         // for the status items.
         area = (screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? .zero
         dock = RecordingSettings.load(from: defaults).hubDock
-        view.mirrored = dock.mirrored
+        view.growth = dock.growth
         hover = RecordingHubHover()
         expansion = RecordingHubExpansion()
-        capsule = dock.rect(size: RecordingHubLayout.size(mode: mode, progress: 0), in: area)
+        capsule = dock.rect(size: RecordingHubLayout.size(mode: mode, progress: 0, growth: dock.growth), in: area)
         applyGeometry()
         panel.alphaValue = hover.alpha
         refreshPreviewState()
@@ -343,21 +377,13 @@ final class RecordingHubPanel {
         NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     }
 
-    /// Resizes the capsule around its docked edge, so the identity cell stays put while
-    /// the controls grow out of it, then clamps the whole thing inside the display.
+    /// Resizes the capsule around its dock's anchor, so the identity cell stays put while
+    /// the controls are uncovered around it, then clamps the whole thing inside the area.
+    /// Top-centre grows to both sides: its cells are laid out from the centre, not the
+    /// leading edge, so the symmetric growth moves no control under a stationary pointer.
     private func applyGeometry() {
-        let size = RecordingHubLayout.size(mode: mode, progress: expansion.progress)
-        let x: CGFloat
-        switch dock {
-        case .topRight, .bottomRight: x = capsule.maxX - size.width
-        // Top-centre grows to the RIGHT, not symmetrically: the cells are laid out from the
-        // capsule's leading edge, so a capsule that also moved left would slide 72 pt of
-        // controls under a stationary pointer mid-spring — moving the readout being read
-        // and losing the click the owner had already started.
-        case .topCenter, .topLeft, .bottomLeft: x = capsule.minX
-        }
-        capsule = clamped(CGRect(x: x, y: capsule.midY - size.height / 2,
-                                 width: size.width, height: size.height))
+        let size = RecordingHubLayout.size(mode: mode, progress: expansion.progress, growth: dock.growth)
+        capsule = clamped(dock.rect(size: size, anchoredAt: dock.anchor(of: capsule)))
         let inset = RecordingHubLayout.shadowInset
         let frame = capsule.insetBy(dx: -inset, dy: -inset)
         if panel.frame != frame {
@@ -390,18 +416,19 @@ final class RecordingHubPanel {
         }
     }
 
-    private func drag(_ phase: RecordingHubView.DragPhase, point: CGPoint) {
+    private func drag(_ phase: RecordingHubView.DragPhase, point: CGPoint,
+                      time: CFTimeInterval = CACurrentMediaTime()) {
         switch phase {
         case .began:
             stopMotion()
             dragStart = (capsule, point)
             dragVelocity = .zero
-            dragSample = (point, CACurrentMediaTime())
+            dragSample = (point, time)
         case .changed, .ended:
             guard let start = dragStart else { return }
             capsule = clamped(start.capsule.offsetBy(dx: point.x - start.point.x,
                                                      dy: point.y - start.point.y))
-            sampleVelocity(at: point)
+            sampleVelocity(at: point, time: time)
             let inset = RecordingHubLayout.shadowInset
             panel.setFrameOrigin(capsule.insetBy(dx: -inset, dy: -inset).origin)
             if phase == .ended {
@@ -414,8 +441,7 @@ final class RecordingHubPanel {
 
     /// A smoothed pointer velocity in points per second, so the fling test sees the throw
     /// rather than the last frame's jitter.
-    private func sampleVelocity(at point: CGPoint) {
-        let now = CACurrentMediaTime()
+    private func sampleVelocity(at point: CGPoint, time now: CFTimeInterval) {
         guard let previous = dragSample, now > previous.time else {
             dragSample = (point, now)
             return
@@ -431,15 +457,18 @@ final class RecordingHubPanel {
     private func land() {
         let landed = RecordingHubDock.dock(forDrop: capsule, velocity: dragVelocity, in: area)
         dock = landed
-        view.mirrored = landed.mirrored
+        view.growth = landed.growth
         persist(landed)
-        let target = landed.rect(size: capsule.size, in: area).origin
+        // The anchor of a dock rect does not depend on the capsule's width, so this target
+        // holds even if the hub collapses while it is still on its way.
+        let target = landed.anchor(of: landed.rect(size: capsule.size, in: area))
+        let anchor = landed.anchor(of: capsule)
         if Self.reducesMotion {
-            capsule.origin = target
+            capsule = landed.rect(size: capsule.size, anchoredAt: target)
             applyGeometry()
             return
         }
-        settle = (target, dragVelocity, hypot(target.x - capsule.minX, target.y - capsule.minY))
+        settle = (target, dragVelocity, hypot(target.x - anchor.x, target.y - anchor.y))
         startMotion()
     }
 
@@ -478,17 +507,17 @@ final class RecordingHubPanel {
         if !expansion.isSettled { expansion.step(seconds: elapsed) }
         if var running = settle {
             let spring = CameraDragMotion.releasedSpring(distance: running.distance)
-            var origin = capsule.origin
-            CameraDragMotion.integrate(&origin, velocity: &running.velocity, toward: running.target,
+            var anchor = dock.anchor(of: capsule)
+            CameraDragMotion.integrate(&anchor, velocity: &running.velocity, toward: running.target,
                                        stiffness: spring.stiffness, damping: spring.damping,
                                        seconds: min(max(elapsed, 0), 1.0 / 30))
-            capsule.origin = origin
             settle = running
-            if hypot(running.target.x - origin.x, running.target.y - origin.y) < 0.12,
+            if hypot(running.target.x - anchor.x, running.target.y - anchor.y) < 0.12,
                hypot(running.velocity.x, running.velocity.y) < 2 {
-                capsule.origin = running.target
+                anchor = running.target
                 settle = nil
             }
+            capsule = dock.rect(size: capsule.size, anchoredAt: anchor)
         }
         applyGeometry()
         if expansion.isSettled, settle == nil { stopMotion() }
@@ -499,8 +528,35 @@ final class RecordingHubPanel {
     var panelForTesting: NSPanel { panel }
     var viewForTesting: RecordingHubView { view }
     var dockForTesting: RecordingHubDock { dock }
+    /// The drawn capsule, in screen coordinates.
+    var capsuleForTesting: CGRect { capsule }
 
     func setHoveredForTesting(_ inside: Bool) { setHovered(inside) }
+
+    /// `show` on an explicit area instead of a display's visible frame.
+    func showForTesting(mode: RecordingHubMode, area: CGRect) {
+        show(mode: mode, on: nil)
+        self.area = area
+        capsule = dock.rect(size: RecordingHubLayout.size(mode: mode, progress: 0, growth: dock.growth), in: area)
+        applyGeometry()
+    }
+
+    /// A drag with explicit timestamps, so the fling test sees a real speed.
+    func dragForTesting(_ phase: RecordingHubView.DragPhase, to point: CGPoint, at time: CFTimeInterval) {
+        drag(phase, point: point, time: time)
+    }
+
+    /// Runs the collapse grace period out and both springs to rest, as the display link would.
+    func settleForTesting() {
+        hover.advance(to: .greatestFiniteMagnitude)
+        expansion.target = hover.expanded ? 1 : 0
+        expansion.finishImmediately()
+        if let running = settle {
+            capsule = dock.rect(size: capsule.size, anchoredAt: running.target)
+        }
+        stopMotion()
+        applyGeometry()
+    }
 }
 
 private final class HubMotionProxy: NSObject {

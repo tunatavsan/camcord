@@ -30,6 +30,17 @@ enum RecordingHubItem: Equatable, Sendable {
     }
 }
 
+/// Which way the capsule grows out of the disc. Corner docks grow away from their edge;
+/// top-centre grows to both sides, so the disc stays on the dock's centre.
+enum RecordingHubGrowth: Equatable, Sendable {
+    /// Left-edge docks: the identity keeps the capsule's left edge.
+    case leading
+    /// Right-edge docks: the identity keeps the capsule's right edge.
+    case trailing
+    /// Top-centre: the identity keeps the capsule's centre.
+    case centered
+}
+
 /// The hub's geometry, kept pure so the disc, the capsule and every hit target can be
 /// measured in a test instead of on screen. The collapsed hub is one 44 pt disc holding
 /// the identity cell; expanding lays the same cell against the docked edge and grows the
@@ -73,14 +84,65 @@ enum RecordingHubLayout {
         items(mode: mode).reduce(0) { $0 + width(of: $1) } + trailing
     }
 
-    /// The capsule's width at a point in the expansion spring.
-    static func width(mode: RecordingHubMode, progress: CGFloat) -> CGFloat {
-        let clamped = min(max(progress, 0), 1)
-        return disc + (expandedWidth(mode: mode) - disc) * clamped
+    static func expandedWidth(mode: RecordingHubMode, growth: RecordingHubGrowth) -> CGFloat {
+        growth == .centered ? disc + 2 * centeredHalfWidth(mode: mode) : expandedWidth(mode: mode)
     }
 
-    static func size(mode: RecordingHubMode, progress: CGFloat) -> CGSize {
-        CGSize(width: width(mode: mode, progress: progress), height: disc)
+    /// The capsule's width at a point in the expansion spring.
+    static func width(mode: RecordingHubMode, progress: CGFloat, growth: RecordingHubGrowth = .leading) -> CGFloat {
+        let clamped = min(max(progress, 0), 1)
+        return disc + (expandedWidth(mode: mode, growth: growth) - disc) * clamped
+    }
+
+    static func size(mode: RecordingHubMode, progress: CGFloat, growth: RecordingHubGrowth = .leading) -> CGSize {
+        CGSize(width: width(mode: mode, progress: progress, growth: growth), height: disc)
+    }
+
+    // MARK: Centred growth (the top-centre dock)
+
+    /// The cells either side of the identity at top-centre, each list read left to right.
+    /// Stop sits next to the time it ends; Başlat's label is part of its own cell.
+    static func centeredItems(mode: RecordingHubMode) -> (left: [RecordingHubItem], right: [RecordingHubItem]) {
+        mode.isArmed
+            ? ([.cancel, .divider], [])
+            : ([.pause, .stop, .divider], [.divider, .preview, .micLevel])
+    }
+
+    /// How far the capsule reaches either side of the disc's centre, beyond the disc: the
+    /// longer side plus the end padding, on BOTH sides, so the disc's centre is the
+    /// capsule's centre at every point of the spring.
+    static func centeredHalfWidth(mode: RecordingHubMode) -> CGFloat {
+        let split = centeredItems(mode: mode)
+        let left = split.left.reduce(0) { $0 + width(of: $1) }
+        let right = width(of: identity(mode: mode)) - disc + split.right.reduce(0) { $0 + width(of: $1) }
+        return max(left, right) + trailing
+    }
+
+    /// Top-centre cells, fixed relative to the disc's centre: the identity cell is pinned at
+    /// `center` and the others sit where they will rest, so the growing capsule only
+    /// uncovers them and nothing ever slides under a stationary pointer.
+    static func centeredCells(
+        mode: RecordingHubMode,
+        center: CGFloat,
+        verticalCenter: CGFloat
+    ) -> [(item: RecordingHubItem, rect: CGRect)] {
+        let split = centeredItems(mode: mode)
+        let identity = identity(mode: mode)
+        let y = verticalCenter - disc / 2
+        var cells: [(item: RecordingHubItem, rect: CGRect)] = []
+        var leftEdge = center - disc / 2
+        for item in split.left.reversed() {
+            leftEdge -= width(of: item)
+            cells.insert((item, CGRect(x: leftEdge, y: y, width: width(of: item), height: disc)), at: 0)
+        }
+        let identityRect = CGRect(x: center - disc / 2, y: y, width: width(of: identity), height: disc)
+        cells.append((identity, identityRect))
+        var rightEdge = identityRect.maxX
+        for item in split.right {
+            cells.append((item, CGRect(x: rightEdge, y: y, width: width(of: item), height: disc)))
+            rightEdge += width(of: item)
+        }
+        return cells
     }
 
     /// The expanded cells, laid out from the docked edge. `mirrored` is a hub docked
@@ -152,10 +214,12 @@ final class RecordingHubView: NSView {
     var progress: CGFloat = 0 {
         didSet { if progress != oldValue { refresh() } }
     }
-    /// True when the hub is docked against the right edge.
-    var mirrored = false {
-        didSet { if mirrored != oldValue { refresh() } }
+    /// How the capsule grows out of the disc, from the dock the hub rests on.
+    var growth: RecordingHubGrowth = .leading {
+        didSet { if growth != oldValue { refresh() } }
     }
+    /// True when the hub is docked against the right edge.
+    private var mirrored: Bool { growth == .trailing }
 
     /// The hub's own chrome: dark, near-opaque, and independent of the wallpaper or the
     /// game behind it, so the 11 pt time never has to compete for contrast.
@@ -196,20 +260,29 @@ final class RecordingHubView: NSView {
         guard progress > 0.001 else {
             return [(RecordingHubLayout.identity(mode: mode), capsule)]
         }
-        return RecordingHubLayout.cells(
-            mode: mode,
-            anchoredAt: mirrored ? capsule.maxX : capsule.minX,
-            verticalCenter: capsule.midY,
-            mirrored: mirrored
-        )
+        switch growth {
+        case .centered:
+            return RecordingHubLayout.centeredCells(mode: mode, center: capsule.midX, verticalCenter: capsule.midY)
+        case .leading, .trailing:
+            return RecordingHubLayout.cells(
+                mode: mode,
+                anchoredAt: mirrored ? capsule.maxX : capsule.minX,
+                verticalCenter: capsule.midY,
+                mirrored: mirrored
+            )
+        }
     }
 
-    /// The control a press at `point` (view coordinates) fires.
+    /// The control a press at `point` (view coordinates) fires. Cells never move while the
+    /// capsule opens — it only uncovers them — and a control answers only once it is fully
+    /// uncovered, so a click can only land on something that was already at rest under
+    /// the pointer.
     func control(at point: CGPoint) -> RecordingHubItem? {
         guard progress > 0.001 else {
             return mode.isArmed ? .start : nil
         }
-        return cells.first { $0.item.isControl && $0.rect.contains(point) }?.item
+        let visible = capsuleRect.insetBy(dx: -0.5, dy: -0.5)
+        return cells.first { $0.item.isControl && visible.contains($0.rect) && $0.rect.contains(point) }?.item
     }
 
     private func refresh() {
