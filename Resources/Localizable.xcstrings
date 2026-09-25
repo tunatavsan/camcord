@@ -1,6 +1,24 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "%lld dB": {
+      "comment": "Accessibility: a level in decibels",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld dB"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld dB"
+          }
+        }
+      }
+    },
     "Always": {
       "comment": "Dock icon setting",
       "extractionState": "manual",
@@ -55,6 +73,24 @@
         }
       }
     },
+    "Camera": {
+      "comment": "Chip: the camera tile on or off",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camera"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera"
+          }
+        }
+      }
+    },
     "Canvas": {
       "comment": "Recording setting: the shape of a window recording's file",
       "extractionState": "manual",
@@ -69,6 +105,78 @@
           "stringUnit": {
             "state": "translated",
             "value": "Tuval"
+          }
+        }
+      }
+    },
+    "Capture a region": {
+      "comment": "Action: capture a region",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capture a region"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bölge çek"
+          }
+        }
+      }
+    },
+    "Capture a window": {
+      "comment": "Action: capture a window",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capture a window"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pencere çek"
+          }
+        }
+      }
+    },
+    "Capture text": {
+      "comment": "Action: recognise the text in a region",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capture text"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metni çek"
+          }
+        }
+      }
+    },
+    "Capture the screen": {
+      "comment": "Action: capture the whole screen",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capture the screen"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekranı çek"
           }
         }
       }
@@ -109,6 +217,24 @@
         }
       }
     },
+    "Done": {
+      "comment": "Button: finish",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Done"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bitti"
+          }
+        }
+      }
+    },
     "Edit": {
       "comment": "Main window module",
       "extractionState": "manual",
@@ -141,6 +267,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Biçim"
+          }
+        }
+      }
+    },
+    "Later": {
+      "comment": "Tag on a feature that comes after 1.0",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Later"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sonra"
+          }
+        }
+      }
+    },
+    "Level": {
+      "comment": "Accessibility: an audio level meter",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Level"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seviye"
           }
         }
       }
@@ -181,6 +343,24 @@
         }
       }
     },
+    "Mic": {
+      "comment": "Chip: the microphone on or off",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mic"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon"
+          }
+        }
+      }
+    },
     "Minimize": {
       "comment": "Window menu",
       "extractionState": "manual",
@@ -217,6 +397,24 @@
         }
       }
     },
+    "No captures yet": {
+      "comment": "Empty Library title",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No captures yet"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Henüz çekim yok"
+          }
+        }
+      }
+    },
     "Not available yet": {
       "comment": "Accessibility hint on a module marked Soon",
       "extractionState": "manual",
@@ -235,6 +433,42 @@
         }
       }
     },
+    "Not set": {
+      "comment": "A capture with no keyboard shortcut assigned",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not set"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Atanmadı"
+          }
+        }
+      }
+    },
+    "Off": {
+      "comment": "Accessibility value: off",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kapalı"
+          }
+        }
+      }
+    },
     "Open Camcord": {
       "comment": "Opens the main window",
       "extractionState": "manual",
@@ -249,6 +483,114 @@
           "stringUnit": {
             "state": "translated",
             "value": "Camcord'u Aç"
+          }
+        }
+      }
+    },
+    "Record": {
+      "comment": "Button: start a recording",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt"
+          }
+        }
+      }
+    },
+    "Record again": {
+      "comment": "Button: start another recording",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record again"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yeniden kaydet"
+          }
+        }
+      }
+    },
+    "Region": {
+      "comment": "Capture kind: a region of the screen",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Region"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bölge"
+          }
+        }
+      }
+    },
+    "Screen": {
+      "comment": "Capture kind: the whole screen",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screen"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekran"
+          }
+        }
+      }
+    },
+    "Scroll": {
+      "comment": "Short label of the Scroll capture key in the menu-bar panel",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scroll"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydırma"
+          }
+        }
+      }
+    },
+    "Scroll capture": {
+      "comment": "Capture kind: a long, scrolled capture",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scroll capture"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydırmalı çekim"
           }
         }
       }
@@ -325,6 +667,78 @@
         }
       }
     },
+    "Start a scroll capture": {
+      "comment": "Action: start a scroll capture",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start a scroll capture"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydırmalı çekim başlat"
+          }
+        }
+      }
+    },
+    "Start recording": {
+      "comment": "Accessibility: the Record button",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydı başlat"
+          }
+        }
+      }
+    },
+    "Stop": {
+      "comment": "Button: stop the recording",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durdur"
+          }
+        }
+      }
+    },
+    "Stop recording": {
+      "comment": "Accessibility: the Stop button",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydı durdur"
+          }
+        }
+      }
+    },
     "Studio": {
       "comment": "Main window module",
       "extractionState": "manual",
@@ -339,6 +753,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Stüdyo"
+          }
+        }
+      }
+    },
+    "Text": {
+      "comment": "Capture kind: recognise the text in a region",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metin"
           }
         }
       }

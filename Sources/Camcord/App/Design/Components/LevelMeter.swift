@@ -1,18 +1,36 @@
 import SwiftUI
 
-/// Audio measurements arrive at 30 Hz; native layers animate independently at the
-/// display refresh rate, without recomputing the whole SwiftUI panel every frame.
+/// The kit's live level meter (SPEC §3). Audio measurements arrive at 30 Hz; native layers
+/// animate independently at the display refresh rate, without recomputing the SwiftUI view every
+/// frame, and the display link stops whenever the meter cannot be seen.
 struct AudioLevelMeter: View {
     let levels: AudioLevels?
     var active = true
+    var height: CGFloat = 6
 
     var body: some View {
         NativeAudioMeter(levels: levels, active: active)
-            .frame(height: 7)
+            .frame(height: height)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Ses seviyesi")
-            .accessibilityValue(active ? "\(Int(levels?.rmsDBFS ?? -90)) dBFS" : "Etkin değil")
+            .accessibilityLabel(Text("Level", comment: "Accessibility: an audio level meter"))
+            .accessibilityValue(active
+                ? Text("\(Int((levels?.rmsDBFS ?? -90).rounded())) dB", comment: "Accessibility: a level in decibels")
+                : Text("Off", comment: "Accessibility value: a meter that is not measuring"))
     }
+}
+
+/// Where the meter's zones change colour, as fractions of its −60…0 dBFS scale.
+enum MeterScale {
+    static let floorDB = -60.0
+    static let warnDB = -12.0
+    static let hotDB = -6.0
+
+    static func fraction(_ db: Double) -> Double {
+        db.isFinite ? min(max((db - floorDB) / -floorDB, 0), 1) : 0
+    }
+
+    static var warnFraction: Double { fraction(warnDB) }
+    static var hotFraction: Double { fraction(hotDB) }
 }
 
 /// Fast attack, gentle release, and a briefly held peak. Time-based response stays
@@ -68,15 +86,13 @@ private final class AudioMeterView: NSView {
     init() {
         super.init(frame: .zero)
         wantsLayer = true
-        track.backgroundColor = NSColor.labelColor.withAlphaComponent(0.08).cgColor
-        fill.colors = [NSColor.systemTeal.cgColor, NSColor.systemGreen.cgColor,
-                       NSColor.systemYellow.cgColor, NSColor.systemOrange.cgColor]
-        fill.locations = [0, 0.55, 0.84, 1]
+        // Three hard zones (Console): normal up to −12 dBFS, warn to −6, hot above.
+        let warn = NSNumber(value: MeterScale.warnFraction), hot = NSNumber(value: MeterScale.hotFraction)
+        fill.locations = [0, warn, warn, hot, hot, 1]
         fill.startPoint = CGPoint(x: 0, y: 0.5)
         fill.endPoint = CGPoint(x: 1, y: 0.5)
-        fillMask.backgroundColor = NSColor.white.cgColor
         fill.mask = fillMask
-        peakMarker.backgroundColor = NSColor.labelColor.withAlphaComponent(0.85).cgColor
+        applyColors()
         layer?.addSublayer(track)
         layer?.addSublayer(fill)
         layer?.addSublayer(peakMarker)
@@ -102,8 +118,24 @@ private final class AudioMeterView: NSView {
         updateDisplayLink()
     }
 
-    private static func fraction(_ db: Double) -> Double {
-        db.isFinite ? min(max((db + 60) / 60, 0), 1) : 0
+    private static func fraction(_ db: Double) -> Double { MeterScale.fraction(db) }
+
+    /// Layers hold resolved colours; they are re-resolved whenever the appearance changes.
+    private func applyColors() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            let low = Theme.Palette.meterLow.ns.cgColor
+            let mid = Theme.Palette.meterMid.ns.cgColor
+            let high = Theme.Palette.meterHigh.ns.cgColor
+            track.backgroundColor = Theme.Palette.meterOff.ns.cgColor
+            fill.colors = [low, low, mid, mid, high, high]
+            fillMask.backgroundColor = Theme.Palette.ink.ns.cgColor   // a mask: only the alpha counts
+            peakMarker.backgroundColor = Theme.Palette.ink.ns.cgColor
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyColors()
     }
 
     override func viewDidMoveToWindow() {
@@ -165,7 +197,6 @@ private final class AudioMeterView: NSView {
         CATransaction.setDisableActions(true)
         track.frame = bounds
         track.cornerRadius = bounds.height / 2
-        track.backgroundColor = NSColor.labelColor.withAlphaComponent(0.08).cgColor
         fill.frame = bounds
         fill.cornerRadius = bounds.height / 2
         fill.masksToBounds = true
