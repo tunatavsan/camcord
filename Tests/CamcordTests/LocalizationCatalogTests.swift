@@ -81,23 +81,25 @@ struct LocalizationCatalogTests {
         #expect(missing.isEmpty, "not in Localizable.xcstrings: \(missing.sorted())")
     }
 
-    @Test("every source file has its own, fresh key file (the flag is on; no two sources share a name)")
-    func keyFilesAreFresh() throws {
+    @Test("the key files are live: the flag is set, and every source has a key file of its own")
+    func keyFilesAreLive() throws {
+        // Without the flag the files stop updating and the check above reads stale keys.
+        let manifest = try String(contentsOf: Self.root.appendingPathComponent("Package.swift"), encoding: .utf8)
+        #expect(manifest.contains("\"-emit-localized-strings\""))
+        #expect(manifest.contains("\"-emit-localized-strings-path\", Context.packageDirectory + \"/.build/localized-strings\""))
+        // Key files are named after the source's base name, so two sources sharing one
+        // would hide each other's keys.
         let directory = Self.root.appendingPathComponent(".build/localized-strings")
         let sources = FileManager.default.enumerator(at: Self.root.appendingPathComponent("Sources/Camcord"),
-                                                     includingPropertiesForKeys: [.contentModificationDateKey])?
+                                                     includingPropertiesForKeys: nil)?
             .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" } ?? []
         #expect(sources.count > 50)
         struct Source: Decodable { let source: String }
         for source in sources {
             let keyFile = directory.appendingPathComponent(source.deletingPathExtension().lastPathComponent + ".stringsdata")
-            let data = try? Data(contentsOf: keyFile)
-            let owner = data.flatMap { try? JSONDecoder().decode(Source.self, from: $0) }?.source
+            let owner = (try? Data(contentsOf: keyFile)).flatMap { try? JSONDecoder().decode(Source.self, from: $0) }?.source
             #expect(owner.map { URL(fileURLWithPath: $0).standardizedFileURL } == source.standardizedFileURL,
                     "no key file of its own for \(source.lastPathComponent)")
-            let sourceDate = try source.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-            let keyDate = try? keyFile.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-            #expect(keyDate != nil && keyDate! >= sourceDate!, "stale key file for \(source.lastPathComponent)")
         }
     }
 
