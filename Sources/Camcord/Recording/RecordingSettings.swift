@@ -119,6 +119,9 @@ struct RecordingSettings: Codable, Equatable {
     /// owner last threw it, instead of guessing from the target's geometry.
     var hubDock: RecordingHubDock
 
+    /// The canvas of a window recording (region and display targets ignore it).
+    var canvasAspect: CanvasAspect
+
     init(
         systemAudio: Bool = true,
         microphone: Bool = true,
@@ -145,7 +148,8 @@ struct RecordingSettings: Codable, Equatable {
         outputDirectoryPath: String? = nil,
         filenamePrefix: String = "camcord",
         windowGlowEnabled: Bool = true,
-        hubDock: RecordingHubDock = .topCenter
+        hubDock: RecordingHubDock = .topCenter,
+        canvasAspect: CanvasAspect = .matchWindow
     ) {
         self.systemAudio = systemAudio
         self.microphone = microphone
@@ -173,6 +177,7 @@ struct RecordingSettings: Codable, Equatable {
         self.filenamePrefix = filenamePrefix
         self.windowGlowEnabled = windowGlowEnabled
         self.hubDock = hubDock
+        self.canvasAspect = canvasAspect
     }
 
     /// True when a recording will produce two separate audio tracks that should be
@@ -241,6 +246,7 @@ struct RecordingSettings: Codable, Equatable {
         filenamePrefix = try c.decodeIfPresent(String.self, forKey: .filenamePrefix) ?? d.filenamePrefix
         windowGlowEnabled = try c.decodeIfPresent(Bool.self, forKey: .windowGlowEnabled) ?? d.windowGlowEnabled
         hubDock = (try? c.decodeIfPresent(RecordingHubDock.self, forKey: .hubDock)) ?? d.hubDock
+        canvasAspect = (try? c.decodeIfPresent(CanvasAspect.self, forKey: .canvasAspect)) ?? d.canvasAspect
     }
 
     /// Applies onto `base` only the fields where `self` differs from `old` — so a whole-
@@ -275,6 +281,7 @@ struct RecordingSettings: Codable, Equatable {
         if filenamePrefix != old.filenamePrefix { r.filenamePrefix = filenamePrefix }
         if windowGlowEnabled != old.windowGlowEnabled { r.windowGlowEnabled = windowGlowEnabled }
         if hubDock != old.hubDock { r.hubDock = hubDock }
+        if canvasAspect != old.canvasAspect { r.canvasAspect = canvasAspect }
         return r
     }
 

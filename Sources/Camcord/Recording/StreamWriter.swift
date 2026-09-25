@@ -37,6 +37,9 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     private var cameraOptions: CameraOptions
     private var cameraCompositor: CameraCompositor?
     private var cameraCompositingFailed = false
+    /// A window target: the live content is re-centred in the fixed canvas every frame.
+    private let fitsWindowContent: Bool
+    private var lastFitLogged: CGRect?
     private var latestScreenSample: CMSampleBuffer?
     private let cameraIdleThreshold: CMTime
     private var lastScreenHostTime: CMTime = .invalid
@@ -99,6 +102,7 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         microphoneGainDB: Double = 0,
         cameraSource: (any CameraFrameSource)? = nil,
         cameraOptions: CameraOptions = CameraOptions(),
+        fitsWindowContent: Bool = false,
         hostTimeProvider: @escaping @Sendable () -> CMTime = {
             CMClockGetTime(CMClockGetHostTimeClock())
         }
@@ -109,6 +113,7 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         self.outputURL = outputURL
         self.cameraSource = cameraOptions.enabled ? cameraSource : nil
         self.cameraOptions = cameraOptions.resolved()
+        self.fitsWindowContent = fitsWindowContent
         self.hostTimeProvider = hostTimeProvider
         self.frameDuration = frameDuration
         systemGainDB = systemAudioGainDB.isFinite ? min(12, max(-60, systemAudioGainDB)) : 0
@@ -289,19 +294,26 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
             return false
         }
         var output = sampleBuffer
-        if cameraOptions.enabled, !cameraCompositingFailed, let camera = cameraSource?.latestFrame() {
+        let fit = fitsWindowContent ? Self.canvasFit(of: sampleBuffer) : nil
+        let camera = cameraOptions.enabled && !cameraCompositingFailed ? cameraSource?.latestFrame() : nil
+        if fit != nil || camera != nil {
+            logFitIfChanged(fit)
             do {
                 if cameraCompositor == nil { cameraCompositor = CameraCompositor() }
-                output = try cameraCompositor!.composite(screen: sampleBuffer, camera: camera, options: cameraOptions)
+                output = try cameraCompositor!.composite(screen: sampleBuffer, camera: camera,
+                                                         options: cameraOptions, fit: fit)
             } catch CameraCompositorError.poolExhausted {
                 // Encoder backpressure is temporary. Skip this video frame instead
                 // of permanently disabling the camera or flashing a camera-less frame.
                 health.video.dropped += 1
                 return false
-            } catch {
+            } catch where camera != nil {
                 cameraCompositingFailed = true
                 logger.error("Camera composition failed; screen capture continues: \(String(describing: error), privacy: .public)")
                 onCameraFailure?()
+            } catch {
+                // The fit alone failed: the frame goes out as captured rather than not at all.
+                logger.error("Canvas fit failed: \(String(describing: error), privacy: .public)")
             }
         }
         if let stageSink {
@@ -319,6 +331,34 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         } else {
             health.video.dropped += 1
             return false
+        }
+    }
+
+    /// Where the live window content sits in this frame's buffer, or nil when it already
+    /// fills the canvas (nothing to do, and nothing rendered).
+    static func canvasFit(of sampleBuffer: CMSampleBuffer) -> CanvasFit? {
+        guard
+            let pixels = CMSampleBufferGetImageBuffer(sampleBuffer),
+            let attachments = (CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
+                as? [[SCStreamFrameInfo: Any]])?.first,
+            let rectDictionary = attachments[.contentRect] as? NSDictionary,
+            let contentRect = CGRect(dictionaryRepresentation: rectDictionary as CFDictionary)
+        else { return nil }
+        let scale = (attachments[.scaleFactor] as? NSNumber).map { CGFloat($0.doubleValue) } ?? 1
+        let canvas = CGSize(width: CVPixelBufferGetWidth(pixels), height: CVPixelBufferGetHeight(pixels))
+        let fit = CanvasFit(canvas: canvas, contentRect: contentRect, scaleFactor: scale)
+        return fit.isPassThrough ? nil : fit
+    }
+
+    /// One line per change of the content rect, not per frame.
+    private func logFitIfChanged(_ fit: CanvasFit?) {
+        let content = fit?.content ?? .null
+        guard content != lastFitLogged else { return }
+        lastFitLogged = content
+        if let fit {
+            logger.info("canvas fit: content=\(String(describing: fit.content), privacy: .public) fitted=\(String(describing: fit.fitted), privacy: .public) canvas=\(Int(fit.canvas.width))x\(Int(fit.canvas.height))")
+        } else {
+            logger.info("canvas fit: content fills the canvas")
         }
     }
 

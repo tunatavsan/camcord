@@ -19,6 +19,10 @@ final class RecordingEngine: NSObject {
         case region(RegionClamp.Result, SCDisplay, excluding: SCRunningApplication?)
         case window(SCWindow)
         case display(SCDisplay, scale: CGFloat, excluding: SCRunningApplication?)
+
+        var isWindow: Bool {
+            if case .window = self { true } else { false }
+        }
     }
 
     private let logger = Logger(subsystem: "dev.tavsan.camcord", category: "recording-engine")
@@ -191,7 +195,8 @@ final class RecordingEngine: NSObject {
             codec: codec,
             frameDuration: frameDuration,
             resolutionScale: settings.resolutionScale,
-            dynamicRange: settings.dynamicRange
+            dynamicRange: settings.dynamicRange,
+            canvasAspect: settings.canvasAspect
         )
 
         configuration.showsCursor = settings.showsCursor
@@ -235,7 +240,8 @@ final class RecordingEngine: NSObject {
             systemAudioGainDB: settings.resolvedSystemAudioGainDB,
             microphoneGainDB: settings.resolvedMicrophoneGainDB,
             cameraSource: cameraSource,
-            cameraOptions: settings.camera
+            cameraOptions: settings.camera,
+            fitsWindowContent: target.isWindow
         )
 
         let token = UUID()
@@ -344,7 +350,8 @@ final class RecordingEngine: NSObject {
         codec: VideoCodecChoice,
         frameDuration: CMTime,
         resolutionScale: ResolutionScale,
-        dynamicRange: DynamicRange
+        dynamicRange: DynamicRange,
+        canvasAspect: CanvasAspect
     ) -> (SCContentFilter, SCStreamConfiguration, Int, Int) {
         let configuration: SCStreamConfiguration
         if dynamicRange == .hdr && codec != .h264 {
@@ -412,14 +419,21 @@ final class RecordingEngine: NSObject {
             let physicalWidth = filter.contentRect.width * effectiveScale
             let physicalHeight = filter.contentRect.height * effectiveScale
 
+            let windowPixels: CGSize
+            let displayPixels: CGSize
             if resolutionScale == .native {
-                pixelWidth = RegionClamp.evenFloor(physicalWidth)
-                pixelHeight = RegionClamp.evenFloor(physicalHeight)
+                windowPixels = CGSize(width: physicalWidth, height: physicalHeight)
+                displayPixels = CGSize(width: (screen?.frame.width ?? 0) * screenBackingScale,
+                                       height: (screen?.frame.height ?? 0) * screenBackingScale)
             } else {
                 let logicalScale = isDoubleScaledBug ? screenBackingScale : CGFloat(filter.pointPixelScale)
-                pixelWidth = RegionClamp.evenFloor(physicalWidth / logicalScale)
-                pixelHeight = RegionClamp.evenFloor(physicalHeight / logicalScale)
+                windowPixels = CGSize(width: physicalWidth / logicalScale, height: physicalHeight / logicalScale)
+                displayPixels = screen?.frame.size ?? .zero
             }
+            // The canvas is fixed here for the whole file. StreamWriter re-centres the
+            // live content in it every frame (CanvasFit), so a resized window never
+            // leaves black in the file.
+            (pixelWidth, pixelHeight) = canvasAspect.canvasSize(window: windowPixels, display: displayPixels)
 
         case .display(let display, let scale, let excluding):
             let apps = excluding.map { [$0] } ?? []

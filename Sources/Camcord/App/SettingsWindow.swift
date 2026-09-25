@@ -438,6 +438,14 @@ struct RecordingSettingsView: View {
                 }
                 Toggle("Oyunda 1080p kaydet", isOn: $settings.gameModeScale)
                     .help("Tam ekran bir oyun kaydedilirken çözünürlük yarıya iner; kare hızı ve codec değişmez.")
+                // New copy is English-first (docs/RUN-UI-1.md K2); Turkish comes from
+                // Localizable.xcstrings.
+                Picker("Canvas", selection: $settings.canvasAspect) {
+                    ForEach(CanvasAspect.allCases, id: \.self) { aspect in
+                        Text(verbatim: aspect.title).tag(aspect)
+                    }
+                }
+                .help(Text("Window recordings: the file keeps this shape; a resized window is centred on a blurred backdrop."))
                 Picker("Dinamik Aralık", selection: $settings.dynamicRange) {
                     Text("SDR (Standart) · uyumlu").tag(DynamicRange.sdr)
                     Text("HDR (Geniş Renk) · 10-bit").tag(DynamicRange.hdr)
