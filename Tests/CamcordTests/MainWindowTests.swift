@@ -70,7 +70,7 @@ struct MainWindowTests {
         #expect(DockIconMode.load(from: defaults) == .whileWindowOpen)
     }
 
-    @Test("the registry: every module once, in order, grouped by section; Edit is Soon")
+    @Test("the registry: every module once, in order, grouped by section; Edit is a page tagged Later")
     func registry() {
         #expect(ModuleRegistry.all.map(\.id) == [.library, .studio, .edit, .settings])
         #expect(Set(ModuleRegistry.all.map(\.id)) == Set(ModuleID.allCases))
@@ -78,15 +78,48 @@ struct MainWindowTests {
         #expect(ModuleRegistry.modules(in: .capture).map(\.id) == [.library, .studio])
         #expect(ModuleRegistry.modules(in: .create).map(\.id) == [.edit])
         #expect(ModuleRegistry.modules(in: .app).map(\.id) == [.settings])
-        #expect(ModuleRegistry.module(.edit)?.isAvailable == false)
-        #expect(ModuleRegistry.all.filter(\.isAvailable).map(\.id) == [.library, .studio, .settings])
+        #expect(ModuleRegistry.all.allSatisfy { $0.isAvailable })
+        #expect((ModuleRegistry.module(.edit) as? any ModuleBadging)?.badge?.key == "Later")
+        #expect(ModuleRegistry.all.compactMap { ($0 as? any ModuleBadging)?.badge }.count == 1)
         #expect(ModuleSection.capture < .create && ModuleSection.create < .app)
+        #expect(ModuleSection.capture.title == nil)
+        #expect(ModuleSection.create.title?.key == "Create" && ModuleSection.app.title?.key == "App")
         for module in ModuleRegistry.all {
             #expect(NSImage(systemSymbolName: module.symbol, accessibilityDescription: nil) != nil, "\(module.symbol)")
         }
     }
 
-    @Test("the last selected module comes back; an unavailable or unknown one falls back to Library")
+    @Test("⌘1…⌘4 follow the sidebar, in the View menu and on the rows")
+    func moduleShortcuts() throws {
+        #expect(ModuleRegistry.all.map { ModuleShortcut.label(for: $0.id) } == ["⌘1", "⌘2", "⌘3", "⌘4"])
+        final class Target: NSObject { @objc func go(_ sender: Any?) {} }
+        let target = Target()
+        let menu = try #require(AppMenus.viewMenuItem(target: target, action: #selector(Target.go(_:))).submenu)
+        #expect(menu.items.map(\.keyEquivalent) == ["1", "2", "3", "4"])
+        #expect(menu.items.compactMap { $0.representedObject as? String } == ["library", "studio", "edit", "settings"])
+        #expect(menu.items.allSatisfy { $0.target === target && $0.keyEquivalentModifierMask == .command })
+    }
+
+    @Test("a capture from the window steps the window out of the way, then brings it back")
+    func stepAside() async throws {
+        _ = NSApplication.shared
+        let defaults = try freshDefaults()
+        let controller = MainWindowController(defaults: defaults, dock: DockController(defaults: defaults) { _ in }) {
+            $0.orderFront(nil)
+        }
+        controller.show(activate: false)
+        let window = try #require(controller.windowForTesting)
+        window.orderFront(nil)
+        #expect(window.isVisible)
+        var visibleDuringWork: Bool?
+        await controller.stepAside { visibleDuringWork = window.isVisible }
+        #expect(visibleDuringWork == false)
+        #expect(window.isVisible)
+        window.setFrameAutosaveName("")
+        window.close()
+    }
+
+    @Test("the last selected module comes back; an unknown one falls back to Library")
     func selectionPersistence() throws {
         let defaults = try freshDefaults()
         #expect(ModuleSelection.load(from: defaults) == .library)
@@ -95,7 +128,7 @@ struct MainWindowTests {
         ModuleSelection.save(.settings, to: defaults)
         #expect(ModuleSelection.load(from: defaults) == .settings)
         ModuleSelection.save(.edit, to: defaults)
-        #expect(ModuleSelection.load(from: defaults) == .library)
+        #expect(ModuleSelection.load(from: defaults) == .edit)
         defaults.set("timeline", forKey: ModuleSelection.defaultsKey)
         #expect(ModuleSelection.load(from: defaults) == .library)
     }

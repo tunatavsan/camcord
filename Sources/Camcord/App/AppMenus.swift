@@ -30,4 +30,21 @@ enum AppMenus {
         item.submenu = menu
         return item
     }
+
+    /// ⌘1…⌘4: the main window's modules, in sidebar order (K1). Each item carries its module's
+    /// id; `action` on `target` opens the window on it.
+    static func viewMenuItem(target: AnyObject, action: Selector) -> NSMenuItem {
+        let item = NSMenuItem()
+        let menu = NSMenu(title: String(localized: "View", comment: "Menu title"))
+        for module in ModuleRegistry.all {
+            guard let index = ModuleShortcut.index(of: module.id) else { continue }
+            let entry = menu.addItem(withTitle: String(localized: module.title), action: action,
+                                     keyEquivalent: "\(index)")
+            entry.target = target
+            entry.representedObject = module.id.rawValue
+            entry.image = NSImage(systemSymbolName: module.symbol, accessibilityDescription: nil)
+        }
+        item.submenu = menu
+        return item
+    }
 }

@@ -22,6 +22,36 @@ final class AppServices {
         self.eventTapEngine = eventTapEngine
         self.recordingState = recordingState
     }
+
+    /// The main window, so a capture started from it can step the window aside.
+    weak var mainWindow: MainWindowController?
+
+    /// Starts a capture from the main window: the window steps aside, the capture runs through
+    /// the coordinator's own entry point, the window comes back.
+    func capture(_ kind: CaptureKind) {
+        let coordinator = coordinator
+        Task { @MainActor [weak self] in
+            await self?.stepAside { await kind.perform(with: coordinator) }
+        }
+    }
+
+    /// Record from the main window: a stop happens in place; a start steps the window aside for
+    /// the target picker, as the hotkey does.
+    func toggleRecording() {
+        let controller = recordingController
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if controller.isBusy {
+                await controller.toggleRecording()
+            } else {
+                await self.stepAside { await controller.toggleRecording() }
+            }
+        }
+    }
+
+    private func stepAside(_ work: @MainActor () async -> Void) async {
+        if let mainWindow { await mainWindow.stepAside(during: work) } else { await work() }
+    }
 }
 
 extension EnvironmentValues {

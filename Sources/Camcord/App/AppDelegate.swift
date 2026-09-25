@@ -61,12 +61,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let recordingStateModel = RecordingStateModel()
         self.recordingStateModel = recordingStateModel
-        mainWindowController = MainWindowController(dock: dockController, services: AppServices(
+        let services = AppServices(
             coordinator: coordinator,
             recordingController: recordingController,
             eventTapEngine: eventTapEngine,
             recordingState: recordingStateModel
-        ))
+        )
+        let mainWindowController = MainWindowController(dock: dockController, services: services)
+        services.mainWindow = mainWindowController
+        self.mainWindowController = mainWindowController
 
         recordingController.onUIChange = { [weak self, weak statusItemController, weak recordingStateModel] state, elapsed in
             statusItemController?.setRecordingUI(state, elapsed: elapsed)
@@ -238,10 +241,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applicationItem.submenu = applicationMenu
         menu.addItem(applicationItem)
         menu.addItem(AppMenus.editingMenuItem())
+        menu.addItem(AppMenus.viewMenuItem(target: self, action: #selector(showModule(_:))))
         let windowMenu = AppMenus.windowMenuItem()
         menu.addItem(windowMenu)
         NSApp.windowsMenu = windowMenu.submenu
         NSApp.mainMenu = menu
+    }
+
+    /// View › Library / Studio / Edit / Settings (⌘1…⌘4).
+    @objc private func showModule(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let id = ModuleID(rawValue: raw) else { return }
+        panelController?.close()
+        mainWindowController?.show(module: id)
     }
 
     @objc private func showSettings(_ sender: Any?) {

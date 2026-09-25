@@ -37,6 +37,24 @@
         }
       }
     },
+    "App": {
+      "comment": "Sidebar section: the app itself",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama"
+          }
+        }
+      }
+    },
     "Auto": {
       "comment": "Camera format: Camcord chooses",
       "extractionState": "manual",
@@ -199,6 +217,24 @@
         }
       }
     },
+    "Create": {
+      "comment": "Sidebar section: making things from captures",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Oluştur"
+          }
+        }
+      }
+    },
     "Dock icon": {
       "comment": "General setting: when Camcord shows a Dock icon",
       "extractionState": "manual",
@@ -249,6 +285,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Düzenle"
+          }
+        }
+      }
+    },
+    "Edit comes after 1.0": {
+      "comment": "Edit page title",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit comes after 1.0"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Düzenleme 1.0'dan sonra geliyor"
           }
         }
       }
@@ -415,24 +469,6 @@
         }
       }
     },
-    "Not available yet": {
-      "comment": "Accessibility hint on a module marked Soon",
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Not available yet"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Henüz kullanılamıyor"
-          }
-        }
-      }
-    },
     "Not set": {
       "comment": "A capture with no keyboard shortcut assigned",
       "extractionState": "manual",
@@ -483,6 +519,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Camcord'u Aç"
+          }
+        }
+      }
+    },
+    "Open Preview": {
+      "comment": "Button on the Edit page",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Preview"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önizleme'yi aç"
+          }
+        }
+      }
+    },
+    "Open QuickTime Player": {
+      "comment": "Button on the Edit page",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open QuickTime Player"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "QuickTime Player'ı aç"
           }
         }
       }
@@ -649,24 +721,6 @@
         }
       }
     },
-    "Soon": {
-      "comment": "Badge on a main-window module that is not available yet",
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Soon"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Yakında"
-          }
-        }
-      }
-    },
     "Start a scroll capture": {
       "comment": "Action: start a scroll capture",
       "extractionState": "manual",
@@ -775,20 +829,38 @@
         }
       }
     },
-    "Trimming and editing are coming later.": {
-      "comment": "Edit empty state",
+    "Trimming and annotation are next. Until then, trim a recording in QuickTime Player and mark up a screenshot in Preview.": {
+      "comment": "Edit page: what to use today",
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Trimming and editing are coming later."
+            "value": "Trimming and annotation are next. Until then, trim a recording in QuickTime Player and mark up a screenshot in Preview."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Kırpma ve düzenleme daha sonra geliyor."
+            "value": "Sırada kırpma ve not ekleme var. O zamana kadar kayıtları QuickTime Player'da kırpabilir, ekran görüntülerini Önizleme'de işaretleyebilirsin."
+          }
+        }
+      }
+    },
+    "View": {
+      "comment": "Menu title",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "View"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Görüntü"
           }
         }
       }
@@ -843,24 +915,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Pencere kayıtları: dosya bu biçimde kalır; yeniden boyutlanan pencere bulanık bir arka planın ortasına yerleşir."
-          }
-        }
-      }
-    },
-    "Your screenshots, scroll captures and recordings will appear here.": {
-      "comment": "Library empty state",
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Your screenshots, scroll captures and recordings will appear here."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ekran görüntülerin, kaydırmalı çekimlerin ve kayıtların burada görünecek."
           }
         }
       }
