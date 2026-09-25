@@ -48,10 +48,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let dockController = DockController()
         self.dockController = dockController
         dockController.apply()
-        mainWindowController = MainWindowController(dock: dockController)
-        SettingsModule.content = {
-            AnyView(SettingsRootView(eventTapEngine: eventTapEngine, defaultsSuite: .standard))
-        }
         installMainMenu()
 
         let statusItemController = StatusItemController(
@@ -64,6 +60,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let recordingStateModel = RecordingStateModel()
         self.recordingStateModel = recordingStateModel
+        mainWindowController = MainWindowController(dock: dockController, services: AppServices(
+            coordinator: coordinator,
+            recordingController: recordingController,
+            eventTapEngine: eventTapEngine,
+            recordingState: recordingStateModel
+        ))
 
         recordingController.onUIChange = { [weak self, weak statusItemController, weak recordingStateModel] state, elapsed in
             statusItemController?.setRecordingUI(state, elapsed: elapsed)

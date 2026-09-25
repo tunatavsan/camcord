@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import Testing
 
 @testable import Camcord
@@ -149,5 +150,44 @@ struct MainWindowTests {
         #expect(monitor.isObserved)
         monitor.setVisible(false, owner: module)
         #expect(!monitor.isObserved)
+    }
+
+    /// The pixels of `view` rendered offscreen at 1×.
+    private func pixels(_ view: some View) throws -> Data {
+        let host = NSHostingView(rootView: view)
+        host.frame = CGRect(x: 0, y: 0, width: 720, height: 480)
+        host.layoutSubtreeIfNeeded()
+        let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+        return try #require(rep.tiffRepresentation)
+    }
+
+    @Test("the Settings module renders the real settings from the environment's services, the placeholder without")
+    func settingsModuleUsesTheEnvironment() throws {
+        _ = NSApplication.shared
+        let defaults = try freshDefaults()
+        let coordinator = CaptureCoordinator()
+        let recording = RecordingController(coordinator: coordinator)
+        let engine = EventTapEngine(
+            coordinator: coordinator, recordingController: recording,
+            bindings: TapBindings(mouseButton3: nil, mouseButton4: nil, mouseButton5: nil, doubleTapRightCommand: nil),
+            buttonIsDown: { _ in false }
+        )
+        let services = AppServices(defaults: defaults, coordinator: coordinator, recordingController: recording,
+                                   eventTapEngine: engine, recordingState: RecordingStateModel())
+        let module = SettingsModule()
+        let bare = try pixels(module.makeView())
+        let placeholder = try pixels(ModulePlaceholder(
+            symbol: module.symbol, title: module.title,
+            message: LocalizedStringResource("Settings are loading.", comment: "Settings placeholder")))
+        let real = try pixels(module.makeView().environment(\.appServices, services))
+        #expect(bare == placeholder)
+        #expect(real != placeholder)
+
+        // The window hands its services down to whichever module it shows.
+        ModuleSelection.save(.settings, to: defaults)
+        let windowWithout = try pixels(MainWindowView(defaults: defaults))
+        let windowWith = try pixels(MainWindowView(defaults: defaults, services: services))
+        #expect(windowWithout != windowWith)
     }
 }

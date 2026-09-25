@@ -5,10 +5,12 @@ import SwiftUI
 /// Visual-neutral in this run — the system's own split view, sidebar and empty states.
 struct MainWindowView: View {
     let defaults: UserDefaults
+    let services: AppServices?
     @State private var selection: ModuleID
 
-    init(defaults: UserDefaults) {
+    init(defaults: UserDefaults, services: AppServices? = nil) {
         self.defaults = defaults
+        self.services = services
         _selection = State(initialValue: ModuleSelection.load(from: defaults))
     }
 
@@ -33,6 +35,7 @@ struct MainWindowView: View {
         }
         .onChange(of: selection) { _, id in ModuleSelection.save(id, to: defaults) }
         .frame(minWidth: 760, minHeight: 520)
+        .environment(\.appServices, services)
     }
 }
 
@@ -62,13 +65,15 @@ final class MainWindowController: NSObject, NSWindowDelegate {
 
     private let defaults: UserDefaults
     private let dock: DockController
+    private let services: AppServices?
     private let present: @MainActor (NSWindow) -> Void
     private var window: NSWindow?
 
-    init(defaults: UserDefaults = .standard, dock: DockController,
+    init(defaults: UserDefaults = .standard, dock: DockController, services: AppServices? = nil,
          present: (@MainActor (NSWindow) -> Void)? = nil) {
         self.defaults = defaults
         self.dock = dock
+        self.services = services
         self.present = present ?? { window in
             NSApp.activate()
             window.makeKeyAndOrderFront(nil)
@@ -92,7 +97,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     /// controller's view, so the frame the owner left is put back afterwards.
     private func installContent(in window: NSWindow) {
         let frame = window.frame
-        window.contentViewController = NSHostingController(rootView: MainWindowView(defaults: defaults))
+        window.contentViewController = NSHostingController(rootView: MainWindowView(defaults: defaults, services: services))
         window.setFrame(frame, display: false)
     }
 

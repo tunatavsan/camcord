@@ -53,11 +53,9 @@ struct EditModule: CamcordModule {
     }
 }
 
-/// Settings inside the window: the existing Settings content, embedded. `content` is set at
-/// launch, when the event-tap engine it needs exists; until then a placeholder shows.
+/// Settings inside the window: the existing Settings content, embedded. Its services come
+/// from the environment (`AppServices`), so it renders the real thing wherever they are.
 struct SettingsModule: CamcordModule {
-    @MainActor static var content: (() -> AnyView)?
-
     let id = ModuleID.settings
     let title = LocalizedStringResource("Settings", comment: "Main window module")
     let symbol = "gearshape"
@@ -65,11 +63,25 @@ struct SettingsModule: CamcordModule {
     let isAvailable = true
 
     func makeView() -> AnyView {
-        Self.content?() ?? AnyView(ModulePlaceholder(
-            symbol: symbol,
-            title: title,
-            message: LocalizedStringResource("Settings are loading.", comment: "Settings placeholder")
-        ))
+        AnyView(SettingsModuleView(symbol: symbol, title: title))
+    }
+}
+
+private struct SettingsModuleView: View {
+    let symbol: String
+    let title: LocalizedStringResource
+    @Environment(\.appServices) private var services
+
+    var body: some View {
+        if let services {
+            SettingsRootView(eventTapEngine: services.eventTapEngine, defaultsSuite: services.defaults)
+        } else {
+            ModulePlaceholder(
+                symbol: symbol,
+                title: title,
+                message: LocalizedStringResource("Settings are loading.", comment: "Settings placeholder")
+            )
+        }
     }
 }
 
