@@ -39,6 +39,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     var onPrimaryClick: (() -> Void)?
     var onShowPanel: (() -> Void)?
     var onOpenMainWindow: (() -> Void)?
+    var onOpenDesignLab: (() -> Void)?
 
     /// Anchor for the popover panel.
     var anchorButton: NSStatusBarButton? { statusItem.button }
@@ -170,6 +171,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         settingsItem.action = #selector(openSettings)
         settingsItem.keyEquivalentModifierMask = .command
         menu.addItem(settingsItem)
+        // Hidden: replaces Settings while ⌥ is held (RUN UI-1 C2's native glass spike).
+        let designLabItem = NSMenuItem(title: "Design Lab…", action: #selector(openDesignLab), keyEquivalent: ",")
+        designLabItem.keyEquivalentModifierMask = [.command, .option]
+        designLabItem.isAlternate = true
+        designLabItem.target = self
+        menu.addItem(designLabItem)
 
         let quitItem = NSMenuItem(title: "Camcord'dan Çık", action: #selector(quit), keyEquivalent: "q")
         quitItem.keyEquivalentModifierMask = .command
@@ -534,6 +541,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     @objc private func tapStatusClicked() {
         guard !AccessibilityPermission.isTrusted() else { return }
         AccessibilityPermission.requestAccess()
+    }
+
+    @objc private func openDesignLab() {
+        onOpenDesignLab?()
     }
 
     @objc private func openMainWindow() {

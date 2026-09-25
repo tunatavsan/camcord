@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var servicesProvider: ServicesProvider?
     private var dockController: DockController?
     private var mainWindowController: MainWindowController?
+    private let designLab = DesignLabWindowController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Warm the feedback-sound cache so the first cue has zero setup latency.
@@ -164,6 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.panelController = panelController
 
         statusItemController.onOpenMainWindow = { [weak self] in self?.showMainWindow() }
+        statusItemController.onOpenDesignLab = { [weak self] in self?.designLab.show() }
         statusItemController.onShowPanel = { [weak panelController, weak statusItemController] in
             guard let button = statusItemController?.anchorButton else { return }
             panelController?.present(relativeTo: button)
