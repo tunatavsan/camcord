@@ -83,12 +83,14 @@ final class StudioSession {
             self.layerSnapshot = snapshot
             self.controller.updateStudioLayers(snapshot)
         }
+        // Combine can invoke a sink on its publisher's thread. These Sendable callbacks
+        // stay nonisolated; only the explicit MainActor tasks read or change session state.
         stateObservation = recordingState.$state.combineLatest(recordingState.$isStarting, recordingState.$isFinishing)
-            .sink { [weak self] _ in
+            .sink { @Sendable [weak self] _ in
                 Task { @MainActor [weak self] in await self?.recordingStateChanged() }
             }
         microphoneObservation = microphoneMonitor.$activeOwner.combineLatest(microphoneMonitor.$recordingLocked)
-            .sink { [weak self] _, locked in
+            .sink { @Sendable [weak self] _, locked in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     if locked || !self.microphoneMonitor.owns(self.microphoneOwner) { self.microphoneTestRequested = false }
@@ -96,7 +98,7 @@ final class StudioSession {
             }
         settingsObservation = NotificationCenter.default.publisher(for: RecordingSettings.didChangeNotification)
             .merge(with: NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification))
-            .sink { [weak self] _ in
+            .sink { @Sendable [weak self] _ in
                 Task { @MainActor [weak self] in
                     guard let self, self.visibility.allowsPreview else { return }
                     self.acceptSettings(RecordingSettings.load(from: self.defaults))
@@ -208,12 +210,13 @@ final class StudioSession {
 
     func selectRegion(_ cgRect: CGRect, displayID: CGDirectDisplayID) async {
         guard !controller.isBusy, cgRect.origin.x.isFinite, cgRect.origin.y.isFinite,
-              cgRect.width.isFinite, cgRect.height.isFinite, cgRect.width > 1, cgRect.height > 1 else { return }
+              cgRect.size.width.isFinite, cgRect.size.height.isFinite,
+              cgRect.size.width > 1, cgRect.size.height > 1 else { return }
         let token = sourceGeneration
         do {
             let content = try await operations.content(true)
-            guard !Task.isCancelled, sourceGeneration == token, !controller.isBusy,
-                  let display = content.displays.first(where: { $0.displayID == displayID }),
+            guard !Task.isCancelled, sourceGeneration == token, !controller.isBusy else { return }
+            guard let display = content.displays.first(where: { $0.displayID == displayID }),
                   let clamp = RegionClamp.clamp(region: cgRect, displays: [.init(frame: display.frame,
                                                                                scale: StudioSourceResolver.scale(display))]),
                   clamp.pixelWidth >= 2, clamp.pixelHeight >= 2 else { issue = .sourceUnavailable; return }
@@ -221,7 +224,11 @@ final class StudioSession {
             selectSource(StudioSourceChoice(id: .region(displayID), title: String(localized: "Region", comment: "Studio selected source"),
                                            frame: clamp.clampedRegion,
                                            pixelSize: StudioSourceResolver.pixelSize(of: target, settings: settings)))
-        } catch { if sourceGeneration == token { issue = .sourceUnavailable } }
+        } catch {
+            guard !Task.isCancelled, !(error is CancellationError), sourceGeneration == token,
+                  !controller.isBusy else { return }
+            issue = .sourceUnavailable
+        }
     }
 
     func clearSource() {

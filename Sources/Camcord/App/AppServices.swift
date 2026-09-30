@@ -49,6 +49,9 @@ final class AppServices {
     /// The main window, so a capture started from it can step the window aside.
     weak var mainWindow: MainWindowController?
 
+    lazy var studioPicker = StudioSourcePicker(session: studioSession, coordinator: coordinator,
+                                              mainWindow: { [weak self] in self?.mainWindow })
+
     /// Starts a capture from the main window: the window steps aside, the capture runs through
     /// the coordinator's own entry point, the window comes back.
     func capture(_ kind: CaptureKind) {

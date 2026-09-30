@@ -92,12 +92,7 @@ struct StudioModule: CamcordModule {
     let isAvailable = true
 
     func makeView() -> AnyView {
-        AnyView(ModulePlaceholder(
-            symbol: symbol,
-            title: title,
-            message: LocalizedStringResource("Set up one source, your camera and your audio before you record.",
-                                             comment: "Studio empty state")
-        ))
+        AnyView(StudioView())
     }
 }
 

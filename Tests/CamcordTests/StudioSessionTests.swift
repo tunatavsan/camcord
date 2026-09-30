@@ -1,11 +1,17 @@
 import AppKit
 import Foundation
+import Observation
+@preconcurrency import ScreenCaptureKit
 import Testing
 import os
 @testable import Camcord
 
 @MainActor @Suite("Studio session intent and shared settings")
 struct StudioSessionTests {
+    enum RegionCompletion: CaseIterable, Sendable {
+        case cancelledTask, cancellationError, supersededSource, currentFailure
+    }
+    private struct RegionProviderFailure: Error {}
     private final class Probe: MicrophoneProbe, @unchecked Sendable {
         private let state = OSAllocatedUnfairLock(initialState: 0)
         let levels: AudioLevels
@@ -49,7 +55,8 @@ struct StudioSessionTests {
     func primedDocument() async throws {
         let document = StudioLayerDocument()
         document.addText("Primed")
-        try await wait { !document.isRasterizing }
+        await rasterCompletion(document)
+        try #require(document.isReady && !document.isRasterizing && document.issue == nil)
         let defaults = try isolatedDefaults(), coordinator = CaptureCoordinator()
         let controller = RecordingController(coordinator: coordinator, defaults: defaults)
         let session = StudioSession(defaults: defaults, controller: controller, recordingState: .init(), coordinator: coordinator,
@@ -135,6 +142,39 @@ struct StudioSessionTests {
         #expect(cameraCalls == 0 && microphoneCalls == 0)
     }
 
+    @Test("background settings notifications safely enter a live hidden or visible session",
+          arguments: [false, true], [false, true])
+    func backgroundSettingsNotification(visible: Bool, defaultsNotification: Bool) async throws {
+        let defaults = try isolatedDefaults(), coordinator = CaptureCoordinator()
+        let controller = RecordingController(coordinator: coordinator, defaults: defaults)
+        var sourceCalls = 0, cameraCalls = 0, microphoneCalls = 0
+        let camera = CameraPreviewMonitor(operations: .init(authorize: { _ in cameraCalls += 1; return false }))
+        let microphone = MicrophoneMonitor(operations: .init(authorize: { microphoneCalls += 1; return false }))
+        let session = StudioSession(defaults: defaults, controller: controller, recordingState: .init(), coordinator: coordinator,
+                                    microphoneMonitor: microphone, cameraMonitor: camera,
+                                    operations: .init(screenCaptureAuthorized: { true }, content: { _ in
+                                        sourceCalls += 1
+                                        throw CancellationError()
+                                    }))
+        if visible { session.setVisibility(moduleVisible: true, windowAllowsPreview: true, captureTransition: false) }
+        let initial = session.settings
+        var changed = initial
+        changed.microphoneDeviceID = "BackgroundInput"
+        defaults.set(try JSONEncoder().encode(changed), forKey: RecordingSettings.defaultsKey)
+        let name = defaultsNotification ? UserDefaults.didChangeNotification : RecordingSettings.didChangeNotification
+        // Detached work deliberately exercises NotificationCenter's arbitrary posting thread.
+        let postedOffMain = await Task.detached { Self.postNotification(name) }.value
+        #expect(postedOffMain)
+        if visible { try await wait { session.settings.microphoneDeviceID == "BackgroundInput" } }
+        else {
+            await Task.yield()
+            #expect(session.settings == initial)
+        }
+        #expect(sourceCalls == 0 && cameraCalls == 0 && microphoneCalls == 0)
+        #expect(session.selectedSource == nil && session.stageImage == nil)
+        await session.releaseVisibleResources()
+    }
+
     @Test("the current document readiness gates the shared controller and an empty document restores it")
     func documentAuthority() async throws {
         let defaults = try isolatedDefaults(), coordinator = CaptureCoordinator()
@@ -149,7 +189,8 @@ struct StudioSessionTests {
         document.addText("Failed current text")
         let pending = await controller.performPreparedStart(countdownSeconds: 0, screenFrame: .zero) { calls += 1; return true }
         #expect(!pending && calls == 0)
-        try await wait { !document.isRasterizing }
+        await rasterCompletion(document)
+        #expect(document.issue == .imageTooLarge && !document.isReady)
         document.dismissIssue()
         let failed = await controller.performPreparedStart(countdownSeconds: 0, screenFrame: .zero) { calls += 1; return true }
         #expect(!failed && calls == 0)
@@ -157,6 +198,79 @@ struct StudioSessionTests {
         #expect(await controller.performPreparedStart(countdownSeconds: 0, screenFrame: .zero) { calls += 1; return true })
         #expect(calls == 1)
         await session.releaseVisibleResources()
+    }
+
+    @Test("region selection ignores cancelled or superseded inner provider failures but reports current errors",
+          arguments: RegionCompletion.allCases)
+    func regionProviderCompletion(completion: RegionCompletion) async throws {
+        let defaults = try isolatedDefaults(), coordinator = CaptureCoordinator()
+        let controller = RecordingController(coordinator: coordinator, defaults: defaults)
+        var pending: CheckedContinuation<SCShareableContent, any Error>?
+        var providerCalls = 0
+        let session = StudioSession(defaults: defaults, controller: controller, recordingState: .init(), coordinator: coordinator,
+                                    operations: .init(screenCaptureAuthorized: { true }, content: { refresh in
+                                        #expect(refresh)
+                                        providerCalls += 1
+                                        return try await withCheckedThrowingContinuation { pending = $0 }
+                                    }))
+        let original = StudioSourceChoice(id: .window(1), title: "Original", frame: CGRect(x: 0, y: 0, width: 80, height: 48),
+                                          pixelSize: CGSize(width: 80, height: 48))
+        let replacement = StudioSourceChoice(id: .window(2), title: "Replacement", frame: CGRect(x: 0, y: 0, width: 96, height: 60),
+                                             pixelSize: CGSize(width: 96, height: 60))
+        // Source values alone do not construct SCK objects or start hidden preview capture.
+        session.selectSource(original)
+        let request = Task { await session.selectRegion(CGRect(x: 10, y: 10, width: 40, height: 30), displayID: 1) }
+        defer {
+            request.cancel()
+            pending?.resume(throwing: CancellationError())
+        }
+        try await wait { pending != nil }
+        if completion == .cancelledTask { request.cancel() }
+        if completion == .supersededSource { session.selectSource(replacement) }
+        let provider = try #require(pending)
+        pending = nil
+        if completion == .cancellationError { provider.resume(throwing: CancellationError()) }
+        else { provider.resume(throwing: RegionProviderFailure()) }
+        await request.value
+        #expect(providerCalls == 1)
+        #expect(session.selectedSource == (completion == .supersededSource ? replacement : original))
+        #expect(session.issue == (completion == .currentFailure ? .sourceUnavailable : nil))
+        #expect(session.stageImage == nil)
+        await session.releaseVisibleResources()
+    }
+
+    @Test("negative raw region dimensions are rejected before content lookup", arguments: [true, false])
+    func invalidRegionDimensions(negativeWidth: Bool) async throws {
+        let defaults = try isolatedDefaults(), coordinator = CaptureCoordinator()
+        let controller = RecordingController(coordinator: coordinator, defaults: defaults)
+        var providerCalls = 0
+        let session = StudioSession(defaults: defaults, controller: controller, recordingState: .init(), coordinator: coordinator,
+                                    operations: .init(content: { _ in
+                                        providerCalls += 1
+                                        throw RegionProviderFailure()
+                                    }))
+        let rect = CGRect(x: 40, y: 40, width: negativeWidth ? -20 : 20, height: negativeWidth ? 20 : -20)
+        await session.selectRegion(rect, displayID: 1)
+        #expect(providerCalls == 0)
+        #expect(session.issue == nil && session.selectedSource == nil)
+        await session.releaseVisibleResources()
+    }
+
+    nonisolated private static func postNotification(_ name: Notification.Name) -> Bool {
+        let offMain = !Thread.isMainThread
+        NotificationCenter.default.post(name: name, object: nil)
+        return offMain
+    }
+
+    private func rasterCompletion(_ document: StudioLayerDocument) async {
+        await withCheckedContinuation { continuation in
+            guard document.isRasterizing else { continuation.resume(); return }
+            // Both successful and failed renders settle this actual observed property.
+            withObservationTracking { _ = document.isRasterizing } onChange: {
+                // Observation fires before the value changes; resume after that actor turn.
+                Task { @MainActor in continuation.resume() }
+            }
+        }
     }
 
     private func isolatedDefaults() throws -> UserDefaults {

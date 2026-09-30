@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import ImageIO
+import Observation
 import Testing
 import UniformTypeIdentifiers
 import os
@@ -93,21 +94,28 @@ struct StudioLayerDocumentTests {
         let releaseWorker = DispatchSemaphore(value: 0)
         let entered = OSAllocatedUnfairLock(initialState: Optional<CheckedContinuation<Bool, Never>>.none)
         let first = OSAllocatedUnfairLock(initialState: true)
+        let completed = OSAllocatedUnfairLock(initialState: false)
         var job: Task<StudioLayerSnapshot, Error>?
         let ranOffMain = await withCheckedContinuation { continuation in
             entered.withLock { $0 = continuation }
             job = Task {
-                try await rasterizer.snapshot(layers: [.init(kind: .text, name: "A", text: "A")], assets: [:]) {
+                let snapshot = try await rasterizer.snapshot(layers: [.init(kind: .text, name: "A", text: "A")], assets: [:]) {
                     let firstCall = first.withLock { value in defer { value = false }; return value }
                     if firstCall {
-                        entered.withLock { value in value?.resume(returning: !Thread.isMainThread); value = nil }
-                        return releaseWorker.wait(timeout: .now() + 2) == .success
+                        let offMain = !Thread.isMainThread
+                        entered.withLock { value in value?.resume(returning: offMain); value = nil }
+                        // A main-queue mutant must reach the assertion instead of blocking it.
+                        guard offMain else { return true }
+                        releaseWorker.wait()
                     }
                     return true
                 }
+                completed.withLock { $0 = true }
+                return snapshot
             }
         }
         #expect(ranOffMain)
+        #expect(!completed.withLock { $0 })
         // This line runs on MainActor while the raster queue is still waiting.
         releaseWorker.signal()
         let snapshot = try await #require(job).value
@@ -115,8 +123,14 @@ struct StudioLayerDocumentTests {
     }
 
     @MainActor private func settle(_ document: StudioLayerDocument) async throws {
-        let deadline = ContinuousClock.now + .seconds(3)
-        while document.isRasterizing, ContinuousClock.now < deadline { await Task.yield() }
+        await withCheckedContinuation { continuation in
+            guard document.isRasterizing else { continuation.resume(); return }
+            // Success and handled failure both settle this current revision's property.
+            withObservationTracking { _ = document.isRasterizing } onChange: {
+                // Observation fires before the setter finishes its MainActor turn.
+                Task { @MainActor in continuation.resume() }
+            }
+        }
         try #require(!document.isRasterizing, "raster completion did not arrive")
     }
 

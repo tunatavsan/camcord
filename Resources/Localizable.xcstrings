@@ -181,6 +181,24 @@
         }
       }
     },
+    "10 seconds": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "10 seconds"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "10 saniye"
+          }
+        }
+      }
+    },
     "24 fps · cinematic": {
       "comment": "Frame rate option",
       "extractionState": "manual",
@@ -195,6 +213,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "24 fps · sinematik"
+          }
+        }
+      }
+    },
+    "3 seconds": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "3 seconds"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "3 saniye"
+          }
+        }
+      }
+    },
+    "5 seconds": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "5 seconds"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "5 saniye"
           }
         }
       }
@@ -379,6 +433,24 @@
         }
       }
     },
+    "Add layer": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add layer"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Katman ekle"
+          }
+        }
+      }
+    },
     "Add or remove the camera in the recording": {
       "comment": "Shortcut action",
       "extractionState": "manual",
@@ -397,6 +469,24 @@
         }
       }
     },
+    "Add text, an image or a logo. Layers are included in the recording.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add text, an image or a logo. Layers are included in the recording."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metin, görsel veya logo ekleyin. Katmanlar kayda dahil edilir."
+          }
+        }
+      }
+    },
     "All": {
       "extractionState": "manual",
       "comment": "Library interface",
@@ -411,6 +501,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Tümü"
+          }
+        }
+      }
+    },
+    "Allow Screen Recording in System Settings to preview and record.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow Screen Recording in System Settings to preview and record."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önizleme ve kayıt için Sistem Ayarları'nda Ekran Kaydı izni verin."
+          }
+        }
+      }
+    },
+    "Allow Screen Recording in System Settings, then retry.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow Screen Recording in System Settings, then retry."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistem Ayarları'nda Ekran Kaydı izni verin, ardından yeniden deneyin."
           }
         }
       }
@@ -775,6 +901,24 @@
         }
       }
     },
+    "Bitrate: %lld Mbps": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bitrate: %lld Mbps"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bit hızı: %lld Mbps"
+          }
+        }
+      }
+    },
     "Blur": {
       "extractionState": "manual",
       "comment": "Screenshot editor",
@@ -789,6 +933,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bulanıklaştır"
+          }
+        }
+      }
+    },
+    "Bold": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bold"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kalın"
           }
         }
       }
@@ -829,6 +991,42 @@
         }
       }
     },
+    "Bounds height": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bounds height"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sınır yüksekliği"
+          }
+        }
+      }
+    },
+    "Bounds width": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bounds width"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sınır genişliği"
+          }
+        }
+      }
+    },
     "Camcord captures your screen": {
       "comment": "First-run title",
       "extractionState": "manual",
@@ -861,6 +1059,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kamera"
+          }
+        }
+      }
+    },
+    "Camera position": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camera position"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera konumu"
           }
         }
       }
@@ -1077,6 +1293,24 @@
         }
       }
     },
+    "Check your camera": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check your camera"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kameranızı kontrol edin"
+          }
+        }
+      }
+    },
     "Choose": {
       "comment": "Folder panel: confirm the folder",
       "extractionState": "manual",
@@ -1113,6 +1347,42 @@
         }
       }
     },
+    "Choose a region…": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a region…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bölge seç…"
+          }
+        }
+      }
+    },
+    "Choose a source": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a source"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaynak seçin"
+          }
+        }
+      }
+    },
     "Choose a tool, then drag on the image. Arrow keys move the selected annotation.": {
       "extractionState": "manual",
       "comment": "Screenshot editor",
@@ -1145,6 +1415,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Filtreleri temizle"
+          }
+        }
+      }
+    },
+    "Clear source": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear source"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaynağı temizle"
           }
         }
       }
@@ -1217,6 +1505,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kapat"
+          }
+        }
+      }
+    },
+    "Codec": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codec"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kodlayıcı"
           }
         }
       }
@@ -1307,6 +1613,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kopyala"
+          }
+        }
+      }
+    },
+    "Copy file": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy file"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dosyayı kopyala"
           }
         }
       }
@@ -1487,6 +1811,24 @@
         }
       }
     },
+    "Countdown": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Countdown"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geri sayım"
+          }
+        }
+      }
+    },
     "Create": {
       "comment": "Sidebar section: making things from captures",
       "extractionState": "manual",
@@ -1537,6 +1879,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kırp"
+          }
+        }
+      }
+    },
+    "Custom": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Custom"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Özel"
           }
         }
       }
@@ -1645,6 +2005,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "İşaretlemeyi sil"
+          }
+        }
+      }
+    },
+    "Delete layer": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete layer"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Katmanı sil"
           }
         }
       }
@@ -1842,6 +2220,42 @@
         }
       }
     },
+    "Drag the camera on the stage to place it. Position and size are shared with the recording.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drag the camera on the stage to place it. Position and size are shared with the recording."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamerayı yerleştirmek için sahnede sürükleyin. Konum ve boyut kayda da uygulanır."
+          }
+        }
+      }
+    },
+    "Drag the selected layer on the stage or adjust its position here.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drag the selected layer on the stage or adjust its position here."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçili katmanı sahnede sürükleyin veya konumunu burada ayarlayın."
+          }
+        }
+      }
+    },
     "Duration": {
       "extractionState": "manual",
       "comment": "Library interface",
@@ -1986,6 +2400,24 @@
         }
       }
     },
+    "Efficient": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Efficient"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verimli"
+          }
+        }
+      }
+    },
     "Efficient · small": {
       "comment": "Recording profile",
       "extractionState": "manual",
@@ -2126,6 +2558,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Dosyalar"
+          }
+        }
+      }
+    },
+    "Finalizing…": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finalizing…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tamamlanıyor…"
           }
         }
       }
@@ -2310,6 +2760,24 @@
         }
       }
     },
+    "Gain": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gain"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kazanç"
+          }
+        }
+      }
+    },
     "General": {
       "comment": "Settings group",
       "extractionState": "manual",
@@ -2490,6 +2958,42 @@
         }
       }
     },
+    "Height": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Height"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yükseklik"
+          }
+        }
+      }
+    },
+    "Hide layer": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide layer"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Katmanı gizle"
+          }
+        }
+      }
+    },
     "High quality": {
       "comment": "Recording profile",
       "extractionState": "manual",
@@ -2562,6 +3066,24 @@
         }
       }
     },
+    "Horizontal position": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Horizontal position"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yatay konum"
+          }
+        }
+      }
+    },
     "If your voice is buried under the game, lower the system level or raise the microphone.": {
       "comment": "Setting footnote",
       "extractionState": "manual",
@@ -2580,6 +3102,42 @@
         }
       }
     },
+    "Images and logos keep their proportions and are centered inside these bounds. Text fits from the top left.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Images and logos keep their proportions and are centered inside these bounds. Text fits from the top left."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Görseller ve logolar oranlarını koruyarak bu sınırlar içinde ortalanır. Metin sol üstten yerleşir."
+          }
+        }
+      }
+    },
+    "Image…": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Image…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Görsel…"
+          }
+        }
+      }
+    },
     "In use": {
       "comment": "Setting: space the copied captures take",
       "extractionState": "manual",
@@ -2594,6 +3152,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kullanılan"
+          }
+        }
+      }
+    },
+    "Include camera": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Include camera"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamerayı dahil et"
           }
         }
       }
@@ -2648,6 +3224,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Gösterge"
+          }
+        }
+      }
+    },
+    "Input": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Input"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Giriş"
+          }
+        }
+      }
+    },
+    "Inspector": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inspector"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Denetçi"
           }
         }
       }
@@ -2774,6 +3386,78 @@
           "stringUnit": {
             "state": "translated",
             "value": "Sonra"
+          }
+        }
+      }
+    },
+    "Layer name": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Layer name"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Katman adı"
+          }
+        }
+      }
+    },
+    "Layer position": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Layer position"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Katman konumu"
+          }
+        }
+      }
+    },
+    "Layers": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Layers"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Katmanlar"
+          }
+        }
+      }
+    },
+    "Left": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Left"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sol"
           }
         }
       }
@@ -2920,6 +3604,42 @@
         }
       }
     },
+    "Logical pixels (1×)": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Logical pixels (1×)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mantıksal piksel (1×)"
+          }
+        }
+      }
+    },
+    "Logo…": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Logo…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Logo…"
+          }
+        }
+      }
+    },
     "Looks for email addresses and phone numbers on this image. Review suggestions before applying.": {
       "extractionState": "manual",
       "comment": "Screenshot editor",
@@ -2988,6 +3708,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Pencereye uy"
+          }
+        }
+      }
+    },
+    "Maximum": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Maximum"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En yüksek"
           }
         }
       }
@@ -3130,6 +3868,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Aynala"
+          }
+        }
+      }
+    },
+    "Mirror camera": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mirror camera"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamerayı aynala"
+          }
+        }
+      }
+    },
+    "Mix into one audio track": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mix into one audio track"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tek ses kanalında birleştir"
           }
         }
       }
@@ -3332,6 +4106,42 @@
         }
       }
     },
+    "Move backward": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move backward"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Arkaya taşı"
+          }
+        }
+      }
+    },
+    "Move forward": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move forward"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öne taşı"
+          }
+        }
+      }
+    },
     "Move selected captures to Trash?": {
       "extractionState": "manual",
       "comment": "Library interface",
@@ -3382,6 +4192,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ad"
+          }
+        }
+      }
+    },
+    "Native pixels": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Native pixels"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Doğal piksel"
           }
         }
       }
@@ -3602,6 +4430,60 @@
         }
       }
     },
+    "No signal": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No signal"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sinyal yok"
+          }
+        }
+      }
+    },
+    "No source selected": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No source selected"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaynak seçilmedi"
+          }
+        }
+      }
+    },
+    "No time limit": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No time limit"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Süre sınırı yok"
+          }
+        }
+      }
+    },
     "None": {
       "extractionState": "manual",
       "comment": "Screenshot editor",
@@ -3742,6 +4624,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Tek parça: mikrofon her oynatıcıda duyulur (varsayılan)."
+          }
+        }
+      }
+    },
+    "Opacity": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opacity"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opaklık"
+          }
+        }
+      }
+    },
+    "Open": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aç"
           }
         }
       }
@@ -3962,6 +4880,24 @@
         }
       }
     },
+    "Pause": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pause"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Duraklat"
+          }
+        }
+      }
+    },
     "Pause or resume recording": {
       "comment": "Shortcut action",
       "extractionState": "manual",
@@ -3976,6 +4912,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kaydı duraklat ya da sürdür"
+          }
+        }
+      }
+    },
+    "Paused": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paused"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Duraklatıldı"
           }
         }
       }
@@ -4070,6 +5024,42 @@
         }
       }
     },
+    "Place camera": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Place camera"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamerayı yerleştir"
+          }
+        }
+      }
+    },
+    "Placement": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Placement"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yerleşim"
+          }
+        }
+      }
+    },
     "Position": {
       "comment": "Setting: the tile's corner",
       "extractionState": "manual",
@@ -4124,6 +5114,42 @@
         }
       }
     },
+    "Preview paused": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preview paused"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önizleme duraklatıldı"
+          }
+        }
+      }
+    },
+    "Preview unavailable": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preview unavailable"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önizleme kullanılamıyor"
+          }
+        }
+      }
+    },
     "ProRes 422 HQ · almost lossless: an editing master (large).": {
       "comment": "Profile note",
       "extractionState": "manual",
@@ -4138,6 +5164,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "ProRes 422 HQ · neredeyse kayıpsız: kurgu için ana kopya (büyük)."
+          }
+        }
+      }
+    },
+    "ProRes master": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ProRes master"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ProRes ana kayıt"
           }
         }
       }
@@ -4210,6 +5254,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Göz At"
+          }
+        }
+      }
+    },
+    "Ready to record": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ready to record"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayda hazır"
+          }
+        }
+      }
+    },
+    "Ready to test": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ready to test"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Teste hazır"
           }
         }
       }
@@ -4358,6 +5438,24 @@
         }
       }
     },
+    "Recording action failed": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording action failed"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt işlemi başarısız"
+          }
+        }
+      }
+    },
     "Recording countdown": {
       "extractionState": "manual",
       "comment": "Accessibility: recording countdown badge",
@@ -4372,6 +5470,96 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kayıt geri sayımı"
+          }
+        }
+      }
+    },
+    "Recording preview": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording preview"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt önizlemesi"
+          }
+        }
+      }
+    },
+    "Recording saved": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording saved"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt kaydedildi"
+          }
+        }
+      }
+    },
+    "Recording services are unavailable. Reopen Camcord to try again.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording services are unavailable. Reopen Camcord to try again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt hizmetleri kullanılamıyor. Yeniden denemek için Camcord'u tekrar açın."
+          }
+        }
+      }
+    },
+    "Recording setup": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording setup"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt ayarları"
+          }
+        }
+      }
+    },
+    "Recording source": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording source"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt kaynağı"
           }
         }
       }
@@ -4444,6 +5632,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kitaplığı yenile"
+          }
+        }
+      }
+    },
+    "Refresh sources": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refresh sources"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaynakları yenile"
+          }
+        }
+      }
+    },
+    "Refresh your sources or choose another source.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refresh your sources or choose another source."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaynakları yenileyin veya başka bir kaynak seçin."
           }
         }
       }
@@ -4556,6 +5780,24 @@
         }
       }
     },
+    "Resume": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resume"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sürdür"
+          }
+        }
+      }
+    },
     "Retina (full)": {
       "comment": "Resolution option",
       "extractionState": "manual",
@@ -4570,6 +5812,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Retina (tam)"
+          }
+        }
+      }
+    },
+    "Retry preview": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retry preview"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önizlemeyi yeniden dene"
+          }
+        }
+      }
+    },
+    "Reveal": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reveal"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finder'da göster"
           }
         }
       }
@@ -4714,6 +5992,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ekran Kaydı"
+          }
+        }
+      }
+    },
+    "Screen Recording permission required": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screen Recording permission required"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekran Kaydı izni gerekli"
+          }
+        }
+      }
+    },
+    "Screens": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screens"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekranlar"
           }
         }
       }
@@ -5006,6 +6320,24 @@
         }
       }
     },
+    "Select a screen, window or region to set up your recording.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select a screen, window or region to set up your recording."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydınızı hazırlamak için bir ekran, pencere veya bölge seçin."
+          }
+        }
+      }
+    },
     "Select all": {
       "extractionState": "manual",
       "comment": "Library interface",
@@ -5096,6 +6428,24 @@
         }
       }
     },
+    "Selected device unavailable": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected device unavailable"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçili aygıt kullanılamıyor"
+          }
+        }
+      }
+    },
     "Set up one source, your camera and your audio before you record.": {
       "comment": "Studio empty state",
       "extractionState": "manual",
@@ -5110,6 +6460,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kayıttan önce bir kaynak, kameran ve sesin burada hazırlanır."
+          }
+        }
+      }
+    },
+    "Set up your recording": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Set up your recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydınızı hazırlayın"
           }
         }
       }
@@ -5198,6 +6566,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Paylaş"
+          }
+        }
+      }
+    },
+    "Share recording": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydı paylaş"
           }
         }
       }
@@ -5292,6 +6678,24 @@
         }
       }
     },
+    "Show layer": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show layer"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Katmanı göster"
+          }
+        }
+      }
+    },
     "Show or hide the camera preview": {
       "comment": "Shortcut action",
       "extractionState": "manual",
@@ -5306,6 +6710,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kamera önizlemesini göster ya da gizle"
+          }
+        }
+      }
+    },
+    "Show pointer": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show pointer"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İşaretçiyi göster"
           }
         }
       }
@@ -5358,6 +6780,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bazı kopyalanan çekimler okunamadı veya Çöp Sepeti’ne taşınamadı. Klasör erişimini kontrol edip tekrar dene."
+          }
+        }
+      }
+    },
+    "Source selection failed": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source selection failed"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaynak seçimi başarısız"
+          }
+        }
+      }
+    },
+    "Sources could not be loaded. Refresh to try again.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sources could not be loaded. Refresh to try again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaynaklar yüklenemedi. Yeniden denemek için yenileyin."
           }
         }
       }
@@ -5502,6 +6960,42 @@
         }
       }
     },
+    "Starting preview…": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starting preview…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önizleme başlatılıyor…"
+          }
+        }
+      }
+    },
+    "Starting…": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starting…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Başlatılıyor…"
+          }
+        }
+      }
+    },
     "Startup": {
       "comment": "Settings card",
       "extractionState": "manual",
@@ -5552,6 +7046,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Durdur"
+          }
+        }
+      }
+    },
+    "Stop after %lld minutes": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop after %lld minutes"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld dakika sonra durdur"
           }
         }
       }
@@ -5679,6 +7191,60 @@
         }
       }
     },
+    "Studio unavailable": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Studio unavailable"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stüdyo kullanılamıyor"
+          }
+        }
+      }
+    },
+    "System audio": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistem sesi"
+          }
+        }
+      }
+    },
+    "System default": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System default"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistem varsayılanı"
+          }
+        }
+      }
+    },
     "System level": {
       "comment": "Setting: system audio gain",
       "extractionState": "manual",
@@ -5715,6 +7281,24 @@
         }
       }
     },
+    "Test": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Test"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Test"
+          }
+        }
+      }
+    },
     "Test the microphone": {
       "comment": "Setting",
       "extractionState": "manual",
@@ -5729,6 +7313,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Mikrofonu dene"
+          }
+        }
+      }
+    },
+    "Testing listens only while Studio is visible. Returning here does not restart a test.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Testing listens only while Studio is visible. Returning here does not restart a test."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Test yalnızca Stüdyo görünürken dinler. Buraya dönmek testi yeniden başlatmaz."
           }
         }
       }
@@ -5751,6 +7353,24 @@
         }
       }
     },
+    "Text color": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text color"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metin rengi"
+          }
+        }
+      }
+    },
     "Text size": {
       "extractionState": "manual",
       "comment": "Screenshot editor",
@@ -5765,6 +7385,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Metin boyutu"
+          }
+        }
+      }
+    },
+    "Text size is relative to a 1920×1080 reference canvas and scales to fit the layer bounds.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text size is relative to a 1920×1080 reference canvas and scales to fit the layer bounds."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metin boyutu 1920×1080 referans tuvaline göredir ve katman sınırlarına sığacak şekilde ölçeklenir."
+          }
+        }
+      }
+    },
+    "Text size: %lld": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text size: %lld"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metin boyutu: %lld"
           }
         }
       }
@@ -5910,6 +7566,78 @@
         }
       }
     },
+    "The preview could not start. Try again or choose another source.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The preview could not start. Try again or choose another source."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önizleme başlatılamadı. Yeniden deneyin veya başka bir kaynak seçin."
+          }
+        }
+      }
+    },
+    "The preview runs while Studio is visible.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The preview runs while Studio is visible."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önizleme Stüdyo görünürken çalışır."
+          }
+        }
+      }
+    },
+    "The recording could not be copied.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The recording could not be copied."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt kopyalanamadı."
+          }
+        }
+      }
+    },
+    "The recording could not be opened.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The recording could not be opened."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt açılamadı."
+          }
+        }
+      }
+    },
     "The recording ends safely when free space drops under about 500 MB.": {
       "comment": "Setting note",
       "extractionState": "manual",
@@ -5924,6 +7652,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Boş alan yaklaşık 500 MB'ın altına inince kayıt güvenle sonlanır."
+          }
+        }
+      }
+    },
+    "The recording file is unavailable. Check that it has not been moved or deleted.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The recording file is unavailable. Check that it has not been moved or deleted."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt dosyası kullanılamıyor. Taşınmadığını veya silinmediğini kontrol edin."
           }
         }
       }
@@ -5974,6 +7720,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Seçilen mikrofon bağlı değil. Yeniden bağlanana kadar kayıtlarda varsayılan giriş kullanılır."
+          }
+        }
+      }
+    },
+    "The source is no longer available. Choose another source.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The source is no longer available. Choose another source."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaynak artık kullanılamıyor. Başka bir kaynak seçin."
+          }
+        }
+      }
+    },
+    "This file could not be opened as an image.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file could not be opened as an image."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu dosya görsel olarak açılamadı."
           }
         }
       }
@@ -6050,6 +7832,24 @@
         }
       }
     },
+    "This image is too large. Choose an image below 20 MB and 16 megapixels.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This image is too large. Choose an image below 20 MB and 16 megapixels."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu görsel çok büyük. 20 MB ve 16 megapikselin altında bir görsel seçin."
+          }
+        }
+      }
+    },
     "This shortcut is taken": {
       "comment": "Shortcut conflict title",
       "extractionState": "manual",
@@ -6064,6 +7864,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu kısayol kullanımda"
+          }
+        }
+      }
+    },
+    "This text is too long. Shorten it and try again.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This text is too long. Shorten it and try again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu metin çok uzun. Kısaltıp yeniden deneyin."
           }
         }
       }
@@ -6118,6 +7936,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kenar çubuğunu göster/gizle"
+          }
+        }
+      }
+    },
+    "Top": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Top"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Üst"
           }
         }
       }
@@ -6316,6 +8152,24 @@
         }
       }
     },
+    "Updating layers…": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Updating layers…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Katmanlar güncelleniyor…"
+          }
+        }
+      }
+    },
     "Use 1–120 characters without a leading period, slashes or control characters.": {
       "extractionState": "manual",
       "comment": "Library interface",
@@ -6370,6 +8224,24 @@
         }
       }
     },
+    "Use the inspector to adjust position with the keyboard.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use the inspector to adjust position with the keyboard."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Konumu klavyeyle ayarlamak için denetçiyi kullanın."
+          }
+        }
+      }
+    },
     "Used by the recording": {
       "localizations": {
         "en": {
@@ -6382,6 +8254,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kayıt tarafından kullanılıyor"
+          }
+        }
+      }
+    },
+    "Vertical position": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vertical position"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dikey konum"
           }
         }
       }
@@ -6400,6 +8290,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Görüntü"
+          }
+        }
+      }
+    },
+    "Waiting for a frame…": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for a frame…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kare bekleniyor…"
           }
         }
       }
@@ -6474,6 +8382,24 @@
         }
       }
     },
+    "Width": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Width"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Genişlik"
+          }
+        }
+      }
+    },
     "Window": {
       "comment": "Menu title",
       "extractionState": "manual",
@@ -6488,6 +8414,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Pencere"
+          }
+        }
+      }
+    },
+    "Window canvas": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Window canvas"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pencere tuvali"
           }
         }
       }
@@ -6510,6 +8454,24 @@
         }
       }
     },
+    "Windows": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Windows"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pencereler"
+          }
+        }
+      }
+    },
     "Yesterday": {
       "extractionState": "manual",
       "comment": "Library interface",
@@ -6524,6 +8486,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Dün"
+          }
+        }
+      }
+    },
+    "You can add up to 24 layers.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You can add up to 24 layers."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En fazla 24 katman ekleyebilirsiniz."
           }
         }
       }
@@ -6578,6 +8558,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kayıtların Kitaplık'ta."
+          }
+        }
+      }
+    },
+    "Your source, camera and layers appear here as they will be recorded.": {
+      "extractionState": "manual",
+      "comment": "Studio interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your source, camera and layers appear here as they will be recorded."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaynak, kamera ve katmanlar burada kayıtta görünecekleri gibi gösterilir."
           }
         }
       }

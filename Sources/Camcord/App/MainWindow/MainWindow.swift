@@ -108,6 +108,8 @@ struct MainWindowView: View {
         .environment(\.appServices, services)
         .environment(\.screenshotEditorSession, services?.editor)
         .environment(\.studioSession, services?.studioSession)
+        .environment(\.studioSelectRegionAction, StudioRuntimeCallbacks.regionAction(services))
+        .environment(\.studioClipboardClaim, StudioRuntimeCallbacks.clipboardClaim(services))
         .modifier(EditorOpeningConfirmationModifier(session: services?.editor))
         .environment(\.mainWindowModel, model)
         .environment(\.mainWindowLifecycle, lifecycle)
@@ -305,6 +307,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     }
 
     var isOpen: Bool { window?.isVisible == true }
+    var presentationEpoch: UInt64 { presentationGeneration }
     var windowForTesting: NSWindow? { window }
 
     /// Opens the window, on `module` when one is given. `activate: false` (LiveCheck) neither
