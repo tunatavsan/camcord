@@ -106,7 +106,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recordingController.onFinishing = { [weak recordingStateModel] finishing in
             recordingStateModel?.isFinishing = finishing
         }
-        recordingController.onRecordingFinished = { [weak self] url in
+        recordingController.onRecordingFinished = { [weak self, weak services] url in
+            services?.library.scheduleRefresh()
             self?.recordingStateModel?.isFinishing = false
             self?.recordingStateModel?.finishedURL = url
             // Surface the "done" card even when the recording was stopped via a keyboard/
@@ -155,6 +156,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         coordinator.onScreenshotSaved = { [weak screenshotPreviewCard] image, url in
             screenshotPreviewCard?.saved(image: image, to: url)
+        }
+
+        // History consumes stable delivery events independently of the preview callbacks.
+        coordinator.onScreenshotDelivery = { [weak services] event in
+            services?.library.ingest(event)
         }
 
         // macOS Services: "Camcord ile Metni Çıkar" on any image selection.

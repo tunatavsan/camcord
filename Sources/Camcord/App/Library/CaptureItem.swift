@@ -14,6 +14,9 @@ struct CaptureItem: Identifiable, Hashable, Sendable {
     let byteSize: Int64
     let pixelSize: CGSize?    // images
     let duration: Double?     // recordings
+    var displayName: String? = nil
+
+    var title: String { displayName ?? url.deletingPathExtension().lastPathComponent }
 }
 
 @MainActor protocol CaptureLibraryStore: AnyObject, Observable {
@@ -58,7 +61,7 @@ enum CaptureFileRules {
         url.withUnsafeFileSystemRepresentation { path -> String? in
             guard let path else { return nil }
             let size = getxattr(path, kindAttribute, nil, 0, 0, 0)
-            guard size > 0 else { return nil }
+            guard size > 0, size <= 64 else { return nil }
             var buffer = [UInt8](repeating: 0, count: size)
             let read = getxattr(path, kindAttribute, &buffer, size, 0, 0)
             guard read == size else { return nil }
@@ -89,17 +92,20 @@ enum CacheRetention {
 
     /// The ids to remove, oldest first.
     static func expired(_ entries: [Entry], now: Date, keepDays: Int, capBytes: Int64) -> [String] {
-        let cutoff = now.addingTimeInterval(-Double(max(keepDays, 0)) * 86_400)
-        let newestFirst = entries.sorted { $0.createdAt > $1.createdAt }
+        let cutoff = now.addingTimeInterval(-Double(min(max(keepDays, 0), 3650)) * 86_400)
+        let cap = max(capBytes, 0)
+        let newestFirst = entries.sorted { $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt > $1.createdAt }
         var kept: Int64 = 0
         var removed: [Entry] = []
         for entry in newestFirst {
-            if entry.createdAt < cutoff || kept + entry.byteSize > capBytes {
+            let bytes = max(entry.byteSize, 0)
+            let (sum, overflow) = kept.addingReportingOverflow(bytes)
+            if entry.createdAt < cutoff || overflow || sum > cap {
                 removed.append(entry)
             } else {
-                kept += entry.byteSize
+                kept = sum
             }
         }
-        return removed.sorted { $0.createdAt < $1.createdAt }.map(\.id)
+        return removed.sorted { $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt < $1.createdAt }.map(\.id)
     }
 }

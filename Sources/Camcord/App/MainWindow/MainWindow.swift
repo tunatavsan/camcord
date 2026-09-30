@@ -39,17 +39,31 @@ final class MainWindowModel {
     func select(_ id: ModuleID) { selection = ModuleRegistry.selectable(id) }
 }
 
+/// Controller-owned visibility of the main window. Studio consumers may run preview/test
+/// resources only while `allowsLivePreview` is true; active recording has a separate owner.
+@MainActor @Observable
+final class MainWindowLifecycle {
+    private(set) var allowsLivePreview = false
+
+    func update(window: NSWindow?, temporarilyHidden: Bool) {
+        allowsLivePreview = window?.isVisible == true && !temporarilyHidden
+            && window?.isMiniaturized == false && window?.occlusionState.contains(.visible) == true
+    }
+}
+
 /// The main window (docs/design/native/SPEC.md S1, the owner's reference): a whole-height,
 /// lighter frosted sidebar of modules beside a lightly frosted content area, both behind-window
 /// system materials so the desktop is faintly there (KARAR-2, NOTE-2); Record in the toolbar.
 struct MainWindowView: View {
     @Bindable var model: MainWindowModel
     let services: AppServices?
+    let lifecycle: MainWindowLifecycle?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(model: MainWindowModel, services: AppServices? = nil) {
+    init(model: MainWindowModel, services: AppServices? = nil, lifecycle: MainWindowLifecycle? = nil) {
         self.model = model
         self.services = services
+        self.lifecycle = lifecycle
     }
 
     /// A window of its own for offscreen renders and tests.
@@ -93,12 +107,14 @@ struct MainWindowView: View {
         .tint(Theme.Palette.ink.color)
         .environment(\.appServices, services)
         .environment(\.mainWindowModel, model)
+        .environment(\.mainWindowLifecycle, lifecycle)
     }
 }
 
 extension EnvironmentValues {
     /// The window's model, for modules that drive the window (Settings takes over the sidebar).
     @Entry var mainWindowModel: MainWindowModel?
+    @Entry var mainWindowLifecycle: MainWindowLifecycle?
 }
 
 enum MainWindowLayout {
@@ -234,10 +250,28 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     private let services: AppServices?
     let model: MainWindowModel
     private let present: @MainActor (NSWindow) -> Void
+    private let presentBackground: @MainActor (NSWindow) -> Void
+    private let windowFactory: (@MainActor () -> NSWindow)?
+    private let isAppActive: @MainActor () -> Bool
+    private let waitForRemoval: @MainActor () async throws -> Void
     private var window: NSWindow?
+    let lifecycle = MainWindowLifecycle()
+    private var presentationGeneration: UInt64 = 0
+    private var temporarilyHidden = false
+    private var visibilityObservers: [NSObjectProtocol] = []
 
-    init(defaults: UserDefaults = .standard, dock: DockController, services: AppServices? = nil,
+    init(windowFactory: (@MainActor () -> NSWindow)? = nil,
+         presentBackground: (@MainActor (NSWindow) -> Void)? = nil,
+         isAppActive: @escaping @MainActor () -> Bool = { NSApp.isActive },
+         waitForRemoval: @escaping @MainActor () async throws -> Void = {
+             try await Task.sleep(for: .milliseconds(160))
+         },
+         defaults: UserDefaults = .standard, dock: DockController, services: AppServices? = nil,
          present: (@MainActor (NSWindow) -> Void)? = nil) {
+        self.windowFactory = windowFactory
+        self.presentBackground = presentBackground ?? { $0.orderBack(nil) }
+        self.isAppActive = isAppActive
+        self.waitForRemoval = waitForRemoval
         self.defaults = defaults
         self.dock = dock
         self.services = services
@@ -247,6 +281,24 @@ final class MainWindowController: NSObject, NSWindowDelegate {
             window.makeKeyAndOrderFront(nil)
         }
         super.init()
+        for name in [NSApplication.didHideNotification, NSApplication.didUnhideNotification] {
+            visibilityObservers.append(NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    if name == NSApplication.didHideNotification {
+                        self.presentationGeneration &+= 1
+                        self.temporarilyHidden = false
+                    }
+                    self.refreshVisibility()
+                }
+            })
+        }
+    }
+
+    isolated deinit {
+        for observer in visibilityObservers { NotificationCenter.default.removeObserver(observer) }
     }
 
     var isOpen: Bool { window?.isVisible == true }
@@ -256,36 +308,69 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     /// takes the owner's focus nor covers their work: the window goes behind their windows,
     /// where a window-ID capture still sees all of it.
     func show(module: ModuleID? = nil, activate: Bool = true) {
+        presentationGeneration &+= 1
+        temporarilyHidden = false
         if let module { model.select(module) }
         let window = window ?? makeWindow()
         self.window = window
         if window.contentViewController == nil { installContent(in: window) }
         // The Dock icon first, so the window opens as a regular app's window, in front.
         dock.windowDidOpen()
-        if activate { present(window) } else { window.orderBack(nil) }
+        if activate { present(window) } else { presentBackground(window) }
+        refreshVisibility()
     }
 
-    func close() { window?.close() }
+    func close() {
+        presentationGeneration &+= 1
+        temporarilyHidden = false
+        window?.close()
+        refreshVisibility()
+    }
 
     /// The window steps out of the way while `work` captures the screen, then comes back as it
     /// was, so a capture started from the toolbar never shows Camcord's own window.
     func stepAside(during work: @MainActor () async -> Void) async {
+        presentationGeneration &+= 1
+        let generation = presentationGeneration
         guard let window, window.isVisible else {
             await work()
             return
         }
         let wasKey = window.isKeyWindow
+        temporarilyHidden = true
         window.orderOut(nil)
-        try? await Task.sleep(for: .milliseconds(160))   // the window server removes it from the next frame
+        refreshVisibility()
+        defer {
+            if presentationGeneration == generation {
+                temporarilyHidden = false
+                refreshVisibility()
+            }
+        }
+        do { try await waitForRemoval() } catch { return }
+        guard presentationGeneration == generation, !Task.isCancelled else { return }
         await work()
-        if wasKey, NSApp.isActive { window.makeKeyAndOrderFront(nil) } else { window.orderFront(nil) }
+        guard presentationGeneration == generation, self.window === window,
+              window.contentViewController != nil, !Task.isCancelled else { return }
+        if wasKey, isAppActive() { window.makeKeyAndOrderFront(nil) } else { presentBackground(window) }
     }
+
+    private func refreshVisibility() {
+        lifecycle.update(window: window, temporarilyHidden: temporarilyHidden)
+    }
+
+    func windowDidChangeOcclusionState(_ notification: Notification) { refreshVisibility() }
+    func windowDidMiniaturize(_ notification: Notification) {
+        presentationGeneration &+= 1
+        temporarilyHidden = false
+        refreshVisibility()
+    }
+    func windowDidDeminiaturize(_ notification: Notification) { refreshVisibility() }
 
     /// A fresh SwiftUI tree. Setting a content view controller resizes the window to the
     /// controller's view, so the frame the owner left is put back afterwards.
     private func installContent(in window: NSWindow) {
         let frame = window.frame
-        let host = NSHostingController(rootView: MainWindowView(model: model, services: services))
+        let host = NSHostingController(rootView: MainWindowView(model: model, services: services, lifecycle: lifecycle))
         // SwiftUI's .toolbar and .navigationTitle become the NSWindow's own toolbar and title.
         host.sceneBridgingOptions = [.toolbars, .title]
         window.contentViewController = host
@@ -293,7 +378,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     }
 
     private func makeWindow() -> NSWindow {
-        let window = NSWindow(
+        let window = windowFactory?() ?? NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 980, height: 640),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
@@ -313,8 +398,10 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         window.setContentSize(NSSize(width: 1180, height: 760))
         window.center()
         // After the first placement, so a saved frame wins over the centred default.
-        window.setFrameAutosaveName(Self.frameAutosaveName)
-        window.setFrameUsingName(Self.frameAutosaveName)
+        if windowFactory == nil {
+            window.setFrameAutosaveName(Self.frameAutosaveName)
+            window.setFrameUsingName(Self.frameAutosaveName)
+        }
         return window
     }
 
@@ -323,6 +410,9 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     /// a mic meter or a permission poll inside a module would run on, unseen, until quit.
     /// `show()` builds a fresh tree.
     func windowWillClose(_ notification: Notification) {
+        presentationGeneration &+= 1
+        temporarilyHidden = false
+        lifecycle.update(window: nil, temporarilyHidden: false)
         window?.contentViewController = nil
         dock.windowDidClose()
     }

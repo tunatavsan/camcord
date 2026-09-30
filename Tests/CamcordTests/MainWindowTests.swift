@@ -125,6 +125,108 @@ struct MainWindowTests {
         window.close()
     }
 
+    @MainActor final class OffscreenWindow: NSWindow {
+        var fixtureVisible = false
+        var key = false
+        var minimized = false
+        var occluded = false
+        var backgroundOrders = 0
+        var keyOrders = 0
+        override var isVisible: Bool { fixtureVisible }
+        override var isKeyWindow: Bool { key }
+        override var isMiniaturized: Bool { minimized }
+        override var occlusionState: NSWindow.OcclusionState { occluded ? [] : [.visible] }
+        override func orderBack(_ sender: Any?) { fixtureVisible = true; key = false; backgroundOrders += 1 }
+        override func orderOut(_ sender: Any?) { fixtureVisible = false; key = false }
+        override func orderFront(_ sender: Any?) { fixtureVisible = true; key = false }
+        override func makeKeyAndOrderFront(_ sender: Any?) { fixtureVisible = true; key = true; keyOrders += 1 }
+        override func close() {
+            fixtureVisible = false
+            delegate?.windowWillClose?(Notification(name: NSWindow.willCloseNotification, object: self))
+        }
+    }
+
+    @MainActor final class DeferredWork {
+        var continuation: CheckedContinuation<Void, Never>?
+        func wait() async { await withCheckedContinuation { continuation = $0 } }
+        func complete() { continuation?.resume(); continuation = nil }
+    }
+
+    private func offscreenWindow() -> OffscreenWindow {
+        OffscreenWindow(contentRect: NSRect(x: 40, y: 50, width: 980, height: 640),
+                        styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+    }
+
+    @Test("late capture completion cannot restore after close, reopening or cancellation",
+          arguments: [0, 1, 2, 3, 4, 5])
+    func staleStepAside(action: Int) async throws {
+        _ = NSApplication.shared
+        let defaults = try freshDefaults()
+        let window = offscreenWindow()
+        let controller = MainWindowController(windowFactory: { window },
+            presentBackground: { $0.orderBack(nil) }, isAppActive: { false }, waitForRemoval: {},
+            defaults: defaults, dock: DockController(defaults: defaults) { _ in }, present: { _ in
+                Issue.record("must not activate")
+            })
+        let deferred = DeferredWork()
+        controller.show(activate: false)
+        let originalFrame = window.frame
+        #expect(controller.lifecycle.allowsLivePreview)
+        let capture = Task { @MainActor in await controller.stepAside { await deferred.wait() } }
+        for _ in 0..<100 where deferred.continuation == nil { await Task.yield() }
+        #expect(deferred.continuation != nil)
+        #expect(!controller.lifecycle.allowsLivePreview)
+        if action == 0 { controller.close() }
+        if action == 1 { controller.close(); controller.show(activate: false) }
+        if action == 2 { capture.cancel() }
+        if action == 3 { await controller.stepAside {} }
+        if action == 4 { NotificationCenter.default.post(name: NSApplication.didHideNotification, object: nil) }
+        if action == 5 {
+            window.minimized = true
+            controller.windowDidMiniaturize(Notification(name: NSWindow.didMiniaturizeNotification))
+        }
+        let orders = window.backgroundOrders
+        deferred.complete()
+        await capture.value
+        #expect(window.backgroundOrders == orders)
+        #expect(window.isVisible == (action == 1))
+        #expect(controller.lifecycle.allowsLivePreview == (action == 1))
+        #expect(window.frame == originalFrame)
+        controller.close()
+    }
+
+    @Test("restoration preserves key user windows and keeps background windows behind",
+          arguments: [false, true])
+    func restorationFocus(wasKey: Bool) async throws {
+        _ = NSApplication.shared
+        let defaults = try freshDefaults()
+        let window = offscreenWindow()
+        let controller = MainWindowController(windowFactory: { window },
+            presentBackground: { $0.orderBack(nil) }, isAppActive: { true }, waitForRemoval: {},
+            defaults: defaults, dock: DockController(defaults: defaults) { _ in },
+            present: { $0.makeKeyAndOrderFront(nil) })
+        controller.show(activate: wasKey)
+        let initialBackground = window.backgroundOrders
+        let initialKey = window.keyOrders
+        await controller.stepAside { #expect(!window.isVisible) }
+        #expect(window.backgroundOrders == initialBackground + (wasKey ? 0 : 1))
+        #expect(window.keyOrders == initialKey + (wasKey ? 1 : 0))
+        #expect(window.isKeyWindow == wasKey)
+        #expect(controller.lifecycle.allowsLivePreview)
+        window.occluded = true
+        controller.windowDidChangeOcclusionState(Notification(name: NSWindow.didChangeOcclusionStateNotification))
+        #expect(!controller.lifecycle.allowsLivePreview)
+        window.occluded = false
+        window.minimized = true
+        controller.windowDidMiniaturize(Notification(name: NSWindow.didMiniaturizeNotification))
+        #expect(!controller.lifecycle.allowsLivePreview)
+        window.minimized = false
+        controller.windowDidDeminiaturize(Notification(name: NSWindow.didDeminiaturizeNotification))
+        #expect(controller.lifecycle.allowsLivePreview)
+        controller.close()
+        #expect(!controller.lifecycle.allowsLivePreview)
+    }
+
     @Test("the last selected module comes back; an unknown one falls back to Library")
     func selectionPersistence() throws {
         let defaults = try freshDefaults()
@@ -240,8 +342,11 @@ struct MainWindowTests {
             bindings: TapBindings(mouseButton3: nil, mouseButton4: nil, mouseButton5: nil, doubleTapRightCommand: nil),
             buttonIsDown: { _ in false }
         )
+        let libraryRoot = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("mainwindow-library-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: libraryRoot) }
+        let library = LibraryStore(defaults: defaults, roots: [], cacheDirectory: libraryRoot)
         let services = AppServices(defaults: defaults, coordinator: coordinator, recordingController: recording,
-                                   eventTapEngine: engine, recordingState: RecordingStateModel())
+                                   eventTapEngine: engine, recordingState: RecordingStateModel(), library: library)
         let module = SettingsModule()
         let recorder = SettingsKeyRecorder()
         SettingsKeyRecorder.active = recorder

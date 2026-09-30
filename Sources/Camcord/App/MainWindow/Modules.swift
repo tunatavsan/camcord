@@ -18,7 +18,7 @@ struct LibraryModule: CamcordModule {
     let isAvailable = true
 
     func makeView() -> AnyView {
-        AnyView(LibraryEmptyView())
+        AnyView(LibraryModuleView())
     }
 }
 

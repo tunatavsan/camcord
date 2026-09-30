@@ -10,17 +10,20 @@ final class AppServices {
     let recordingController: RecordingController
     let eventTapEngine: EventTapEngine
     let recordingState: RecordingStateModel
+    let library: LibraryStore
 
     init(defaults: UserDefaults = .standard,
          coordinator: CaptureCoordinator,
          recordingController: RecordingController,
          eventTapEngine: EventTapEngine,
-         recordingState: RecordingStateModel) {
+         recordingState: RecordingStateModel,
+         library: LibraryStore? = nil) {
         self.defaults = defaults
         self.coordinator = coordinator
         self.recordingController = recordingController
         self.eventTapEngine = eventTapEngine
         self.recordingState = recordingState
+        self.library = library ?? LibraryStore(defaults: defaults)
     }
 
     /// The main window, so a capture started from it can step the window aside.

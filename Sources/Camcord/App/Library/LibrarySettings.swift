@@ -19,16 +19,16 @@ struct LibrarySettings: Equatable, Sendable {
         var settings = LibrarySettings()
         if defaults.object(forKey: keepCopiedKey) != nil { settings.keepCopied = defaults.bool(forKey: keepCopiedKey) }
         let days = defaults.integer(forKey: keepDaysKey)
-        if days > 0 { settings.keepDays = days }
+        if days > 0 { settings.keepDays = min(days, 3650) }
         let cap = (defaults.object(forKey: capBytesKey) as? NSNumber)?.int64Value ?? 0
-        if cap > 0 { settings.capBytes = cap }
+        if cap > 0 { settings.capBytes = min(max(cap, 1 << 20), 100 << 30) }
         return settings
     }
 
     func save(to defaults: UserDefaults) {
         defaults.set(keepCopied, forKey: Self.keepCopiedKey)
-        defaults.set(keepDays, forKey: Self.keepDaysKey)
-        defaults.set(NSNumber(value: capBytes), forKey: Self.capBytesKey)
+        defaults.set(min(max(keepDays, 1), 3650), forKey: Self.keepDaysKey)
+        defaults.set(NSNumber(value: min(max(capBytes, 1 << 20), 100 << 30)), forKey: Self.capBytesKey)
     }
 
     /// Camcord's own folder for copied captures (K4).
