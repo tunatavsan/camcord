@@ -4,6 +4,15 @@ import Testing
 
 @testable import Camcord
 
+private actor MainWindowEditorDecodeGate {
+    private var started = false
+    private var observer: CheckedContinuation<Void, Never>?
+    private var work: CheckedContinuation<Void, Never>?
+    func suspend() async { started = true; observer?.resume(); observer = nil; await withCheckedContinuation { work = $0 } }
+    func waitForStart() async { if started { return }; await withCheckedContinuation { observer = $0 } }
+    func resume() { work?.resume(); work = nil }
+}
+
 /// The main window's seam (K9) and its Dock behaviour (K10): the module registry, the
 /// persisted selection, and every Dock policy transition — pure or with an injected setter,
 /// so nothing here touches the real Dock.
@@ -70,7 +79,7 @@ struct MainWindowTests {
         #expect(DockIconMode.load(from: defaults) == .whileWindowOpen)
     }
 
-    @Test("the registry: every module once, in order, grouped by section; Edit is a page tagged Later")
+    @Test("the registry: every module once, in order, grouped by section; Edit is the screenshot editor")
     func registry() {
         #expect(ModuleRegistry.all.map(\.id) == [.library, .studio, .edit, .settings])
         #expect(Set(ModuleRegistry.all.map(\.id)) == Set(ModuleID.allCases))
@@ -79,8 +88,9 @@ struct MainWindowTests {
         #expect(ModuleRegistry.modules(in: .create).map(\.id) == [.edit])
         #expect(ModuleRegistry.modules(in: .app).map(\.id) == [.settings])
         #expect(ModuleRegistry.all.allSatisfy { $0.isAvailable })
-        #expect((ModuleRegistry.module(.edit) as? any ModuleBadging)?.badge?.key == "Later")
-        #expect(ModuleRegistry.all.compactMap { ($0 as? any ModuleBadging)?.badge }.count == 1)
+        #expect((ModuleRegistry.module(.edit) as? any ModuleBadging)?.badge == nil)
+        let badges = ModuleRegistry.all.compactMap { ($0 as? any ModuleBadging)?.badge }
+        #expect(badges.isEmpty)
         #expect(ModuleSection.capture < .create && ModuleSection.create < .app)
         #expect(ModuleSection.capture.title == nil)
         #expect(ModuleSection.create.title?.key == "Create" && ModuleSection.app.title?.key == "App")
@@ -329,6 +339,59 @@ struct MainWindowTests {
         let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
         host.cacheDisplay(in: host.bounds, to: rep)
 
+    }
+
+    @Test("Library editor routing preserves pending edits and changes modules only after acceptance")
+    func editorRoutingUsesSharedSession() async throws {
+        let defaults = try freshDefaults()
+        defer { defaults.removePersistentDomain(forName: Self.suiteName) }
+        let root = EditorTemporaryExports().directory.deletingLastPathComponent().appendingPathComponent("mainwindow-editor-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("fixture.png")
+        let image = try EditorRendererTests.image()
+        try EditorRendered(image: image, pointSize: CGSize(width: 8, height: 6)).png.write(to: source)
+        var operations = CaptureCoordinator.Operations(); operations.feedback = false
+        let coordinator = CaptureCoordinator(operations: operations)
+        let recording = RecordingController(coordinator: coordinator)
+        let engine = EventTapEngine(coordinator: coordinator, recordingController: recording,
+            bindings: TapBindings(mouseButton3: nil, mouseButton4: nil, mouseButton5: nil, doubleTapRightCommand: nil), buttonIsDown: { _ in false })
+        let library = LibraryStore(defaults: defaults, roots: [], cacheDirectory: root.appendingPathComponent("library"))
+        let decodeGate = MainWindowEditorDecodeGate()
+        let editor = EditorSession(defaults: defaults, worker: EditorWorker(decoder: { url in
+            if url.lastPathComponent == "slow.png" { await decodeGate.suspend(); throw EditorError.invalidImage }
+            return try EditorRenderer.decode(url)
+        }))
+        let services = AppServices(defaults: defaults, coordinator: coordinator, recordingController: recording,
+                                   eventTapEngine: engine, recordingState: RecordingStateModel(), library: library, editor: editor)
+        var presentations = 0
+        let window = MainWindowController(defaults: defaults, dock: DockController(defaults: defaults) { _ in },
+                                          services: services, present: { _ in presentations += 1 })
+        services.mainWindow = window
+        #expect(services.editor === editor)
+        let open = try #require(library.onOpenScreenshot)
+        window.model.select(.library)
+        try await open(source)
+        #expect(window.model.selection == .edit); #expect(presentations == 0)
+        let originalID = editor.document?.id
+        editor.add(tool: .redact, from: .zero, to: CGPoint(x: 3, y: 3))
+        window.model.select(.library)
+        try await open(source)
+        #expect(editor.document?.id == originalID); #expect(editor.hasUnsavedEdits)
+        #expect(editor.pendingURL == source); #expect(window.model.selection == .library)
+        editor.cancelPending(); #expect(window.model.selection == .library)
+        try await open(source); await editor.discardAndOpenPending()
+        #expect(window.model.selection == .edit); #expect(editor.document?.id != originalID)
+        window.model.select(.library)
+        await #expect(throws: LibraryStore.ActionFailure.self) { try await open(root.appendingPathComponent("missing.png")) }
+        #expect(window.model.selection == .library); #expect(presentations == 0)
+        let slow = Task { try await open(root.appendingPathComponent("slow.png")) }
+        await decodeGate.waitForStart(); try await open(source); await decodeGate.resume()
+        try await slow.value
+        #expect(editor.error == nil); #expect(window.model.selection == .edit); #expect(presentations == 0)
+        try render(EditModule().makeView())
+        try render(EditModule().makeView().environment(\.screenshotEditorSession, editor))
+        editor.stop()
     }
 
     @Test("the Settings module renders the real settings from the environment's services, the placeholder without")

@@ -10,6 +10,7 @@ final class AppServices {
     let recordingController: RecordingController
     let eventTapEngine: EventTapEngine
     let recordingState: RecordingStateModel
+    let editor: EditorSession
     let library: LibraryStore
 
     init(defaults: UserDefaults = .standard,
@@ -17,13 +18,28 @@ final class AppServices {
          recordingController: RecordingController,
          eventTapEngine: EventTapEngine,
          recordingState: RecordingStateModel,
-         library: LibraryStore? = nil) {
+         library: LibraryStore? = nil,
+         editor: EditorSession? = nil) {
         self.defaults = defaults
         self.coordinator = coordinator
         self.recordingController = recordingController
         self.eventTapEngine = eventTapEngine
         self.recordingState = recordingState
         self.library = library ?? LibraryStore(defaults: defaults)
+        self.editor = editor ?? EditorSession(defaults: defaults)
+        self.editor.claimClipboardPublication = { [weak coordinator] in
+            coordinator?.claimClipboardPublication() ?? { false }
+        }
+        self.library.claimClipboardPublication = { [weak coordinator] in
+            coordinator?.claimClipboardPublication() ?? { false }
+        }
+        self.editor.onDocumentAccepted = { [weak self] in self?.mainWindow?.model.select(.edit) }
+        self.library.onOpenScreenshot = { [weak self] url in
+            guard let self else { throw EditorError.stale }
+            if case .failed(let message) = await self.editor.requestOpen(url: url) {
+                throw LibraryStore.ActionFailure(message: message)
+            }
+        }
     }
 
     /// The main window, so a capture started from it can step the window aside.

@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let didAttemptLoginItemKey = "didAttemptLoginItemRegistration"
+    private var appServices: AppServices?
     private var captureCoordinator: CaptureCoordinator?
     private var recordingController: RecordingController?
     private var hotkeyCenter: HotkeyCenter?
@@ -64,6 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             eventTapEngine: eventTapEngine,
             recordingState: recordingStateModel
         )
+        self.appServices = services
         let mainWindowController = MainWindowController(dock: dockController, services: services)
         services.mainWindow = mainWindowController
         self.mainWindowController = mainWindowController
@@ -233,6 +235,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showMainWindow()
         return true
+    }
+
+    /// Finder's explicit Open action hosts the pending-open decision in the same main window.
+    func application(_ sender: NSApplication, open urls: [URL]) {
+        guard let url = urls.first, let appServices else { return }
+        showMainWindow()
+        Task { @MainActor in
+            if case .failed(let message) = await appServices.editor.requestOpen(url: url) {
+                appServices.library.issue = message
+            }
+        }
     }
 
     private func showMainWindow() {

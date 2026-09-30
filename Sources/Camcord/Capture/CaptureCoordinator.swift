@@ -63,6 +63,13 @@ final class CaptureCoordinator {
     /// older one overwrite the newer result.
     private var clipboardRequests = LatestRequestGate()
 
+    /// Claims publication at the user action, before an asynchronous renderer or encoder starts.
+    func claimClipboardPublication() -> (@MainActor () -> Bool) {
+        let token = clipboardRequests.begin()
+        return { [weak self] in self?.clipboardRequests.isCurrent(token) == true }
+    }
+
+
     private final class FrozenHoldRequest {
         let token: UInt64
         let clipboardToken: UInt64

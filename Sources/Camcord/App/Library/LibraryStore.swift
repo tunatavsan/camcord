@@ -14,6 +14,10 @@ final class LibraryStore: CaptureLibraryStore {
     var usesGrid = true
     /// Return only after the editor has accepted the document. Nil is an honest unavailable state.
     @ObservationIgnored var onOpenScreenshot: (@MainActor (URL) async throws -> Void)?
+    @ObservationIgnored var claimClipboardPublication: (@MainActor () -> (@MainActor () -> Bool))?
+    @ObservationIgnored private var localClipboardRequests = LatestRequestGate()
+    @ObservationIgnored private var openRequests = LatestRequestGate()
+    @ObservationIgnored private let validateOpen: @Sendable (URL, CaptureItem.Kind) async -> Bool
     @ObservationIgnored let thumbnails = LibraryThumbnails()
     @ObservationIgnored let defaults: UserDefaults
     @ObservationIgnored let cacheDirectory: URL
@@ -42,7 +46,16 @@ final class LibraryStore: CaptureLibraryStore {
          cacheDirectory: URL = LibrarySettings.cacheDirectory(), operations: LibraryDisk.Operations = .init(),
          clock: @escaping @Sendable () -> Date = { Date() },
          scanner: @escaping @Sendable ([LibraryFiles.Root]) async throws -> [CaptureItem] = { try await LibraryFiles.scan($0) },
-         onOpenScreenshot: (@MainActor (URL) async throws -> Void)? = nil) {
+         onOpenScreenshot: (@MainActor (URL) async throws -> Void)? = nil,
+         validateOpen: @escaping @Sendable (URL, CaptureItem.Kind) async -> Bool = { url, kind in
+             await Task.detached(priority: .userInitiated) {
+                 guard (try? LibraryFiles.regularFile(url, in: url.deletingLastPathComponent())) == true else { return false }
+                 if kind == .recording { return true }
+                 guard let bytes = try? LibraryFiles.byteSize(url), bytes > 0,
+                       Int64(bytes) <= LibraryFiles.maxSourceBytes else { return false }
+                 return LibraryFiles.imageSize(url, pixelLimit: LibraryFiles.maxFullImagePixels) != nil
+             }.value
+         }) {
         self.defaults = defaults
         self.fixedRoots = roots
         self.cacheDirectory = cacheDirectory
@@ -50,6 +63,7 @@ final class LibraryStore: CaptureLibraryStore {
         self.clock = clock
         self.scanner = scanner
         self.onOpenScreenshot = onOpenScreenshot
+        self.validateOpen = validateOpen
         lastConfiguration = configuration
         defaultsObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification,
             object: defaults, queue: .main) { [weak self] _ in
@@ -232,14 +246,10 @@ final class LibraryStore: CaptureLibraryStore {
         if wasSelected { selection.remove(id); selection.insert(nextID) }
     }
     func open(_ item: CaptureItem) async {
+        let token = openRequests.begin()
         do {
-            let valid = await Task.detached(priority: .userInitiated) {
-                guard (try? LibraryFiles.regularFile(item.url, in: item.url.deletingLastPathComponent())) == true else { return false }
-                if item.kind == .recording { return true }
-                guard let bytes = try? LibraryFiles.byteSize(item.url),
-                      bytes > 0, Int64(bytes) <= LibraryFiles.maxSourceBytes else { return false }
-                return LibraryFiles.imageSize(item.url, pixelLimit: LibraryFiles.maxFullImagePixels) != nil
-            }.value
+            let valid = await validateOpen(item.url, item.kind)
+            guard !Task.isCancelled, openRequests.isCurrent(token) else { return }
             guard valid else { throw LibraryFiles.Failure.unsupportedImage }
             if item.kind == .recording {
                 guard NSWorkspace.shared.open(item.url) else { throw LibraryFiles.Failure.unsafePath }
@@ -250,30 +260,34 @@ final class LibraryStore: CaptureLibraryStore {
                 }
                 try await onOpenScreenshot(item.url)
             }
-        } catch { issue = error.localizedDescription }
+        } catch { if !Task.isCancelled, openRequests.isCurrent(token) { issue = error.localizedDescription } }
     }
     func openDroppedImage(_ url: URL) async {
+        let token = openRequests.begin()
         do {
-            let accepted = await Task.detached(priority: .utility) {
-                guard (try? LibraryFiles.regularFile(url, in: url.deletingLastPathComponent())) == true,
-                      let size = try? LibraryFiles.byteSize(url),
-                      Int64(size) <= LibraryFiles.maxSourceBytes else { return false }
-                return LibraryFiles.imageSize(url, pixelLimit: LibraryFiles.maxFullImagePixels) != nil
-            }.value
+            let accepted = await validateOpen(url, .screenshot)
+            guard !Task.isCancelled, openRequests.isCurrent(token) else { return }
             guard accepted else { throw LibraryFiles.Failure.unsupportedImage }
             guard let onOpenScreenshot else {
                 issue = String(localized: "The screenshot editor is not available yet. Use Quick Look to preview this capture.")
                 return
             }
             try await onOpenScreenshot(url)
-        } catch { issue = error.localizedDescription }
+        } catch { if !Task.isCancelled, openRequests.isCurrent(token) { issue = error.localizedDescription } }
     }
     func copySelection(to pasteboard: NSPasteboard = .general) async {
         let targets = selectedItems
         guard !targets.isEmpty else { return }
+        let publish: @MainActor () -> Bool
+        if let claimClipboardPublication { publish = claimClipboardPublication() }
+        else {
+            let token = localClipboardRequests.begin()
+            publish = { [weak self] in self?.localClipboardRequests.isCurrent(token) == true }
+        }
         let safe = await Task.detached(priority: .userInitiated) {
             targets.allSatisfy { (try? LibraryFiles.regularFile($0.url, in: $0.url.deletingLastPathComponent())) == true }
         }.value
+        guard !Task.isCancelled, publish() else { return }
         guard safe else { issue = LibraryFiles.Failure.unsafePath.localizedDescription; return }
         if targets.count == 1, let item = targets.first, item.kind != .recording {
             let data = await Task.detached(priority: .userInitiated) { () -> Data? in
@@ -283,10 +297,12 @@ final class LibraryStore: CaptureLibraryStore {
                       LibraryFiles.imageSize(item.url, pixelLimit: LibraryFiles.maxFullImagePixels) != nil else { return nil }
                 return try? Data(contentsOf: item.url, options: .mappedIfSafe)
             }.value
+            guard !Task.isCancelled, publish() else { return }
             guard let data else { issue = LibraryFiles.Failure.unsupportedImage.localizedDescription; return }
             pasteboard.clearContents()
             guard pasteboard.setData(data, forType: .png) else { issue = String(localized: "Couldn't copy the selected captures."); return }
         } else {
+            guard !Task.isCancelled, publish() else { return }
             pasteboard.clearContents()
             if !pasteboard.writeObjects(targets.map { $0.url as NSURL }) { issue = String(localized: "Couldn't copy the selected captures.") }
         }

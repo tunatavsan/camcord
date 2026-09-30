@@ -106,6 +106,8 @@ struct MainWindowView: View {
         .frame(minWidth: 880, minHeight: 560)
         .tint(Theme.Palette.ink.color)
         .environment(\.appServices, services)
+        .environment(\.screenshotEditorSession, services?.editor)
+        .modifier(EditorOpeningConfirmationModifier(session: services?.editor))
         .environment(\.mainWindowModel, model)
         .environment(\.mainWindowLifecycle, lifecycle)
     }

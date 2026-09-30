@@ -19,6 +19,42 @@
         }
       }
     },
+    "%lld": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld"
+          }
+        }
+      }
+    },
+    "%lld annotations, selected %@": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld annotations, selected %@"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld işaretleme, seçili %@"
+          }
+        }
+      }
+    },
     "%lld captures": {
       "extractionState": "manual",
       "comment": "Library interface",
@@ -451,6 +487,24 @@
         }
       }
     },
+    "An image export is already in progress.": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An image export is already in progress."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bir görüntü dışa aktarma işlemi zaten sürüyor."
+          }
+        }
+      }
+    },
     "Annotation color": {
       "extractionState": "manual",
       "comment": "Screenshot editor",
@@ -645,6 +699,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Arka plan ve çerçeve"
+          }
+        }
+      }
+    },
+    "Background color": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Background color"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Arka plan rengi"
           }
         }
       }
@@ -1023,6 +1095,24 @@
         }
       }
     },
+    "Choose a different file name to preserve the original image.": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a different file name to preserve the original image."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Özgün görüntüyü korumak için farklı bir dosya adı seçin."
+          }
+        }
+      }
+    },
     "Choose a tool, then drag on the image. Arrow keys move the selected annotation.": {
       "extractionState": "manual",
       "comment": "Screenshot editor",
@@ -1217,6 +1307,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kopyala"
+          }
+        }
+      }
+    },
+    "Copy pixel color": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy pixel color"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Piksel rengini kopyala"
           }
         }
       }
@@ -1447,6 +1555,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Özel (gelişmiş)"
+          }
+        }
+      }
+    },
+    "Decrease annotation height": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Decrease annotation height"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İşaretleme yüksekliğini azalt"
+          }
+        }
+      }
+    },
+    "Decrease annotation width": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Decrease annotation width"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İşaretleme genişliğini azalt"
           }
         }
       }
@@ -1785,6 +1929,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Düzenleme 1.0'dan sonra geliyor"
+          }
+        }
+      }
+    },
+    "Edited screenshot.png": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edited screenshot.png"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Düzenlenmiş ekran görüntüsü.png"
           }
         }
       }
@@ -2419,6 +2581,42 @@
         }
       }
     },
+    "Increase annotation height": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Increase annotation height"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İşaretleme yüksekliğini artır"
+          }
+        }
+      }
+    },
+    "Increase annotation width": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Increase annotation width"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İşaretleme genişliğini artır"
+          }
+        }
+      }
+    },
     "Indicator": {
       "comment": "Settings card",
       "extractionState": "manual",
@@ -2523,6 +2721,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Klavye kısayolları"
+          }
+        }
+      }
+    },
+    "Last inspected pixel": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Last inspected pixel"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Son incelenen piksel"
           }
         }
       }
@@ -2993,6 +3209,78 @@
         }
       }
     },
+    "Move annotation down": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move annotation down"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İşaretlemeyi aşağı taşı"
+          }
+        }
+      }
+    },
+    "Move annotation left": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move annotation left"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İşaretlemeyi sola taşı"
+          }
+        }
+      }
+    },
+    "Move annotation right": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move annotation right"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İşaretlemeyi sağa taşı"
+          }
+        }
+      }
+    },
+    "Move annotation up": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move annotation up"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İşaretlemeyi yukarı taşı"
+          }
+        }
+      }
+    },
     "Move selected captures to Trash?": {
       "extractionState": "manual",
       "comment": "Library interface",
@@ -3209,6 +3497,24 @@
         }
       }
     },
+    "No email or phone suggestions found. Review the image for other sensitive information.": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No email or phone suggestions found. Review the image for other sensitive information."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "E-posta veya telefon önerisi bulunamadı. Diğer hassas bilgiler için görüntüyü inceleyin."
+          }
+        }
+      }
+    },
     "No limit": {
       "comment": "Time limit option",
       "extractionState": "manual",
@@ -3241,6 +3547,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Eşleşen çekim yok"
+          }
+        }
+      }
+    },
+    "None": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "None"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yok"
           }
         }
       }
@@ -4667,6 +4991,24 @@
         }
       }
     },
+    "Select next annotation": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select next annotation"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sonraki işaretlemeyi seç"
+          }
+        }
+      }
+    },
     "Selected": {
       "extractionState": "manual",
       "comment": "Screenshot editor",
@@ -5395,6 +5737,24 @@
         }
       }
     },
+    "The edited image could not be copied.": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The edited image could not be copied."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Düzenlenmiş görüntü kopyalanamadı."
+          }
+        }
+      }
+    },
     "The edited image could not be rendered.": {
       "extractionState": "manual",
       "comment": "Screenshot editor",
@@ -5443,6 +5803,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Mikrofon testi başarısız oldu. İzni ve seçili girişi kontrol et."
+          }
+        }
+      }
+    },
+    "The pixel color could not be copied.": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The pixel color could not be copied."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Piksel rengi kopyalanamadı."
           }
         }
       }
@@ -6169,6 +6547,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "macOS bu anahtarları Sistem Ayarları › Gizlilik ve Güvenlik'te tutar."
+          }
+        }
+      }
+    },
+    "x %lld · y %lld": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "x %lld · y %lld"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "x %lld · y %lld"
           }
         }
       }

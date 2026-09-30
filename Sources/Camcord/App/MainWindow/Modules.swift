@@ -101,44 +101,14 @@ struct StudioModule: CamcordModule {
     }
 }
 
-/// Edit is a real page with an honest message (A-EDIT): it comes after 1.0, and says what to
-/// use until then.
-struct EditModule: CamcordModule, ModuleBadging {
+/// Screenshot editing uses the shared session supplied by the main window.
+struct EditModule: CamcordModule {
     let id = ModuleID.edit
     let title = LocalizedStringResource("Edit", comment: "Main window module")
     let symbol = "scissors"
     let section = ModuleSection.create
     let isAvailable = true
-    let badge: LocalizedStringResource? = LocalizedStringResource("Later", comment: "Tag on a feature that comes after 1.0")
-
-    func makeView() -> AnyView { AnyView(EditLaterView()) }
-}
-
-struct EditLaterView: View {
-    static let quickTime = "com.apple.QuickTimePlayerX"
-    static let preview = "com.apple.Preview"
-
-    var body: some View {
-        ContentUnavailableView {
-            Label { Text("Edit comes after 1.0", comment: "Edit page title") } icon: { Image(systemName: "scissors") }
-        } description: {
-            Text("Trimming and annotation are next. Until then, trim a recording in QuickTime Player and mark up a screenshot in Preview.",
-                 comment: "Edit page: what to use today")
-        } actions: {
-            HStack(spacing: Theme.Space.s) {
-                Button { Self.open(Self.quickTime) } label: { Text("Open QuickTime Player", comment: "Button on the Edit page") }
-                Button { Self.open(Self.preview) } label: { Text("Open Preview", comment: "Button on the Edit page") }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private static func open(_ bundleID: String) {
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return }
-        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
-    }
+    func makeView() -> AnyView { AnyView(ScreenshotEditorView()) }
 }
 
 /// Settings inside the window (K7): its groups take over the sidebar, its pages are the
