@@ -10,20 +10,17 @@ import Testing
 @Suite("Panel layout")
 @MainActor
 struct PanelLayoutTests {
-    @Test("the panel is two columns wide and never taller than its idle height")
+    @Test("the capture palette stays compact in every recording state")
     func sizeTable() {
-        #expect(CapturePanelView.panelWidth == 560)
-        #expect(CapturePanelView.panelHeight == 458)
-        // A running recording is exactly as tall as an idle panel: the stage lives in the
-        // context column, not in extra height.
+        #expect(CapturePanelView.panelWidth == 320)
+        #expect(CapturePanelView.panelHeight == 428)
+        // Recording status uses the same compact palette footprint as idle capture.
         #expect(CapturePanelView.activeHeight == CapturePanelView.panelHeight)
         for height in [CapturePanelView.panelHeight, CapturePanelView.activeHeight,
                        CapturePanelView.finishingHeight, CapturePanelView.finishedHeight] {
-            #expect(height <= 458)
+            #expect(height <= CapturePanelView.panelHeight)
         }
-        // The two columns and the gap fill the width inside the padding exactly.
-        #expect(CapturePanelView.controlColumnWidth + 12 + CapturePanelView.contextColumnWidth
-            == CapturePanelView.panelWidth - 24)
+
     }
 
     @Test("only a press on the camera rectangle moves it; the recording itself is not a control")

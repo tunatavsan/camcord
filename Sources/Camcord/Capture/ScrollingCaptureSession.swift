@@ -180,7 +180,7 @@ final class ScrollingCaptureSession {
                     hooks.show({ [weak self] in self?.finish(keep: true) },
                                { [weak self] in self?.finish(keep: false) })
                 } else {
-                    indicator.show(cgRect: region, color: .systemBlue, onStop: nil)
+                    indicator.show(cgRect: region, color: Theme.Palette.ink.ns, onStop: nil)
                     preview.show(
                         near: region,
                         onDone: { [weak self] in self?.finish(keep: true) },

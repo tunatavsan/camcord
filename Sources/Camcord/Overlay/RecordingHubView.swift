@@ -224,11 +224,11 @@ final class RecordingHubView: NSView {
     /// The glass's tint: toward near-black and strong enough that the hub reads as a solid
     /// dark object over any wallpaper or game, so the 11 pt time never competes for
     /// contrast. Interim — the palette comes from the design direction chosen in UI-2.
-    static let glassTint = NSColor(calibratedWhite: 0.06, alpha: 0.72)
-    /// The app's one hairline (`CamcordStyle.innerBorder`), resolved on dark chrome.
-    private static let hairline = NSColor.labelColor.withAlphaComponent(0.09)
-    private static let recordingTint = NSColor(CamcordStyle.recording)
-    private static let accentTint = NSColor(CamcordStyle.accent)
+    static let glassTint = Theme.Palette.glassTintHUD.ns
+    /// The app's one hairline (Theme hairline), resolved on dark chrome.
+    private static let hairline = Theme.Palette.hairline.ns
+    private static let recordingTint = Theme.Palette.record.ns
+    private static let accentTint = Theme.Palette.ink.ns
 
     private var symbolCache: [String: NSImage] = [:]
 
@@ -347,8 +347,8 @@ final class RecordingHubView: NSView {
                 ? CGRect(x: rect.minX, y: rect.minY, width: RecordingHubLayout.startLabelZone, height: rect.height)
                 : CGRect(x: glyphZone.maxX, y: rect.minY,
                          width: RecordingHubLayout.startLabelZone, height: rect.height)
-            drawText("Başlat", font: .systemFont(ofSize: 12, weight: .semibold),
-                     color: NSColor.labelColor, in: labelZone, alpha: progress)
+            drawText(String(localized: "Start"), font: Theme.Font.ns.bodyStrong,
+                     color: Theme.Palette.ink.ns, in: labelZone, alpha: progress)
         case .divider:
             Self.hairline.withAlphaComponent(0.09 * alpha).setStroke()
             let line = NSBezierPath()
@@ -358,17 +358,17 @@ final class RecordingHubView: NSView {
             line.stroke()
         case .pause:
             drawSymbol(mode == .paused ? "play.fill" : "pause.fill",
-                       tint: NSColor.labelColor, in: rect, alpha: alpha)
+                       tint: Theme.Palette.ink.ns, in: rect, alpha: alpha)
         case .stop:
             drawSymbol("stop.fill", tint: Self.recordingTint, in: rect, alpha: alpha)
         case .preview:
             drawSymbol(previewVisible ? "eye.fill" : "eye.slash",
-                       tint: previewVisible ? Self.accentTint : NSColor.secondaryLabelColor,
+                       tint: previewVisible ? Self.accentTint : Theme.Palette.ink2.ns,
                        in: rect, alpha: alpha)
         case .micLevel:
             drawMicLevel(in: rect, alpha: alpha)
         case .cancel:
-            drawSymbol("xmark", tint: NSColor.secondaryLabelColor, in: rect, alpha: alpha)
+            drawSymbol("xmark", tint: Theme.Palette.ink2.ns, in: rect, alpha: alpha)
         }
     }
 
@@ -387,8 +387,8 @@ final class RecordingHubView: NSView {
             path.fill()
         }
         let text = elapsed ?? "0:00"
-        drawText(text, font: .monospacedDigitSystemFont(ofSize: 11, weight: .semibold),
-                 color: NSColor.labelColor,
+        drawText(text, font: Theme.Font.ns.dataStrong,
+                 color: Theme.Palette.ink.ns,
                  in: CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.midY + 2 - rect.minY),
                  alpha: alpha)
     }
@@ -528,11 +528,11 @@ final class RecordingHubView: NSView {
 
     static func label(for item: RecordingHubItem, mode: RecordingHubMode, previewVisible: Bool) -> String {
         switch item {
-        case .start: "Başlat"
-        case .pause: mode == .paused ? "Sürdür" : "Duraklat"
+        case .start: String(localized: "Start")
+        case .pause: mode == .paused ? String(localized: "Resume") : String(localized: "Pause")
         case .stop: "Kaydı durdur"
         case .preview: previewVisible ? "Kamerayı kapat" : "Kamerayı göster"
-        case .cancel: "İptal"
+        case .cancel: String(localized: "Cancel")
         case .elapsed: "Geçen süre"
         case .micLevel: "Mikrofon seviyesi"
         case .divider: ""

@@ -136,7 +136,7 @@ struct AuditRenderShots {
 
         for (name, show) in [
             ("toast", { HUDToast().show(text: "Kopyalandı", systemSymbol: "checkmark.circle.fill", respectsSetting: false, duration: 30) }),
-            ("screenshot-card", { ScreenshotPreviewCard().show(image: shot, fileURL: nil) }),
+            ("screenshot-card", { ScreenshotPreviewCard().show(capture: CapturedScreenshot(id: UUID(), image: shot, pointSize: drawn.size, kind: .screenshot, saveToDiskRequested: false)) }),
             ("scroll-hud", { ScrollPreviewPanel().show(near: CGRect(x: 400, y: 300, width: 600, height: 500),
                                                         onDone: {}, onCancel: {}, onToggleAuto: {}) }),
         ] as [(String, () -> Void)] {

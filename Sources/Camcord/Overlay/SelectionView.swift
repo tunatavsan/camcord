@@ -23,7 +23,7 @@ final class SelectionView: NSView {
 
     /// The selection's intent color: blue for a screenshot, red for a recording. Drives
     /// BOTH the region border and the window-snap highlight so every pick reads the same.
-    var accent: NSColor = .systemBlue {
+    var accent: NSColor = Theme.Palette.ink.ns {
         didSet {
             highlightLayer.strokeColor = accent.cgColor
             highlightLayer.fillColor = accent.withAlphaComponent(0.14).cgColor
@@ -62,7 +62,7 @@ final class SelectionView: NSView {
     /// Dimension badge (local anchor rect + "W x H" pixel text), shown only on the
     /// screen the cursor is currently over.
     var badge: (rect: CGRect, text: String)? {
-        didSet { chromeView.needsDisplay = true }
+        didSet { chromeView.needsDisplay = true; setAccessibilityValue(badge?.text) }
     }
     /// The current drag is an OCR (right-button) selection — draw it distinctly (teal
     /// outline + label) so it never looks like a plain screenshot selection.
@@ -78,6 +78,10 @@ final class SelectionView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel(String(localized: "Select a capture region"))
+        setAccessibilityHelp(String(localized: "Drag to select an area. Press Esc to cancel."))
 
         frozenDesktopLayer.frame = bounds
         frozenDesktopLayer.contentsGravity = .resize
@@ -241,7 +245,7 @@ final class SelectionView: NSView {
                 // round away the selection's real edges.
                 let border = NSBezierPath(roundedRect: selectionRect, xRadius: 3, yRadius: 3)
                 border.lineWidth = 2
-                NSColor.systemTeal.setStroke()
+                Theme.Palette.ink.ns.setStroke()
                 border.stroke()
                 drawModeLabel("Metin · OCR", near: selectionRect)
             } else {
@@ -257,8 +261,8 @@ final class SelectionView: NSView {
     /// A small pill above the selection naming the OCR mode.
     private func drawModeLabel(_ text: String, near rect: CGRect) {
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
-            .foregroundColor: NSColor.white,
+            .font: Theme.Font.ns.caption,
+            .foregroundColor: Theme.Palette.ink.dark.nsColor,
         ]
         let attributed = NSAttributedString(string: text, attributes: attributes)
         let textSize = attributed.size()
@@ -270,8 +274,8 @@ final class SelectionView: NSView {
             origin.y = rect.maxY - size.height - 6
         }
         let labelRect = CGRect(origin: origin, size: size)
-        NSColor.systemTeal.setFill()
-        NSBezierPath(roundedRect: labelRect, xRadius: CamcordStyle.Radius.control, yRadius: CamcordStyle.Radius.control).fill()
+        Theme.Palette.glassSolidHUD.ns.setFill()
+        NSBezierPath(roundedRect: labelRect, xRadius: Theme.Radius.well, yRadius: Theme.Radius.well).fill()
         attributed.draw(at: CGPoint(x: labelRect.minX + hp, y: labelRect.minY + vp))
     }
 
@@ -300,8 +304,8 @@ final class SelectionView: NSView {
 
     private func drawBadge(_ text: String, near rect: CGRect) {
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium),
-            .foregroundColor: NSColor.white,
+            .font: Theme.Font.ns.dataStrong,
+            .foregroundColor: Theme.Palette.ink.dark.nsColor,
         ]
         let attributed = NSAttributedString(string: text, attributes: attributes)
         let textSize = attributed.size()
@@ -318,8 +322,8 @@ final class SelectionView: NSView {
         }
         let badgeRect = CGRect(origin: badgeOrigin, size: badgeSize)
 
-        let path = NSBezierPath(roundedRect: badgeRect, xRadius: CamcordStyle.Radius.control, yRadius: CamcordStyle.Radius.control)
-        NSColor.black.withAlphaComponent(0.75).setFill()
+        let path = NSBezierPath(roundedRect: badgeRect, xRadius: Theme.Radius.well, yRadius: Theme.Radius.well)
+        Theme.Palette.glassSolidHUD.ns.setFill()
         path.fill()
         attributed.draw(at: CGPoint(x: badgeRect.minX + horizontalPadding, y: badgeRect.minY + verticalPadding))
     }

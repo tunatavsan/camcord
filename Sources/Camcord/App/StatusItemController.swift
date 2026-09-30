@@ -177,7 +177,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         designLabItem.target = self
         menu.addItem(designLabItem)
 
-        let quitItem = NSMenuItem(title: "Camcord'dan Çık", action: #selector(quit), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: String(localized: "Quit Camcord"), action: #selector(quit), keyEquivalent: "q")
         quitItem.keyEquivalentModifierMask = .command
         quitItem.target = self
         menu.addItem(quitItem)
@@ -270,7 +270,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         guard let button = statusItem.button else { return }
         failureFlashTask?.cancel()
         if recordingController.uiState == .idle {
-            button.contentTintColor = .systemRed
+            button.contentTintColor = Theme.Palette.record.ns
         }
         failureFlashTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
@@ -286,7 +286,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         guard let button = statusItem.button else { return }
         failureFlashTask?.cancel()
         if recordingController.uiState == .idle {
-            button.contentTintColor = .systemGreen
+            button.contentTintColor = Theme.Palette.ok.ns
         }
         failureFlashTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(220))
@@ -311,7 +311,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     func setPreparing(_ preparing: Bool) {
         if preparing, lastUIState == nil || lastUIState == .idle {
-            statusItem.button?.image = Self.indicatorImage(elapsed: "…", color: .systemGray, paused: false)
+            statusItem.button?.image = Self.indicatorImage(elapsed: "…", color: Theme.Palette.ink2.ns, paused: false)
             statusItem.button?.toolTip = "Kayıt hazırlanıyor"
         } else if !preparing {
             let state = lastUIState ?? .idle
@@ -322,7 +322,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     /// Renders the recording state on the status item: a vivid, glowing red glyph +
-    /// elapsed time while recording (orange while paused), plain camera when idle.
+    /// elapsed time while recording (hollow while paused), plain camera when idle.
     /// The elapsed text is drawn as an attributed string in the state color so it is
     /// clearly legible on the menu bar instead of the default (near-invisible) label.
     func setRecordingUI(_ state: RecordingController.UIState, elapsed: String?) {
@@ -345,12 +345,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             button.title = ""
             button.contentTintColor = nil
             button.imagePosition = .imageOnly
-            button.image = Self.indicatorImage(elapsed: elapsed ?? "0:00", color: .systemRed, paused: false)
+            button.image = Self.indicatorImage(elapsed: elapsed ?? "0:00", color: Theme.Palette.record.ns, paused: false)
         case .paused:
             button.title = ""
             button.contentTintColor = nil
             button.imagePosition = .imageOnly
-            button.image = Self.indicatorImage(elapsed: elapsed ?? "0:00", color: .systemOrange, paused: true)
+            button.image = Self.indicatorImage(elapsed: elapsed ?? "0:00", color: Theme.Palette.ink.ns, paused: true)
         }
 
         if stateChanged {
@@ -361,8 +361,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     /// A highly visible "recording pill": solid color background, white dot, white text.
     /// Rendered as a non-template image so it ignores macOS menu bar tinting and stays vivid.
     private static func indicatorImage(elapsed: String, color: NSColor, paused: Bool) -> NSImage {
-        let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
-        let textColor: NSColor = .white
+        let font = Theme.Font.ns.dataStrong
+        let textColor: NSColor = paused ? Theme.Palette.ink.ns : Theme.Palette.onRecord.ns
         let text = NSAttributedString(
             string: elapsed,
             attributes: [.foregroundColor: textColor, .font: font]
@@ -381,18 +381,18 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         NSGraphicsContext.saveGraphicsState()
 
         // Draw the pill background
-        color.setFill()
+        (paused ? NSColor.clear : color).setFill()
         let pillRect = NSRect(x: 0, y: (height - pillHeight) / 2, width: width, height: pillHeight)
         let pillPath = NSBezierPath(roundedRect: pillRect, xRadius: pillHeight / 2, yRadius: pillHeight / 2)
         pillPath.fill()
 
-        // Draw the dot or pause bars
-        textColor.setFill()
+        // Draw the filled recording dot or hollow paused ring
+        textColor.set()
         let dotRect = NSRect(x: hPad, y: (height - dot) / 2, width: dot, height: dot)
         if paused {
-            let barW: CGFloat = 2, barGap: CGFloat = 2
-            NSBezierPath(rect: NSRect(x: hPad + 1, y: dotRect.minY, width: barW, height: dot)).fill()
-            NSBezierPath(rect: NSRect(x: hPad + 1 + barW + barGap, y: dotRect.minY, width: barW, height: dot)).fill()
+            let ring = NSBezierPath(ovalIn: dotRect.insetBy(dx: 1, dy: 1))
+            ring.lineWidth = 1.5
+            ring.stroke()
         } else {
             NSBezierPath(ovalIn: dotRect).fill()
         }

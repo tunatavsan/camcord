@@ -17,8 +17,8 @@ enum SelectionAccent {
 
     var color: NSColor {
         switch self {
-        case .screenshot: return .systemBlue
-        case .recording: return .systemRed
+        case .screenshot: return Theme.Palette.ink.ns
+        case .recording: return Theme.Palette.record.ns
         }
     }
 }

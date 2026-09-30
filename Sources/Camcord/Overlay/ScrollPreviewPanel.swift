@@ -98,13 +98,14 @@ private final class ScrollPreviewView: NSView {
     var onCancel: (() -> Void)?
     var onToggleAuto: (() -> Void)?
 
-    private let card = NSView()
-    private let title = NSTextField(labelWithString: "Kaydırarak Çek")
-    private let subtitle = NSTextField(labelWithString: "aşağı kaydır")
+    private let card = NSGlassEffectView.camcord(.chrome, cornerRadius: Theme.Radius.floating)
+    private let chromeContent = NSView()
+    private let title = NSTextField(labelWithString: String(localized: "Scroll capture"))
+    private let subtitle = NSTextField(labelWithString: String(localized: "Scroll down"))
     private let imageView = TailingImageView()
-    private let autoButton = HUDButton(title: "⤓ Otomatik Kaydır", accent: false)
-    private let doneButton = HUDButton(title: "✓ Bitti", accent: true)
-    private let cancelButton = HUDButton(title: "İptal", accent: false)
+    private let autoButton = HUDButton(title: String(localized: "Scroll for me"), accent: false)
+    private let doneButton = HUDButton(title: String(localized: "Done"), accent: true)
+    private let cancelButton = HUDButton(title: String(localized: "Cancel"), accent: false)
 
     // Status-line state (precedence: transient hint > auto-running > end-reached > sections).
     private var sections = 0
@@ -128,48 +129,49 @@ private final class ScrollPreviewView: NSView {
         let b = bounds
         card.frame = b
         card.wantsLayer = true
-        card.layer?.backgroundColor = NSColor(calibratedWhite: 0.10, alpha: 0.96).cgColor
-        card.layer?.cornerRadius = CamcordStyle.Radius.surface
+        card.contentView = chromeContent
+        chromeContent.frame = b
+        card.layer?.cornerRadius = Theme.Radius.floating
         card.layer?.borderWidth = 1
-        card.layer?.borderColor = NSColor.systemBlue.withAlphaComponent(0.55).cgColor
+        card.layer?.borderColor = Theme.Palette.hairline.ns.cgColor
         addSubview(card)
 
         title.frame = CGRect(x: 14, y: b.height - 32, width: b.width - 28, height: 20)
-        title.font = .systemFont(ofSize: 13, weight: .semibold)
-        title.textColor = .white
+        title.font = Theme.Font.ns.bodyStrong
+        title.textColor = Theme.Palette.ink.ns
         title.backgroundColor = .clear
         title.isBezeled = false
         title.isEditable = false
-        card.addSubview(title)
+        chromeContent.addSubview(title)
 
         subtitle.frame = CGRect(x: 14, y: b.height - 50, width: b.width - 28, height: 16)
-        subtitle.font = .systemFont(ofSize: 11, weight: .regular)
-        subtitle.textColor = NSColor(calibratedWhite: 1, alpha: 0.6)
+        subtitle.font = Theme.Font.ns.caption
+        subtitle.textColor = Theme.Palette.ink2.ns
         subtitle.backgroundColor = .clear
         subtitle.isBezeled = false
         subtitle.isEditable = false
         subtitle.lineBreakMode = .byTruncatingTail
-        card.addSubview(subtitle)
+        chromeContent.addSubview(subtitle)
 
         imageView.frame = CGRect(x: 12, y: 90, width: b.width - 24, height: (b.height - 56) - 90)
         imageView.wantsLayer = true
-        imageView.layer?.backgroundColor = NSColor(calibratedWhite: 0.16, alpha: 1).cgColor
-        imageView.layer?.cornerRadius = CamcordStyle.Radius.control
+        imageView.layer?.backgroundColor = Theme.Palette.well.ns.cgColor
+        imageView.layer?.cornerRadius = Theme.Radius.well
         imageView.layer?.masksToBounds = true
-        card.addSubview(imageView)
+        chromeContent.addSubview(imageView)
 
         autoButton.frame = CGRect(x: 14, y: 54, width: b.width - 28, height: 30)
         autoButton.onClick = { [weak self] in self?.onToggleAuto?() }
-        card.addSubview(autoButton)
+        chromeContent.addSubview(autoButton)
 
         let bw: CGFloat = (b.width - 14 * 2 - 10) / 2
         cancelButton.frame = CGRect(x: 14, y: 14, width: bw, height: 30)
         cancelButton.onClick = { [weak self] in self?.onCancel?() }
-        card.addSubview(cancelButton)
+        chromeContent.addSubview(cancelButton)
 
         doneButton.frame = CGRect(x: 14 + bw + 10, y: 14, width: bw, height: 30)
         doneButton.onClick = { [weak self] in self?.onDone?() }
-        card.addSubview(doneButton)
+        chromeContent.addSubview(doneButton)
     }
 
     func update(image: CGImage?, sections: Int) {
@@ -186,7 +188,7 @@ private final class ScrollPreviewView: NSView {
         autoRunning = running
         endReached = reachedEnd
         hint = nil   // a real state change clears any stale hint
-        autoButton.setTitle(running ? "⏸ Otomatiği Durdur" : "⤓ Otomatik Kaydır")
+        autoButton.setTitle(running ? String(localized: "Stop auto scroll") : String(localized: "Scroll for me"))
         autoButton.setHighlighted(running)
         refreshStatus()
     }
@@ -207,14 +209,14 @@ private final class ScrollPreviewView: NSView {
         if let hint {
             subtitle.stringValue = hint
         } else if autoRunning {
-            subtitle.stringValue = "Otomatik kaydırılıyor…"
+            subtitle.stringValue = String(localized: "Scrolling automatically…")
         } else if endReached {
-            subtitle.stringValue = "Sayfa sonu · Bitti'ye bas"
+            subtitle.stringValue = String(localized: "End of page · Press Done")
         } else {
             switch sections {
-            case 0: subtitle.stringValue = "aşağı kaydır veya Otomatik"
-            case 1: subtitle.stringValue = "1 bölüm · aşağı kaydır"
-            default: subtitle.stringValue = "\(sections) bölüm · Esc iptal"
+            case 0: subtitle.stringValue = String(localized: "Scroll down or choose Scroll for me")
+            case 1: subtitle.stringValue = String(localized: "1 section · Scroll down")
+            default: subtitle.stringValue = String(localized: "\(sections) sections · Esc to cancel")
             }
         }
     }
@@ -228,7 +230,7 @@ private final class TailingImageView: NSView {
     override var isFlipped: Bool { false }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor(calibratedWhite: 0.16, alpha: 1).setFill()
+        Theme.Palette.well.ns.setFill()
         bounds.fill()
         guard let cgImage, cgImage.width > 0 else { return }
         let s = bounds.width / CGFloat(cgImage.width)
@@ -253,29 +255,32 @@ private final class HUDButton: NSView {
         self.label = NSTextField(labelWithString: title)
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = CamcordStyle.Radius.control
+        layer?.cornerRadius = Theme.Radius.well
         layer?.backgroundColor = idleColor
-        label.font = .systemFont(ofSize: 12.5, weight: .semibold)
-        label.textColor = .white
+        label.font = Theme.Font.ns.bodyStrong
+        label.textColor = accent ? Theme.Palette.onInk.ns : Theme.Palette.ink.ns
         label.alignment = .center
         label.backgroundColor = .clear
         label.isBezeled = false
         label.isEditable = false
         addSubview(label)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(title)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
     private var idleColor: CGColor {
-        accent ? NSColor.systemBlue.cgColor : NSColor(calibratedWhite: 1, alpha: 0.14).cgColor
+        accent ? Theme.Palette.ink.ns.cgColor : Theme.Palette.hover.ns.cgColor
     }
 
-    func setTitle(_ t: String) { label.stringValue = t }
+    func setTitle(_ t: String) { label.stringValue = t; setAccessibilityLabel(t) }
 
     /// Toggles a highlighted (active) fill — used by the auto-scroll toggle when running.
     func setHighlighted(_ on: Bool) {
-        layer?.backgroundColor = on ? NSColor.systemTeal.cgColor : idleColor
+        layer?.backgroundColor = on ? Theme.Palette.selectionStrong.ns.cgColor : idleColor
     }
 
     override func layout() {
@@ -284,6 +289,11 @@ private final class HUDButton: NSView {
     }
 
     override func mouseDown(with event: NSEvent) { onClick?() }
+    override var acceptsFirstResponder: Bool { true }
+    override func accessibilityPerformPress() -> Bool { onClick?(); return true }
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 49 || event.keyCode == 36 { onClick?() } else { super.keyDown(with: event) }
+    }
 
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
 }

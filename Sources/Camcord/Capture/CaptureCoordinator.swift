@@ -48,12 +48,7 @@ final class CaptureCoordinator {
     /// Wired by AppDelegate to the HUD toast — a transient thumbnail + "copied" confirmation.
     var onToast: ((ToastRequest) -> Void)?
 
-    /// Wired by AppDelegate to the bottom-left screenshot preview card. Screenshots surface
-    /// here instead of the center toast: the framed preview IS their "copied" confirmation,
-    /// and it's clickable (opens for editing) / draggable. `fileURL` is the on-disk PNG when
-    /// disk-saving is on, else nil (the card writes a temp file on demand).
-    var onScreenshotPreview: ((CGImage, URL?) -> Void)?
-    var onScreenshotSaved: ((CGImage, URL) -> Void)?
+    /// Stable typed screenshot delivery; AppDelegate owns Library and card fanout.
     var onScreenshotDelivery: ((ScreenshotDeliveryEvent) -> Void)?
 
     /// One capture flow at a time: the overlay's own isPresenting only covers the
@@ -331,7 +326,7 @@ final class CaptureCoordinator {
             return
         }
         if let notice { showScrollNotice(notice, keptContent: true) }
-        succeeded(.fullScreenShot, preview: (outputImage, nil))
+        succeeded(.fullScreenShot)
     }
 
     /// The SCDisplay whose frame contains the region's center.
@@ -664,7 +659,7 @@ final class CaptureCoordinator {
                 let pixels = try await capture()
                 guard !Task.isCancelled else { return }
                 guard let copied = await copyScreenshot(pixels.image, pointSize: pixels.pointSize, acceptedToken: acceptedToken) else { return }
-                if copied { succeeded(.fullScreenShot, preview: (pixels.image, nil)) }
+                if copied { succeeded(.fullScreenShot) }
                 else { fail("captureFullScreen: clipboard write failed") }
             } catch { fail("captureFullScreen: capture failed: \(error)") }
             return
@@ -694,7 +689,7 @@ final class CaptureCoordinator {
                 fail("captureFullScreen: clipboard write failed")
                 return
             }
-            succeeded(.fullScreenShot, preview: (image, nil))
+            succeeded(.fullScreenShot)
         } catch {
             fail("captureFullScreen: capture failed: \(error)")
         }
@@ -711,7 +706,7 @@ final class CaptureCoordinator {
                 fail("Region capture: clipboard write failed")
                 return
             }
-            succeeded(.regionShot, preview: (image, nil))
+            succeeded(.regionShot)
         } catch {
             fail("Region capture failed: \(error)")
         }
@@ -734,7 +729,7 @@ final class CaptureCoordinator {
             fail("Frozen region capture: clipboard write failed")
             return
         }
-        succeeded(sound, preview: (crop.image, nil))
+        succeeded(sound)
     }
 
     private func performFrozenText(_ snapshot: FrozenDesktopSnapshot, cgRect: CGRect, acceptedToken: UInt64? = nil) {
@@ -776,7 +771,7 @@ final class CaptureCoordinator {
                 fail("Window capture: clipboard write failed")
                 return
             }
-            succeeded(.windowShot, preview: (image, nil))
+            succeeded(.windowShot)
         } catch {
             fail("Window capture failed: \(error)")
         }
@@ -865,7 +860,6 @@ final class CaptureCoordinator {
                 if delivery.kind == .scrollCapture {
                     Task { @MainActor [weak self] in
                         let tagged = await Task { @concurrent in tagScrollCapture(url) }.value
-                        self?.onScreenshotSaved?(image, url)
                         self?.onScreenshotDelivery?(.saved(delivery, url))
                         if !tagged {
                             self?.onToast?(ToastRequest(
@@ -875,7 +869,6 @@ final class CaptureCoordinator {
                         }
                     }
                 } else {
-                    self?.onScreenshotSaved?(image, url)
                     self?.onScreenshotDelivery?(.saved(delivery, url))
                 }
             case .failure:
@@ -921,14 +914,11 @@ final class CaptureCoordinator {
     }
 
     /// Success feedback: the action's distinct sound + a brief status-glyph flash, plus
-    /// EITHER a HUD toast (OCR text, which has no image) OR the bottom-left screenshot
-    /// preview card (`preview` — the image that just landed on the clipboard, + its saved
-    /// URL when disk-saving is on).
-    private func succeeded(_ sound: FeedbackSound, toast: ToastRequest? = nil, preview: (image: CGImage, url: URL?)? = nil) {
+    /// optional OCR toast. Screenshot cards receive the separate typed delivery event.
+    private func succeeded(_ sound: FeedbackSound, toast: ToastRequest? = nil) {
         if operations.feedback { sound.play() }
         onSuccess?()
         if let toast { onToast?(toast) }
-        if let preview { onScreenshotPreview?(preview.image, preview.url) }
     }
 
     private func fail(_ message: String) {

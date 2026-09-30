@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var recordingStateModel: RecordingStateModel?
     private var hudToast: HUDToast?
     private var screenshotPreviewCard: ScreenshotPreviewCard?
+    private var screenshotDeliveryFanout: ScreenshotDeliveryFanout?
     private var servicesProvider: ServicesProvider?
     private var dockController: DockController?
     private var mainWindowController: MainWindowController?
@@ -152,18 +153,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // confirmation), instead of the center toast — clickable to edit, draggable to lift.
         let screenshotPreviewCard = ScreenshotPreviewCard()
         self.screenshotPreviewCard = screenshotPreviewCard
-        coordinator.onScreenshotPreview = { [weak screenshotPreviewCard] image, url in
-            screenshotPreviewCard?.show(image: image, fileURL: url)
+        screenshotPreviewCard.claimClipboardPublication = { [weak coordinator] in
+            coordinator?.claimClipboardPublication() ?? { false }
         }
-
-        coordinator.onScreenshotSaved = { [weak screenshotPreviewCard] image, url in
-            screenshotPreviewCard?.saved(image: image, to: url)
+        screenshotPreviewCard.onEdit = { [weak self, weak services] capture in
+            guard let self, let services else { return }
+            _ = services.editor.open(capture)
+            self.panelController?.close()
+            // The shared main host presents the actual pending-unsaved confirmation.
+            self.mainWindowController?.show(module: .edit)
         }
-
-        // History consumes stable delivery events independently of the preview callbacks.
-        coordinator.onScreenshotDelivery = { [weak services] event in
-            services?.library.ingest(event)
+        screenshotPreviewCard.onPin = { [weak self, weak services] capture in
+            guard let services else { return }
+            do {
+                try services.editor.pins.pin(EditorRendered(image: capture.image, pointSize: capture.pointSize))
+            } catch {
+                self?.hudToast?.show(text: error.localizedDescription, systemSymbol: "exclamationmark.triangle",
+                                     tint: Theme.Palette.warn.ns, respectsSetting: false)
+            }
         }
+        let deliveryFanout = ScreenshotDeliveryFanout(
+            ingest: { [weak services] event in services?.library.ingest(event) },
+            ready: { [weak screenshotPreviewCard] capture in screenshotPreviewCard?.show(capture: capture) },
+            saved: { [weak screenshotPreviewCard] id, url in screenshotPreviewCard?.saved(id: id, to: url) },
+            saveFailed: { [weak screenshotPreviewCard] capture in
+                guard let model = screenshotPreviewCard?.model, model.capture.id == capture.id else { return }
+                model.error = String(localized: "The screenshot could not be saved.")
+                // CaptureCoordinator already emits the actual important failure toast.
+            }
+        )
+        self.screenshotDeliveryFanout = deliveryFanout
+        coordinator.onScreenshotDelivery = { [weak deliveryFanout] event in deliveryFanout?.receive(event) }
 
         // macOS Services: "Camcord ile Metni Çıkar" on any image selection.
         let servicesProvider = ServicesProvider(coordinator: coordinator)
@@ -323,6 +343,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        actions.captureText = {
+            afterClosingPanel { await coordinator.captureTextRegionInteractive() }
+        }
         actions.captureRegion = {
             afterClosingPanel { await coordinator.captureRegionInteractive() }
         }
@@ -373,6 +396,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         actions.reportError = { [weak self] message in
             self?.hudToast?.show(text: message, systemSymbol: "exclamationmark.triangle", tint: .systemOrange, respectsSetting: false)
         }
+        actions.openLibrary = { [weak self] in
+            self?.panelController?.close()
+            self?.mainWindowController?.show(module: .library)
+        }
+        actions.openEditor = { [weak self] in
+            self?.panelController?.close()
+            self?.mainWindowController?.show(module: .edit)
+        }
+        actions.openStudio = { [weak self] in
+            self?.panelController?.close()
+            self?.mainWindowController?.show(module: .studio)
+        }
+        actions.quit = { NSApp.terminate(nil) }
         actions.openMainWindow = { [weak self] in self?.showMainWindow() }
         actions.openSettings = { [weak self] in
             self?.showSettingsModule()

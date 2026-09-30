@@ -12,7 +12,7 @@ enum CountdownOverlay {
                         try await Task.sleep(for: .milliseconds(100))
                     }) async -> Bool {
         guard !Task.isCancelled else { return false }
-        let size = CGSize(width: 128, height: 128)
+        let size = CGSize(width: 140, height: 140)
         let origin = CGPoint(x: frame.midX - size.width / 2, y: frame.midY - size.height / 2)
         let panel = CountdownPanel(
             contentRect: CGRect(origin: origin, size: size),
@@ -29,7 +29,16 @@ enum CountdownOverlay {
         panel.ignoresMouseEvents = false
 
         let view = CountdownView(frame: CGRect(origin: .zero, size: size))
-        panel.contentView = view
+        let chrome = CountdownChrome()
+        chrome.applyCamcord(.hud, cornerRadius: 70)
+        chrome.badge = view
+        chrome.setAccessibilityElement(true)
+        chrome.setAccessibilityRole(.button)
+        chrome.setAccessibilityLabel(String(localized: "Recording countdown"))
+        chrome.setAccessibilityHelp(String(localized: "Cancel the recording countdown"))
+        chrome.setAccessibilityChildren([])
+        chrome.contentView = view
+        panel.contentView = chrome
         panel.makeFirstResponder(view)
         if let presenter { presenter(panel) } else {
             panel.orderFrontRegardless()
@@ -39,6 +48,7 @@ enum CountdownOverlay {
         defer { panel.orderOut(nil) }
         for n in stride(from: seconds, through: 1, by: -1) {
             view.show(n)
+            chrome.setAccessibilityValue("\(n)")
             // Sleep in short beats so a cancel click is honored within ~100ms.
             for _ in 0..<10 {
                 do { try await sleepBeat() } catch { return false }
@@ -62,24 +72,24 @@ private final class CountdownView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.72).cgColor
-        layer?.cornerRadius = CamcordStyle.Radius.surface
+        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.cornerRadius = Theme.Radius.floating
         layer?.cornerCurve = .continuous
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
         setAccessibilityLabel(String(localized: "Recording countdown", comment: "Accessibility: recording countdown badge"))
         setAccessibilityHelp(String(localized: "Cancel the recording countdown", comment: "Accessibility: countdown cancellation action"))
 
-        digit.font = .monospacedDigitSystemFont(ofSize: 58, weight: .bold)
-        digit.textColor = .white
+        digit.font = Theme.Font.ns.mono(Theme.Font.Size.countdown, weight: .light)
+        digit.textColor = Theme.Palette.ink.dark.nsColor
         digit.alignment = .center
         digit.isBezeled = false
         digit.isEditable = false
         digit.backgroundColor = .clear
         addSubview(digit)
 
-        hint.font = .systemFont(ofSize: 10, weight: .medium)
-        hint.textColor = NSColor.white.withAlphaComponent(0.55)
+        hint.font = Theme.Font.ns.caption
+        hint.textColor = Theme.Palette.ink2.dark.nsColor
         hint.alignment = .center
         hint.isBezeled = false
         hint.isEditable = false
@@ -92,8 +102,10 @@ private final class CountdownView: NSView {
 
     override func layout() {
         super.layout()
-        digit.frame = CGRect(x: 0, y: bounds.midY - 34, width: bounds.width, height: 68)
-        hint.frame = CGRect(x: 0, y: 14, width: bounds.width, height: 14)
+        digit.frame = CGRect(x: 0, y: bounds.midY - 20, width: bounds.width, height: 68)
+        hint.frame = CGRect(x: 4, y: 18, width: bounds.width - 8, height: 28)
+        hint.maximumNumberOfLines = 2
+        hint.lineBreakMode = .byWordWrapping
     }
 
     func show(_ number: Int) {
@@ -128,4 +140,15 @@ private final class CountdownView: NSView {
     }
 
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+}
+
+/// The native chrome is the public event/AX target; it forwards to the same cancellation
+/// state the countdown loop observes, including callers that act on panel.contentView.
+private final class CountdownChrome: NSGlassEffectView {
+    weak var badge: NSView?
+    override var acceptsFirstResponder: Bool { true }
+    override func keyDown(with event: NSEvent) { badge?.keyDown(with: event) }
+    override func cancelOperation(_ sender: Any?) { badge?.cancelOperation(sender) }
+    override func mouseDown(with event: NSEvent) { badge?.mouseDown(with: event) }
+    override func accessibilityPerformPress() -> Bool { badge?.accessibilityPerformPress() ?? false }
 }

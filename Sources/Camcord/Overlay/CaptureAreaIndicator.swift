@@ -167,7 +167,7 @@ final class CaptureAreaIndicator {
         initialCGRect: CGRect,
         showsBorder: Bool,
         mode: RecordingHubMode = .recording,
-        color: NSColor = .systemRed,
+        color: NSColor = Theme.Palette.record.ns,
         onCancel: (() -> Void)? = nil,
         onPauseResume: (() -> Void)? = nil,
         onTogglePreview: (() -> Void)? = nil,
@@ -507,7 +507,7 @@ final class CaptureAreaIndicator {
 private final class AreaBorderView: NSView {
     private let gradientLayer = CAGradientLayer()
     private let strokeMask = CALayer()
-    private var color: NSColor = .systemRed
+    private var color: NSColor = Theme.Palette.record.ns
 
     /// Uniform margin between the window edge and the border. Expanding a rounded rect by this
     /// keeps the corner concentric: border radius = window radius + gap.

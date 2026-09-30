@@ -343,30 +343,30 @@ private struct WindowPickerView: View {
             }
         }
         .frame(width: 736, height: 540)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .camcordGlass(.chrome, in: RoundedRectangle(cornerRadius: Theme.Radius.floating))
         .onExitCommand(perform: onCancel)
     }
 
     private var header: some View {
         HStack(spacing: 10) {
             Image(systemName: "macwindow.on.rectangle")
-                .font(.system(size: 15, weight: .medium))
+                .font(Theme.Font.bodyStrong)
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 1) {
-                Text("Kaydedilecek pencereyi seç")
-                    .font(.system(size: 14, weight: .semibold))
-                Text("Seçtiğin pencere arkaya atılsa bile kaydedilmeye devam eder")
-                    .font(.system(size: 11))
+                Text("Choose a window to record")
+                    .font(Theme.Font.bodyStrong)
+                Text("Recording continues when the window is behind other apps")
+                    .font(Theme.Font.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
             Button(action: onCancel) {
-                Text("İptal").font(.system(size: 12, weight: .medium))
+                Text("Cancel").font(Theme.Font.bodyStrong)
             }
             .buttonStyle(.plain)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: CamcordStyle.Radius.control).fill(Color.primary.opacity(0.08)))
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.well).fill(Theme.Palette.hover.color))
             .keyboardShortcut(.cancelAction)
         }
         .padding(.horizontal, 20)
@@ -376,13 +376,13 @@ private struct WindowPickerView: View {
     private var emptyState: some View {
         VStack(spacing: 10) {
             Image(systemName: "macwindow.badge.plus")
-                .font(.system(size: 34, weight: .light))
+                .font(Theme.Font.body)
                 .foregroundStyle(.tertiary)
             Text("Kaydedilecek uygun pencere bulunamadı")
-                .font(.system(size: 13, weight: .medium))
+                .font(Theme.Font.bodyStrong)
                 .foregroundStyle(.secondary)
             Text("Bir uygulama penceresi aç ve tekrar dene.")
-                .font(.system(size: 11))
+                .font(Theme.Font.caption)
                 .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -408,11 +408,11 @@ private struct WindowCell: View {
                     }
                     VStack(alignment: .leading, spacing: 1) {
                         Text(item.title.isEmpty ? item.appName : item.title)
-                            .font(.system(size: 12, weight: .medium))
+                            .font(Theme.Font.bodyStrong)
                             .lineLimit(1)
                         if !item.title.isEmpty {
                             Text(item.appName)
-                                .font(.system(size: 10))
+                                .font(Theme.Font.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
@@ -422,33 +422,33 @@ private struct WindowCell: View {
             }
             .padding(8)
             .background(
-                RoundedRectangle(cornerRadius: CamcordStyle.Radius.surface)
-                    .fill(Color.primary.opacity(hovering ? 0.10 : 0.05))
+                RoundedRectangle(cornerRadius: Theme.Radius.floating)
+                    .fill(hovering ? Theme.Palette.pressed.color : Theme.Palette.hover.color)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: CamcordStyle.Radius.surface)
-                    .strokeBorder(Color.accentColor.opacity(hovering ? 0.9 : 0), lineWidth: 2)
+                RoundedRectangle(cornerRadius: Theme.Radius.floating)
+                    .strokeBorder(Theme.Palette.ink.color.opacity(hovering ? 0.9 : 0), lineWidth: 2)
             )
-            .contentShape(RoundedRectangle(cornerRadius: CamcordStyle.Radius.surface))
+            .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.floating))
         }
         .buttonStyle(.plain)
         .scaleEffect(hovering && !reduceMotion ? 1.02 : 1)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: hovering)
+        .animation(reduceMotion ? nil : Theme.Motion.snap, value: hovering)
         .onHover { hovering = $0 }
         .accessibilityLabel(item.title.isEmpty ? item.appName : item.title)
         .accessibilityValue(item.title.isEmpty ? "" : item.appName)
-        .accessibilityHint("Bu pencereyi kaydetmek için seç")
+        .accessibilityHint("Select this window for recording")
     }
 
     private var thumbnail: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: CamcordStyle.Radius.inset(by: 8))
-                .fill(Color.black.opacity(0.28))
+            RoundedRectangle(cornerRadius: Theme.Radius.well)
+                .fill(Theme.Palette.well.color)
             if let thumb = item.thumbnail {
                 Image(nsImage: thumb)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: CamcordStyle.Radius.inset(by: 8)))
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.well))
             } else if let icon = item.appIcon {
                 Image(nsImage: icon)
                     .resizable()
@@ -460,6 +460,6 @@ private struct WindowCell: View {
         }
         .frame(height: 128)
         .frame(maxWidth: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: CamcordStyle.Radius.inset(by: 8)))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.well))
     }
 }

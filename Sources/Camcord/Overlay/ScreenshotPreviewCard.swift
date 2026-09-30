@@ -1,491 +1,327 @@
 import AppKit
+import Darwin
 import QuartzCore
+import SwiftUI
+import UniformTypeIdentifiers
 
-/// A floating preview of the screenshot that was just copied — a framed thumbnail with a
-/// soft shadow at the BOTTOM-RIGHT of the active screen (where macOS's own capture
-/// thumbnail sits). It replaces the small center HUD toast for screenshot captures: the
-/// preview itself is the "it landed on the clipboard" confirmation.
-///
-/// All motion is Core Animation on the card's LAYER (not the window frame, which doesn't
-/// animate reliably for a borderless panel): it springs in from the right edge, and a
-/// while later it leaves the exact same way — reverse motion, back out to the edge. A click
-/// opens the shot for editing (Preview/Markup); a drag flings it off to the right (release
-/// short and it springs back home).
-///
-/// One instance is owned by `AppDelegate`; showing again replaces the current card.
-@MainActor
-final class ScreenshotPreviewCard {
-    /// The card's curve: the app's one corner, not a fraction of the thumbnail. A card that
-    /// scaled its corner with its size read as a different shape for every screenshot.
-    /// `size` is kept so callers stay unchanged if the curve ever depends on it again.
-    static func cardCornerRadius(for size: CGSize) -> CGFloat { CamcordStyle.Radius.surface }
-    /// Transparent padding baked into the panel around the card: room for the drop shadow
-    /// AND for the card to slide in/out without the window clipping it.
-    static func shadowInset(for size: CGSize) -> CGFloat {
-        max(34, ceil(cardCornerRadius(for: size) * 3))
-    }
-    /// Gap from the screen's visible bottom-right corner (above the Dock, inside the edge).
-    private static let screenMargin: CGFloat = 34
-
+/// One visible immutable capture; late save events can update only its UUID.
+@MainActor final class ScreenshotPreviewCard {
+    typealias Presenter = @MainActor (NSPanel) -> Void
+    var onEdit: (@MainActor (CapturedScreenshot) -> Void)?
+    var onPin: (@MainActor (CapturedScreenshot) -> Void)?
+    var claimClipboardPublication: (@MainActor () -> (@MainActor () -> Bool))?
     private var panel: NSPanel?
-    private var card: PreviewCardView?
+    private(set) var model: ScreenshotCardModel?
     private var dismissTask: Task<Void, Never>?
-
-    /// Shows the preview for a freshly captured `image`. `fileURL` is the on-disk PNG when
-    /// disk-saving is on; nil means clipboard-only (a temp PNG is written on demand).
-    func show(image: CGImage, fileURL: URL?) {
-        Self.cleanupTempFiles()
-        guard HUDToast.isEnabled() else { return }
+    private let presenter: Presenter
+    private let screenFrame: @MainActor () -> CGRect?
+    private let operations: ScreenshotCardModel.Operations
+    private var hovering = false
+    private let quickLook = EditorQuickLook()
+    private static var hasCleanedExports = false
+    static func cardCornerRadius(for size: CGSize) -> CGFloat { Theme.Radius.floating }
+    static func shadowInset(for size: CGSize) -> CGFloat { Theme.Space.m }
+    init(presenter: Presenter? = nil, screenFrame: (@MainActor () -> CGRect?)? = nil,
+         operations: ScreenshotCardModel.Operations = .init()) {
+        self.presenter = presenter ?? { $0.orderFrontRegardless() }
+        self.screenFrame = screenFrame ?? {
+            (NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main)?.visibleFrame
+        }
+        self.operations = operations
+    }
+    func show(capture: CapturedScreenshot) {
+        if !Self.hasCleanedExports {
+            Self.hasCleanedExports = true
+            let exports = operations.exports
+            Task.detached(priority: .background) { exports.cleanup() }
+        }
         hide()
-        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main
-        else { return }
-
-        let card = PreviewCardView(image: image, fileURL: fileURL)
-        let shadowInset = Self.shadowInset(for: card.cardSize)
-        card.onHoverChange = { [weak self] hovering in self?.hoverChanged(hovering) }
-        card.onDismiss = { [weak self] in self?.dismiss() }
-
-        let panelSize = CGSize(
-            width: card.cardSize.width + shadowInset * 2,
-            height: card.cardSize.height + shadowInset * 2
-        )
-        // Static window: the card slides WITHIN it (layer transform), so there's no window
-        // animation to misbehave. Positioned so the card rests `screenMargin` inside the
-        // visible bottom-right corner.
-        let visible = screen.visibleFrame
-        let origin = CGPoint(
-            x: visible.maxX - Self.screenMargin - panelSize.width + shadowInset,
-            y: visible.minY + Self.screenMargin - shadowInset
-        )
-
-        let panel = NSPanel(
-            contentRect: CGRect(origin: origin, size: panelSize),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
-        panel.isOpaque = false
-        panel.animationBehavior = .none
-        panel.backgroundColor = .clear
-        panel.hasShadow = false   // the card draws its own soft, rounded layer shadow
-        panel.level = .statusBar
+        guard HUDToast.isEnabled(), let visible = screenFrame() else { return }
+        let model = ScreenshotCardModel(capture: capture, operations: operations)
+        model.claimClipboardPublication = { [weak self, weak model] in self?.claimClipboardPublication?() ?? model?.claimLocalPublication() ?? { false } }
+        model.onBusyChange = { [weak self, weak model] in
+            guard let self, self.model === model else { return }
+            self.armDismiss()
+        }
+        let content = ScreenshotCardContent(model: model,
+            edit: { [weak self] in self?.onEdit?(capture); self?.hide() },
+            pin: { [weak self] in self?.onPin?(capture) },
+            quickLook: { [weak self] url in self?.quickLook.show(url) },
+            dismiss: { [weak self] in self?.hide() },
+            canEdit: onEdit != nil, canPin: onPin != nil,
+            hover: { [weak self] hover in self?.hovering = hover; self?.armDismiss() })
+        let size = CGSize(width: 344, height: 316)
+        let origin = CGPoint(x: visible.minX + Theme.Space.l, y: visible.minY + Theme.Space.l)
+        let panel = ScreenshotCardPanel(contentRect: CGRect(origin: origin, size: size),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
+        panel.level = .statusBar; panel.animationBehavior = .none; panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
-        panel.isReleasedWhenClosed = false
-        card.frame = CGRect(origin: .zero, size: panelSize)
-        panel.contentView = card
-        panel.orderFrontRegardless()
-
-        self.panel = panel
-        self.card = card
-        card.animateIn()
-        armDismiss(after: 1.8)
+        let host = ScreenshotCardHost(rootView: content)
+        host.onCancel = { [weak self] in self?.hide() }
+        panel.contentView = host
+        self.panel = panel; self.model = model; hovering = false
+        presenter(panel); armDismiss()
     }
-
-    /// A late disk completion can update only its own still-visible image.
-    func saved(image: CGImage, to url: URL) { card?.saved(image: image, to: url) }
-
-    /// Removes the card immediately (no animation) — used when replacing it.
+    func saved(id: UUID, to url: URL) { model?.saved(id: id, to: url) }
     func hide() {
-        dismissTask?.cancel()
-        dismissTask = nil
-        panel?.orderOut(nil)
-        panel = nil
-        card = nil
+        dismissTask?.cancel(); dismissTask = nil
+        model?.invalidate(); model = nil
+        panel?.orderOut(nil); panel = nil; hovering = false
     }
-
-    private func hoverChanged(_ hovering: Bool) {
-        if hovering {
-            dismissTask?.cancel()
-            dismissTask = nil
-        } else {
-            armDismiss(after: 0.8)
-        }
-    }
-
-    private func armDismiss(after seconds: TimeInterval) {
-        dismissTask?.cancel()
+    private func armDismiss() {
+        dismissTask?.cancel(); dismissTask = nil
+        guard !hovering, model?.isBusy == false else { return }
+        let id = model?.capture.id
         dismissTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(seconds))
-            guard !Task.isCancelled else { return }
-            self?.dismiss()
-        }
-    }
-
-    /// Leaves the way it came in — reverse motion out to the right edge + fade — then orders
-    /// the panel away. Shared by the auto-dismiss timer, a completed swipe, and a click.
-    private func dismiss() {
-        guard let panel, let card else { return }
-        self.panel = nil
-        self.card = nil
-        dismissTask?.cancel()
-        dismissTask = nil
-        card.animateOut {
-            panel.orderOut(nil)
-        }
-    }
-
-    private static var hasCleanedUpTempFiles = false
-
-    private static func cleanupTempFiles() {
-        guard !hasCleanedUpTempFiles else { return }
-        hasCleanedUpTempFiles = true
-        Task.detached(priority: .background) {
-            ScreenshotTemporaryExports().cleanup()
+            try? await Task.sleep(for: .seconds(6))
+            guard !Task.isCancelled, self?.model?.capture.id == id else { return }
+            self?.hide()
         }
     }
 }
 
-/// Temporary exports have their own private directory; only immediate regular UUID PNGs
-/// belong to Camcord. Canonical-path checks reject a substituted root or child symlink.
-struct ScreenshotTemporaryExports: Sendable {
-    let directory: URL
+private final class ScreenshotCardPanel: NSPanel { override var canBecomeKey: Bool { true } }
+private final class ScreenshotCardHost: NSHostingView<ScreenshotCardContent> {
+    var onCancel: (() -> Void)?
+    override func cancelOperation(_ sender: Any?) { onCancel?() }
+}
 
-    init(directory: URL = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
-         .appendingPathComponent("dev.tavsan.camcord.preview-exports", isDirectory: true)) {
-        self.directory = directory.standardizedFileURL
-    }
-
-    private func rootIsSafe() -> Bool {
-        guard directory.isFileURL,
-              directory.path == directory.resolvingSymlinksInPath().standardizedFileURL.path,
-              let values = try? directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-        else { return false }
-        return values.isDirectory == true && values.isSymbolicLink != true
-    }
-
-    func owns(_ url: URL) -> Bool {
-        let url = url.standardizedFileURL
-        guard rootIsSafe(), url.deletingLastPathComponent().path == directory.path,
-              url.pathExtension == "png", UUID(uuidString: url.deletingPathExtension().lastPathComponent) != nil,
-              url.path == url.resolvingSymlinksInPath().standardizedFileURL.path,
-              let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-        else { return false }
-        return values.isRegularFile == true && values.isSymbolicLink != true
-    }
-
-    func write(_ data: Data) throws -> URL {
-        let manager = FileManager.default
-        if !manager.fileExists(atPath: directory.path) {
-            // Check ancestors before creating anything, including a dangling root symlink.
-            let parent = directory.deletingLastPathComponent()
-            let parentValues = try? parent.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-            guard directory.path == directory.resolvingSymlinksInPath().standardizedFileURL.path,
-                  parent.path == parent.resolvingSymlinksInPath().standardizedFileURL.path,
-                  parentValues?.isDirectory == true, parentValues?.isSymbolicLink != true,
-                  (try? manager.destinationOfSymbolicLink(atPath: directory.path)) == nil
-            else { throw CocoaError(.fileWriteInvalidFileName) }
-            try manager.createDirectory(at: directory, withIntermediateDirectories: false,
-                                        attributes: [.posixPermissions: 0o700])
+/// The async boundary is independent of native presentation for real named-pasteboard tests.
+@MainActor final class ScreenshotCardModel: ObservableObject {
+    @MainActor struct Operations {
+        var encode: @Sendable (CapturedScreenshot) async throws -> Data = { capture in
+            try await Task.detached(priority: .userInitiated) {
+                try EditorRendered(image: capture.image, pointSize: capture.pointSize).png
+            }.value
         }
-        guard rootIsSafe() else { throw CocoaError(.fileWriteInvalidFileName) }
-        let url = directory.appendingPathComponent(UUID().uuidString + ".png")
-        try data.write(to: url, options: .atomic)
-        guard owns(url) else { throw CocoaError(.fileWriteInvalidFileName) }
+        var exports = ScreenshotTemporaryExports()
+        var copy: @MainActor (CapturedScreenshot, NSPasteboard, @escaping @MainActor () -> Bool) async -> Bool = { capture, board, mayPublish in
+            await EditorClipboardPublisher.copyPNG(capture.image, pointSize: capture.pointSize, to: board, shouldPublish: mayPublish)
+        }
+    }
+    let capture: CapturedScreenshot
+    @Published private(set) var savedURL: URL?
+    @Published private(set) var isBusy = false
+    @Published var error: String?
+    private var isAlive = true
+    private var exportURL: URL?
+    private var exportTask: Task<URL, Error>?
+    private var localRequests = LatestRequestGate()
+    private let operations: Operations
+    var claimClipboardPublication: (@MainActor () -> (@MainActor () -> Bool))?
+    var onBusyChange: (@MainActor () -> Void)?
+    init(capture: CapturedScreenshot, operations: Operations = .init()) { self.capture = capture; self.operations = operations }
+    func saved(id: UUID, to url: URL) { guard isAlive, capture.id == id else { return }; savedURL = url }
+    func invalidate() { isAlive = false; exportTask?.cancel(); exportTask = nil; _ = localRequests.begin() }
+    func claimLocalPublication() -> @MainActor () -> Bool {
+        let token = localRequests.begin()
+        return { [weak self] in self?.isAlive == true && self?.localRequests.isCurrent(token) == true }
+    }
+    func copy(to board: NSPasteboard = .general) async -> Bool {
+        guard isAlive, !isBusy else { return false }
+        // Claim the shared epoch synchronously, before the first encoding suspension.
+        let mayPublish = claimClipboardPublication?() ?? claimLocalPublication()
+        setBusy(true); defer { setBusy(false) }
+        let result = await operations.copy(capture, board, { [weak self] in self?.isAlive == true && !Task.isCancelled && mayPublish() })
+        if !result, isAlive, !Task.isCancelled, mayPublish() { error = String(localized: "The screenshot could not be copied.") }
+        return result
+    }
+    func exportedFileURL() async throws -> URL {
+        guard isAlive else { throw CancellationError() }
+        if let exportURL, operations.exports.owns(exportURL) { return exportURL }
+        if let exportTask {
+            let url = try await exportTask.value
+            guard isAlive, !Task.isCancelled else { throw CancellationError() }
+            return url
+        }
+        setBusy(true)
+        let capture = capture, exports = operations.exports, encode = operations.encode
+        let task = Task {
+            let png = try await encode(capture)
+            try Task.checkCancellation()
+            return try await Task.detached { try exports.write(png) }.value
+        }
+        exportTask = task
+        defer { exportTask = nil; setBusy(false) }
+        let url = try await task.value
+        guard isAlive, !Task.isCancelled else { throw CancellationError() }
+        exportURL = url
         return url
     }
+    private func setBusy(_ busy: Bool) { isBusy = busy; onBusyChange?() }
+    func dragProvider() -> NSItemProvider {
+        let provider = NSItemProvider()
+        provider.suggestedName = String(localized: "Screenshot.png")
+        let capture = capture, exports = operations.exports, encode = operations.encode
+        provider.registerFileRepresentation(forTypeIdentifier: UTType.png.identifier, fileOptions: [], visibility: .all) { completion in
+            let progress = Progress(totalUnitCount: 1)
+            let task = Task {
+                do {
+                    let png = try await encode(capture)
+                    try Task.checkCancellation()
+                    let url = try await Task.detached { try exports.write(png) }.value
+                    try Task.checkCancellation()
+                    completion(url, false, nil); progress.completedUnitCount = 1
+                } catch { completion(nil, false, error) }
+            }
+            progress.cancellationHandler = { task.cancel() }
+            return progress
+        }
+        return provider
+    }
+}
 
+private struct ScreenshotCardContent: View {
+    @ObservedObject var model: ScreenshotCardModel
+    let edit: () -> Void, pin: () -> Void, quickLook: (URL) -> Void, dismiss: () -> Void
+    let canEdit: Bool, canPin: Bool
+    let hover: (Bool) -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var appeared = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            HStack {
+                Label("Copied", systemImage: "checkmark").font(Theme.Font.bodyStrong)
+                Spacer()
+                Button(action: dismiss) { Image(systemName: "xmark") }.buttonStyle(.plain).accessibilityLabel("Dismiss screenshot")
+            }
+            Image(nsImage: NSImage(cgImage: model.capture.image, size: model.capture.pointSize))
+                .resizable().scaledToFit().frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Theme.Palette.well.color)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.well))
+                .onDrag { model.dragProvider() }
+                .accessibilityLabel("Screenshot preview")
+                .help("Drag the screenshot to another app")
+            Text(verbatim: "\(model.capture.image.width) × \(model.capture.image.height)")
+                .font(Theme.Font.data).foregroundStyle(Theme.Palette.ink2.color)
+            HStack {
+                Button("Edit", action: edit).disabled(!canEdit)
+                Button("Pin", action: pin).disabled(!canPin)
+                Button("Copy") { Task { _ = await model.copy() } }
+                Button("Quick Look") { Task { do { quickLook(try await model.exportedFileURL()) } catch { model.error = error.localizedDescription } } }
+                ScreenshotCardShareButton(model: model).frame(width: 24, height: 24)
+            }
+            .font(Theme.Font.caption).buttonStyle(.bordered).disabled(model.isBusy)
+            if let error = model.error { Text(error).font(Theme.Font.caption).foregroundStyle(Theme.Palette.record.color).lineLimit(2) }
+            if model.isBusy { ProgressView().controlSize(.mini).accessibilityLabel("Preparing screenshot") }
+        }
+        .padding(Theme.Space.m).foregroundStyle(Theme.Palette.ink.color).tint(Theme.Palette.ink.color)
+        .camcordGlass(.chrome, in: RoundedRectangle(cornerRadius: Theme.Radius.floating))
+        .opacity(appeared ? 1 : 0)
+        .scaleEffect(reduceMotion || appeared ? 1 : Theme.Motion.condenseScale)
+        .onAppear { withAnimation(Theme.Motion.resolve(Theme.Motion.panel, reduceMotion: reduceMotion)) { appeared = true } }
+        .onHover(perform: hover)
+    }
+}
+
+private struct ScreenshotCardShareButton: NSViewRepresentable {
+    let model: ScreenshotCardModel
+    func makeCoordinator() -> Coordinator { Coordinator(model: model) }
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton(image: NSImage(systemSymbolName: "square.and.arrow.up", accessibilityDescription: String(localized: "Share"))!, target: context.coordinator, action: #selector(Coordinator.share(_:)))
+        button.isBordered = false; button.contentTintColor = Theme.Palette.ink.ns
+        button.setAccessibilityLabel(String(localized: "Share")); return button
+    }
+    func updateNSView(_ view: NSButton, context: Context) { context.coordinator.model = model; view.isEnabled = !model.isBusy }
+    @MainActor final class Coordinator: NSObject {
+        var model: ScreenshotCardModel
+        private var picker: NSSharingServicePicker?
+        init(model: ScreenshotCardModel) { self.model = model }
+        @objc func share(_ button: NSButton) {
+            let snapshot = model
+            Task {
+                do {
+                    let url = try await snapshot.exportedFileURL()
+                    let picker = NSSharingServicePicker(items: [url]); self.picker = picker
+                    picker.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+                } catch { snapshot.error = error.localizedDescription }
+            }
+        }
+    }
+}
+
+/// Raw injected roots must already name their physical directory. The trusted system temp
+/// root is canonicalized once. Checks bound ordinary filesystem races, not hostile syscalls.
+struct ScreenshotTemporaryExports: Sendable {
+    let directory: URL
+    private let identity: RootIdentity
+    private static let marker = "dev.tavsan.camcord.preview-export"
+    private static let trustedDirectory: URL = {
+        let root = physicalPath(FileManager.default.temporaryDirectory) ?? FileManager.default.temporaryDirectory.path
+        return URL(fileURLWithPath: root, isDirectory: true).appendingPathComponent("dev.tavsan.camcord.preview-exports", isDirectory: true)
+    }()
+    init(directory: URL? = nil) {
+        self.directory = directory ?? Self.trustedDirectory
+        identity = RootIdentity(directory: self.directory)
+    }
+    private static func physicalPath(_ url: URL) -> String? {
+        guard url.isFileURL else { return nil }
+        return url.withUnsafeFileSystemRepresentation { raw in
+            guard let raw, let resolved = Darwin.realpath(raw, nil) else { return nil }
+            defer { free(resolved) }
+            return String(cString: resolved)
+        }
+    }
+    private static func fingerprint(_ url: URL, directory: Bool) -> FileIdentity? {
+        guard physicalPath(url) == url.path else { return nil }
+        var info = stat()
+        guard lstat(url.path, &info) == 0, (info.st_mode & S_IFMT) == (directory ? S_IFDIR : S_IFREG) else { return nil }
+        return FileIdentity(device: info.st_dev, inode: info.st_ino)
+    }
+    private func rootIsSafe() -> Bool { identity.validate(directory) }
+    func owns(_ url: URL) -> Bool {
+        guard rootIsSafe(), url.isFileURL, url.deletingLastPathComponent().path == directory.path,
+              url.pathExtension == "png", UUID(uuidString: url.deletingPathExtension().lastPathComponent) != nil,
+              Self.fingerprint(url, directory: false) != nil else { return false }
+        var marker: UInt8 = 0
+        return getxattr(url.path, Self.marker, &marker, 1, 0, XATTR_NOFOLLOW) == 1 && marker == 1
+    }
+    func write(_ data: Data) throws -> URL {
+        guard identity.prepare(directory), rootIsSafe() else { throw CocoaError(.fileWriteInvalidFileName) }
+        let url = directory.appendingPathComponent(UUID().uuidString + ".png")
+        guard rootIsSafe() else { throw CocoaError(.fileWriteInvalidFileName) }
+        try data.write(to: url, options: [.atomic])
+        guard rootIsSafe(), Self.fingerprint(url, directory: false) != nil else { throw CocoaError(.fileWriteInvalidFileName) }
+        var marker: UInt8 = 1
+        guard setxattr(url.path, Self.marker, &marker, 1, 0, XATTR_NOFOLLOW) == 0, owns(url) else { throw CocoaError(.fileWriteUnknown) }
+        return url
+    }
     func cleanup(now: Date = Date()) {
-        guard rootIsSafe(), let urls = try? FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        guard rootIsSafe(), let urls = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
         let threshold = now.addingTimeInterval(-24 * 3600)
-        for url in urls where owns(url) {
-            guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey]),
-                  let date = values.contentModificationDate, date < threshold else { continue }
+        for url in urls {
+            guard owns(url), let values = try? url.resourceValues(forKeys: [.contentModificationDateKey]),
+                  let date = values.contentModificationDate, date < threshold, owns(url) else { continue }
             try? FileManager.default.removeItem(at: url)
         }
     }
-}
-
-/// The panel's content: a shadow-padded container holding the framed thumbnail. Owns hover
-/// tracking (pauses auto-dismiss) and forwards the box's dismiss request; the card box owns
-/// the layer motion and the click / swipe interaction.
-private final class PreviewCardView: NSView {
-    var onHoverChange: ((Bool) -> Void)?
-    var onDismiss: (() -> Void)?
-
-    let cardSize: CGSize
-    private let box: CardBoxView
-
-    init(image: CGImage, fileURL: URL?) {
-        box = CardBoxView(image: image, fileURL: fileURL)
-        cardSize = box.cardSize
-        let inset = ScreenshotPreviewCard.shadowInset(for: cardSize)
-        super.init(frame: .zero)
-        wantsLayer = true
-
-        box.frame = CGRect(x: inset, y: inset, width: cardSize.width, height: cardSize.height)
-        box.onDismiss = { [weak self] in self?.onDismiss?() }
-        addSubview(box)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { nil }
-
-    override var isFlipped: Bool { false }
-
-    func saved(image: CGImage, to url: URL) { box.saved(image: image, to: url) }
-    func animateIn() { box.animateIn() }
-    func animateOut(completion: @escaping () -> Void) { box.animateOut(completion: completion) }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        // Track only the card's rect (not the transparent shadow margin) so hover reflects
-        // the card itself.
-        addTrackingArea(NSTrackingArea(
-            rect: box.frame,
-            options: [.mouseEnteredAndExited, .activeAlways],
-            owner: self, userInfo: nil
-        ))
-    }
-
-    override func mouseEntered(with event: NSEvent) { onHoverChange?(true) }
-    override func mouseExited(with event: NSEvent) { onHoverChange?(false) }
-}
-
-/// The framed thumbnail: an appearance-adaptive rounded frame around the shot, with a soft
-/// drop shadow. All entrance/exit/swipe motion lives on this
-/// view's layer transform. Click opens it for editing; drag swipes it away.
-private final class CardBoxView: NSView {
-    var onDismiss: (() -> Void)?
-
-    func saved(image: CGImage, to url: URL) {
-        guard self.image === image else { return }
-        diskURL = url
-    }
-
-    private let image: CGImage
-    private var diskURL: URL?
-    private var tempURL: URL?
-
-    let cardSize: CGSize
-    private let imageView = NSImageView()
-    private var cornerRadius: CGFloat { ScreenshotPreviewCard.cardCornerRadius(for: cardSize) }
-    /// How far the card sits off to the right at the start/end of its travel.
-    private var enterSlide: CGFloat { 34 }
-
-    /// Absolute-screen-X drag tracking (stays correct even as the card translates).
-    private var dragStartX: CGFloat = 0
-    private var didDrag = false
-    private var currentTranslation: CGFloat = 0
-
-    init(image: CGImage, fileURL: URL?) {
-        self.image = image
-        self.diskURL = fileURL
-        let thumb = Self.thumbnailSize(for: image)
-        cardSize = thumb
-        super.init(frame: CGRect(origin: .zero, size: cardSize))
-
-        wantsLayer = true
-        layer?.backgroundColor = NSColor.clear.cgColor
-        layer?.cornerRadius = cornerRadius
-        layer?.masksToBounds = false
-        layer?.shadowColor = NSColor.black.cgColor
-        layer?.shadowOpacity = 0.55
-        layer?.shadowRadius = cornerRadius * 1.6
-        layer?.shadowOffset = CGSize(width: 0, height: -cornerRadius * 0.4)
-        // Start hidden so the window can order in before `animateIn` fades/springs it — no
-        // one-frame flash of the card sitting at rest.
-        layer?.opacity = 0
-
-        setAccessibilityElement(true)
-        setAccessibilityRole(.button)
-        setAccessibilityLabel("Ekran görüntüsü panoya kopyalandı")
-        setAccessibilityHelp("Görüntüyü Önizleme uygulamasında aç")
-        imageView.frame = bounds
-        imageView.autoresizingMask = [.width, .height]
-        imageView.image = NSImage(cgImage: image, size: thumb)
-        imageView.imageScaling = .scaleProportionallyUpOrDown
-        imageView.wantsLayer = true
-        imageView.layer?.cornerRadius = cornerRadius
-        imageView.layer?.masksToBounds = true
-        addSubview(imageView)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { nil }
-
-    override var isFlipped: Bool { false }
-    override var wantsUpdateLayer: Bool { true }
-
-    override func updateLayer() {
-        layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
-    }
-
-    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
-    override func accessibilityPerformPress() -> Bool { openForEditing(); return true }
-
-    private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
-
-    // MARK: - Motion (layer transform + opacity)
-
-    /// Springs in from the right edge with a bit of bounce — our "fun" motion.
-    func animateIn() {
-        guard let layer else { return }
-        if reduceMotion {
-            layer.removeAllAnimations()
-            layer.transform = CATransform3DIdentity
-            layer.opacity = 1
-            currentTranslation = 0
-            return
+    private struct FileIdentity: Equatable, Sendable { let device: dev_t; let inode: ino_t }
+    private final class RootIdentity: @unchecked Sendable {
+        private let lock = NSLock()
+        private var root: FileIdentity?
+        private let parent: FileIdentity?
+        init(directory: URL) {
+            root = ScreenshotTemporaryExports.fingerprint(directory, directory: true)
+            parent = ScreenshotTemporaryExports.fingerprint(directory.deletingLastPathComponent(), directory: true)
         }
-        let spring = CASpringAnimation(keyPath: "transform.translation.x")
-        spring.fromValue = enterSlide
-        spring.toValue = 0
-        spring.mass = 1
-        spring.stiffness = 210
-        spring.damping = 19
-        spring.initialVelocity = 0
-        spring.duration = spring.settlingDuration
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = 0
-        fade.toValue = 1
-        fade.duration = 0.26
-        layer.transform = CATransform3DIdentity
-        layer.opacity = 1
-        currentTranslation = 0
-        layer.add(spring, forKey: "translate")
-        layer.add(fade, forKey: "fade")
-    }
-
-    /// Leaves the exact reverse way — a small anticipation, then flies off to the right +
-    /// fade. `completion` runs when it's fully gone.
-    func animateOut(completion: @escaping () -> Void) {
-        guard let layer else { completion(); return }
-        if reduceMotion {
-            layer.removeAllAnimations()
-            layer.opacity = 0
-            completion()
-            return
+        func validate(_ directory: URL) -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            guard let root, let parent else { return false }
+            return ScreenshotTemporaryExports.fingerprint(directory, directory: true) == root && ScreenshotTemporaryExports.fingerprint(directory.deletingLastPathComponent(), directory: true) == parent
         }
-        let target = cardSize.width * 0.8 + 40
-        CATransaction.begin()
-        CATransaction.setCompletionBlock(completion)
-        let move = CABasicAnimation(keyPath: "transform.translation.x")
-        move.fromValue = currentTranslation
-        move.toValue = target
-        move.duration = 0.22
-        // Ease-in with a touch of anticipation (dips left before flying right) — the mirror
-        // of the spring-in.
-        move.timingFunction = CAMediaTimingFunction(controlPoints: 0.5, -0.32, 0.75, 0.1)
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = layer.presentation()?.opacity ?? 1
-        fade.toValue = 0
-        fade.duration = 0.20
-        fade.timingFunction = CAMediaTimingFunction(name: .easeIn)
-        layer.transform = CATransform3DMakeTranslation(target, 0, 0)
-        layer.opacity = 0
-        currentTranslation = target
-        layer.add(move, forKey: "translate")
-        layer.add(fade, forKey: "fade")
-        CATransaction.commit()
-    }
-
-    /// Springs the card back to rest after an incomplete swipe.
-    private func springBack() {
-        guard let layer else { return }
-        if reduceMotion {
-            layer.removeAllAnimations()
-            layer.transform = CATransform3DIdentity
-            layer.opacity = 1
-            currentTranslation = 0
-            return
+        func prepare(_ directory: URL) -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            guard let parent, directory.isFileURL,
+                  ScreenshotTemporaryExports.fingerprint(directory.deletingLastPathComponent(), directory: true) == parent else { return false }
+            if let root { return ScreenshotTemporaryExports.fingerprint(directory, directory: true) == root }
+            // lstat sees dangling links too; never follow or create through one.
+            var entry = stat()
+            guard lstat(directory.path, &entry) != 0, errno == ENOENT,
+                  directory.path == directory.standardizedFileURL.path else { return false }
+            do { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700]) } catch { return false }
+            root = ScreenshotTemporaryExports.fingerprint(directory, directory: true)
+            return root != nil
         }
-        let spring = CASpringAnimation(keyPath: "transform.translation.x")
-        spring.fromValue = currentTranslation
-        spring.toValue = 0
-        spring.mass = 1
-        spring.stiffness = 210
-        spring.damping = 19
-        spring.duration = spring.settlingDuration
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = layer.presentation()?.opacity ?? layer.opacity
-        fade.toValue = 1
-        fade.duration = 0.2
-        layer.transform = CATransform3DIdentity
-        layer.opacity = 1
-        currentTranslation = 0
-        layer.add(spring, forKey: "translate")
-        layer.add(fade, forKey: "fade")
-    }
-
-    private func setDragTranslation(_ dx: CGFloat) {
-        guard let layer else { return }
-        let x = max(dx, -22)   // free rightward travel, a little rubber-band left
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        layer.transform = CATransform3DMakeTranslation(x, 0, 0)
-        layer.opacity = dx > 0 ? Float(max(0.35, 1 - dx / max(1, bounds.width) * 0.6)) : 1
-        CATransaction.commit()
-        currentTranslation = x
-    }
-
-    // MARK: - Click vs. swipe
-
-    override func mouseDown(with event: NSEvent) {
-        dragStartX = NSEvent.mouseLocation.x
-        didDrag = false
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        let dx = NSEvent.mouseLocation.x - dragStartX
-        if !didDrag, abs(dx) > 4 { didDrag = true }
-        if didDrag { setDragTranslation(dx) }
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        if didDrag {
-            let dx = NSEvent.mouseLocation.x - dragStartX
-            if dx > max(80, bounds.width * 0.3) {
-                onDismiss?()          // past the threshold → leave (controller drives animateOut)
-            } else {
-                springBack()
-            }
-        } else {
-            openForEditing()
-        }
-    }
-
-    // MARK: - Open for editing
-
-    private func openForEditing() {
-        Task {
-            // Dismiss only on success — a failed export beeps and keeps the card so
-            // the user can retry (or copy is still on the clipboard).
-            guard let url = await exportedFileURL() else { NSSound.beep(); return }
-            let workspace = NSWorkspace.shared
-            if let preview = workspace.urlForApplication(withBundleIdentifier: "com.apple.Preview") {
-                let config = NSWorkspace.OpenConfiguration()
-                config.activates = true
-                workspace.open([url], withApplicationAt: preview, configuration: config, completionHandler: nil)
-            } else {
-                workspace.open(url)
-            }
-            onDismiss?()
-        }
-    }
-
-    private func exportedFileURL() async -> URL? {
-        if let diskURL, FileManager.default.fileExists(atPath: diskURL.path) { return diskURL }
-        if let tempURL, ScreenshotTemporaryExports().owns(tempURL) { return tempURL }
-
-        let cgImage = image
-        let url = await Task.detached(priority: .userInitiated) { () -> URL? in
-            guard let data = NSBitmapImageRep(cgImage: cgImage).representation(using: .png, properties: [:]) else { return nil }
-            return try? ScreenshotTemporaryExports().write(data)
-        }.value
-
-        self.tempURL = url
-        return url
-    }
-
-    // MARK: - Sizing
-
-    private static func thumbnailSize(for image: CGImage) -> CGSize {
-        let maxW: CGFloat = 320, maxH: CGFloat = 236
-        let w = CGFloat(image.width), h = CGFloat(image.height)
-        guard w > 0, h > 0 else { return CGSize(width: maxW, height: maxH) }
-        let scale = min(maxW / w, maxH / h, 1)
-        return CGSize(width: max(60, (w * scale).rounded()), height: max(44, (h * scale).rounded()))
     }
 }
