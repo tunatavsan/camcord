@@ -75,6 +75,10 @@ struct AudioChannelStrip: View {
     @Environment(\.camcordDesignPreview) private var designPreview
     @ObservedObject private var monitor = MicrophoneMonitor.shared
     @State private var inputs: [AVCaptureDevice] = []
+    @State private var microphoneOwner = UUID()
+    @State private var rehearsalVisible = false
+    private var ownsRehearsal: Bool { monitor.owns(microphoneOwner) }
+    private var rehearsalRunning: Bool { ownsRehearsal && monitor.isRunning }
 
     private var recording: Bool { state != .idle }
 
@@ -85,14 +89,14 @@ struct AudioChannelStrip: View {
     private var microphoneState: AudioChannelState {
         .microphone(
             enabled: microphoneEnabled, denied: microphoneDenied, recording: recording,
-            paused: state == .paused, starting: isStarting, testing: monitor.isRunning
+            paused: state == .paused, starting: isStarting, testing: rehearsalRunning
         )
     }
 
     /// The mic meter reads the rehearsal while one is running and the recording otherwise,
     /// so the same strip serves both without a second meter.
     private var microphoneLevels: AudioLevels? {
-        monitor.isRunning ? monitor.levels : health?.microphone.levels
+        rehearsalRunning ? monitor.levels : health?.microphone.levels
     }
 
     var body: some View {
@@ -120,7 +124,7 @@ struct AudioChannelStrip: View {
                 onToggle: onChannelToggle,
                 onGainChange: { gain in
                     onGainChange(nil, gain)
-                    if monitor.isRunning { monitor.updateGain(gain) }
+                    monitor.updateGain(gain, owner: microphoneOwner)
                 }
             )
 
@@ -135,21 +139,21 @@ struct AudioChannelStrip: View {
                 .help("Sistem sesi ile mikrofonu dosyada tek bir ses kanalında birleştirir")
                 .onChange(of: mixTracks) { _, _ in onMixChange() }
 
-            if let message = monitor.message {
+            if ownsRehearsal, let message = monitor.message {
                 Text(message)
                     .font(.system(size: 9))
                     .foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .task(id: designPreview) { await loadInputs() }
+        .task(id: designPreview) { rehearsalVisible = !designPreview; await loadInputs() }
         // Switching the channel off is the owner saying "not this microphone": an open
         // rehearsal would otherwise keep the input light on with a meter that reads dead.
         .onChange(of: microphoneEnabled) { _, enabled in
             guard !enabled else { return }
             stopRehearsal()
         }
-        .onDisappear(perform: stopRehearsal)
+        .onDisappear { rehearsalVisible = false; stopRehearsal() }
     }
 
     private var microphoneInputRow: some View {
@@ -167,7 +171,7 @@ struct AudioChannelStrip: View {
             .accessibilityLabel("Mikrofon girişi")
 
             Button(action: toggleRehearsal) {
-                Text(monitor.isRunning ? "Durdur" : "Test")
+                Text(ownsRehearsal ? "Durdur" : "Test")
                     .font(.system(size: 10, weight: .medium))
                     .frame(minWidth: 38)
             }
@@ -184,7 +188,7 @@ struct AudioChannelStrip: View {
     /// place that fixes it. A rehearsal that is ALREADY running can always be stopped —
     /// greying "Durdur" out would leave the microphone open with no way to close it.
     private var rehearsalDisabled: Bool {
-        if monitor.isRunning || monitor.isStarting { return monitor.recordingLocked }
+        if ownsRehearsal { return monitor.recordingLocked }
         return monitor.recordingLocked || recording || isStarting
             || (!microphoneEnabled && !microphoneDenied)
     }
@@ -202,11 +206,13 @@ struct AudioChannelStrip: View {
             NSWorkspace.shared.open(PermissionRecovery.microphonePaneURL)
             return
         }
+        let owner = microphoneOwner
         Task {
-            if monitor.isRunning || monitor.isStarting {
-                await monitor.stop()
+            guard rehearsalVisible, microphoneOwner == owner else { return }
+            if monitor.owns(owner) {
+                await monitor.release(owner: owner)
             } else {
-                await monitor.start(
+                await monitor.start(owner: owner,
                     deviceID: AudioChannelState.resolvedInput(
                         saved: microphoneDeviceID, available: inputs.map(\.uniqueID)
                     ),
@@ -217,8 +223,10 @@ struct AudioChannelStrip: View {
     }
 
     private func stopRehearsal() {
-        guard !designPreview, monitor.isRunning || monitor.isStarting else { return }
-        Task { await MicrophoneMonitor.shared.stop() }
+        guard !designPreview else { return }
+        let retiringOwner = microphoneOwner
+        microphoneOwner = UUID()
+        Task { await monitor.release(owner: retiringOwner) }
     }
 
     private func loadInputs() async {

@@ -7,7 +7,10 @@ struct RecordingSettingsPage: View {
     @Bindable var store: SettingsStore
     @ObservedObject private var microphoneMonitor = MicrophoneMonitor.shared
     @State private var inputs = SettingsDeviceInventory(kind: .microphone)
-    @State private var ownsMicrophoneTest = false
+    @State private var microphoneOwner = UUID()
+    @State private var microphoneTestVisible = false
+    private var ownsMicrophoneTest: Bool { microphoneMonitor.owns(microphoneOwner) }
+    private var microphoneTestRunning: Bool { ownsMicrophoneTest && microphoneMonitor.isRunning }
 
     private var settings: RecordingSettings { store.recording }
     private var locked: Bool { microphoneMonitor.recordingLocked }
@@ -31,20 +34,20 @@ struct RecordingSettingsPage: View {
             focus
             files
         }
-        .onAppear { inputs.start() }
-        .onDisappear { inputs.stop(); stopOwnedTest() }
+        .onAppear { microphoneTestVisible = true; inputs.start() }
+        .onDisappear { microphoneTestVisible = false; inputs.stop(); stopOwnedTest() }
         .onChange(of: settings.microphoneDeviceID) { _, _ in stopOwnedTest() }
         .onChange(of: settings.microphone) { _, on in if !on { stopOwnedTest() } }
         .onChange(of: inputs.snapshot) { _, _ in
             if inputs.missing(settings.microphoneDeviceID) { stopOwnedTest() }
         }
-        .onChange(of: settings.microphoneGainDB) { _, gain in microphoneMonitor.updateGain(gain) }
+        .onChange(of: settings.microphoneGainDB) { _, gain in microphoneMonitor.updateGain(gain, owner: microphoneOwner) }
     }
 
     private func stopOwnedTest() {
-        guard ownsMicrophoneTest else { return }
-        ownsMicrophoneTest = false
-        Task { await microphoneMonitor.stop() }
+        let retiringOwner = microphoneOwner
+        microphoneOwner = UUID()
+        Task { await microphoneMonitor.release(owner: retiringOwner) }
     }
 
     // MARK: Quality
@@ -187,31 +190,31 @@ struct RecordingSettingsPage: View {
                 }
                 .settingsKey("recordingSettings.microphoneGainDB")
                 FormRow(label: LocalizedStringResource("Test the microphone", comment: "Setting"),
-                        note: microphoneMonitor.message.map { _ in
+                        note: (ownsMicrophoneTest ? microphoneMonitor.message : nil).map { _ in
                             LocalizedStringResource("The microphone test failed. Check permission and the selected input.", comment: "Microphone test recovery")
                         }
-                            ?? (microphoneMonitor.isRunning ? LocalizedStringResource("Speak to check the level", comment: "Mic test running") : nil)) {
+                            ?? (microphoneTestRunning ? LocalizedStringResource("Speak to check the level", comment: "Mic test running") : nil)) {
                     HStack(spacing: Theme.Space.m) {
-                        if microphoneMonitor.isRunning {
+                        if microphoneTestRunning {
                             AudioLevelMeter(levels: microphoneMonitor.levels).frame(width: 120)
                         }
                         Button {
-                            if microphoneMonitor.isRunning {
-                                ownsMicrophoneTest = false
-                                Task { await microphoneMonitor.stop() }
+                            if ownsMicrophoneTest {
+                                stopOwnedTest()
                             } else {
-                                ownsMicrophoneTest = true
+                                let owner = microphoneOwner
                                 Task {
-                                    guard ownsMicrophoneTest else { return }
-                                    await microphoneMonitor.start(deviceID: settings.microphoneDeviceID, gainDB: settings.microphoneGainDB)
+                                    guard microphoneTestVisible, microphoneOwner == owner else { return }
+                                    await microphoneMonitor.start(owner: owner, deviceID: settings.microphoneDeviceID,
+                                                                  gainDB: settings.microphoneGainDB)
                                 }
                             }
                         } label: {
-                            microphoneMonitor.isRunning
+                            ownsMicrophoneTest
                                 ? Text("Stop test", comment: "Button: stop the microphone test")
                                 : Text("Test", comment: "Button: start the microphone test")
                         }
-                        .disabled(locked || microphoneMonitor.isStarting)
+                        .disabled(locked)
                     }
                 }
             }

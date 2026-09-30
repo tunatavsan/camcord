@@ -10,6 +10,7 @@ final class AppServices {
     let recordingController: RecordingController
     let eventTapEngine: EventTapEngine
     let recordingState: RecordingStateModel
+    let studioSession: StudioSession
     let editor: EditorSession
     let library: LibraryStore
 
@@ -19,12 +20,15 @@ final class AppServices {
          eventTapEngine: EventTapEngine,
          recordingState: RecordingStateModel,
          library: LibraryStore? = nil,
-         editor: EditorSession? = nil) {
+         editor: EditorSession? = nil,
+         studioSession: StudioSession? = nil) {
         self.defaults = defaults
         self.coordinator = coordinator
         self.recordingController = recordingController
         self.eventTapEngine = eventTapEngine
         self.recordingState = recordingState
+        self.studioSession = studioSession ?? StudioSession(defaults: defaults, controller: recordingController,
+                                                           recordingState: recordingState, coordinator: coordinator)
         self.library = library ?? LibraryStore(defaults: defaults)
         self.editor = editor ?? EditorSession(defaults: defaults)
         self.editor.claimClipboardPublication = { [weak coordinator] in

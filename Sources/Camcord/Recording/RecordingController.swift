@@ -14,6 +14,20 @@ final class RecordingController: NSObject {
         case paused
     }
 
+    @MainActor struct PreparedStartOperations {
+        var screenCaptureAuthorized: () -> Bool = { CGPreflightScreenCaptureAccess() }
+        var countdown: (CGRect, Int) async -> Bool = { frame, seconds in
+            await CountdownOverlay.run(onScreenFrame: frame, seconds: seconds)
+        }
+    }
+    private let defaults: UserDefaults
+    private let preparedStartOperations: PreparedStartOperations
+    private let stageRegistry = StudioStageRegistry()
+    private let legacyStageOwner = UUID()
+    private var studioLayersReady = true // The initial layer snapshot is actually empty.
+    private(set) var studioLayerSnapshot = StudioLayerSnapshot.empty
+    private var preparedStartGeneration: UUID?
+    private var preparedOperationGeneration: UUID?
     private let coordinator: CaptureCoordinator
     private let engine = RecordingEngine()
     private let indicator = CaptureAreaIndicator()
@@ -46,7 +60,25 @@ final class RecordingController: NSObject {
 
     private(set) var recordingFrameSize: CGSize = .zero
 
-    func setStageSink(_ sink: (@Sendable (PixelBufferBox) -> Void)?) { engine.setStageSink(sink) }
+    func setStageSink(_ sink: (@Sendable (PixelBufferBox) -> Void)?) {
+        if let sink { subscribeStage(owner: legacyStageOwner, handler: sink) }
+        else { unsubscribeStage(owner: legacyStageOwner) }
+    }
+    func subscribeStage(owner: UUID, handler: @escaping @Sendable (PixelBufferBox) -> Void) {
+        stageRegistry.subscribe(owner: owner, handler: handler)
+        engine.setStageSink(stageRegistry.snapshot())
+    }
+    func unsubscribeStage(owner: UUID) {
+        stageRegistry.unsubscribe(owner: owner)
+        engine.setStageSink(stageRegistry.snapshot())
+    }
+    func updateStudioLayers(_ snapshot: StudioLayerSnapshot) {
+        studioLayerSnapshot = snapshot
+        engine.updateStudioLayers(studioLayerSnapshot)
+    }
+    func updateStudioLayerReadiness(_ ready: Bool) { studioLayersReady = ready }
+    func stopRecording() async { await stop() }
+
 
     private(set) var uiState: UIState = .idle
 
@@ -118,7 +150,10 @@ final class RecordingController: NSObject {
     /// stop the recording and then immediately pop the start overlay.
     private var lastRecordToggle: ContinuousClock.Instant?
 
-    init(coordinator: CaptureCoordinator) {
+    init(coordinator: CaptureCoordinator, defaults: UserDefaults = .standard,
+         preparedStartOperations: PreparedStartOperations = .init()) {
+        self.defaults = defaults
+        self.preparedStartOperations = preparedStartOperations
         self.coordinator = coordinator
         super.init()
         NotificationCenter.default.addObserver(self, selector: #selector(recordingSettingsChanged), name: RecordingSettings.didChangeNotification, object: nil)
@@ -157,10 +192,116 @@ final class RecordingController: NSObject {
         case .recording, .paused:
             await stop()
         case .idle where armed != nil:
+            guard requireStudioLayersReady() else { return }
             await startArmed()
         case .idle:
+            guard requireStudioLayersReady() else { return }
             await beginInteractive()
         }
+    }
+
+    /// Starts Studio's explicit source through the same permission/recovery/cue path.
+    /// Studio countdown is independent of the legacy boolean countdown setting.
+    func startPreparedTarget(target: RecordingEngine.Target, countdownSeconds: Int) async -> Bool {
+        var screenFrame = CGRect.zero
+        if countdownSeconds > 0 {
+            let cgRect: CGRect
+            switch target {
+            case .window(let window): cgRect = window.frame
+            case .display(let display, _, _): cgRect = display.frame
+            case .region(let clamp, _, _): cgRect = clamp.clampedRegion
+            }
+            let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+            let appKitRect = Geometry.cgToAppKit(cgRect, primaryScreenHeight: primaryHeight)
+            screenFrame = NSScreen.screens.first(where: { $0.frame.intersects(appKitRect) })?.frame ?? appKitRect
+        }
+        return await performPreparedStart(countdownSeconds: countdownSeconds, screenFrame: screenFrame) {
+            let token = self.preparedStartGeneration
+            do {
+                // Countdown can outlive a window/display. Resolve its ID against fresh content.
+                let content = try await self.coordinator.contentCache.content(forceRefresh: true)
+                guard self.preparedStartGeneration == token, self.canContinuePreparedStart else { return false }
+                let choice: StudioSourceChoice
+                switch target {
+                case .window(let window):
+                    choice = .init(id: .window(window.windowID), title: "", frame: window.frame, pixelSize: window.frame.size)
+                case .display(let display, _, _):
+                    choice = .init(id: .display(display.displayID), title: "", frame: display.frame, pixelSize: display.frame.size)
+                case .region(let clamp, let display, _):
+                    choice = .init(id: .region(display.displayID), title: "", frame: clamp.clampedRegion, pixelSize: clamp.clampedRegion.size)
+                }
+                let fresh = try StudioSourceResolver.resolve(choice, in: content, settings: RecordingSettings.load(from: self.defaults))
+                await self.begin(target: fresh, preparedGeneration: token)
+                return self.uiState != .idle
+            } catch {
+                guard self.preparedStartGeneration == token, !Task.isCancelled else { return false }
+                self.fail("Studio recording: selected source unavailable: \(error)")
+                return false
+            }
+        }
+    }
+
+    /// This is the production prepared-start transaction. Tests control only its
+    /// final operation, so they exercise the actual starting lock and await guards.
+    func performPreparedStart(countdownSeconds: Int, screenFrame: CGRect,
+                              operation: @MainActor () async -> Bool) async -> Bool {
+        guard Self.acceptsPreparedStart(state: uiState, armed: isArmed, starting: isStarting,
+                                       finalizing: isFinalizing, terminating: isTerminating,
+                                       captureTransition: coordinator.isCaptureTransitionActive,
+                                       countdownSeconds: countdownSeconds), !Task.isCancelled,
+              requireStudioLayersReady() else { return false }
+        let token = UUID()
+        preparedStartGeneration = token
+        isStarting = true
+        defer {
+            if preparedOperationGeneration == token { preparedOperationGeneration = nil }
+            releasePreparedStart(token)
+        }
+        return await withTaskCancellationHandler {
+            guard preparedStartOperations.screenCaptureAuthorized() else {
+                fail("Studio recording: Screen Recording permission missing")
+                return false
+            }
+            if countdownSeconds > 0 {
+                guard await preparedStartOperations.countdown(screenFrame, countdownSeconds) else { return false }
+            }
+            guard preparedStartGeneration == token, canContinuePreparedStart else { return false }
+            preparedOperationGeneration = token
+            let started = await operation()
+            guard preparedStartGeneration == token, !Task.isCancelled, !isTerminating else { return false }
+            return started
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.releasePreparedStart(token) }
+        }
+    }
+
+    private var canContinuePreparedStart: Bool {
+        !Task.isCancelled && !isTerminating && isStarting && uiState == .idle && !isFinalizing
+            && !coordinator.isCaptureTransitionActive && requireStudioLayersReady()
+    }
+
+    private func releasePreparedStart(_ token: UUID) {
+        // Once source resolution/permissions/hardware handoff has entered its body,
+        // keep the shared starting lock until that body's cleanup drains.
+        guard preparedStartGeneration == token, preparedOperationGeneration != token else { return }
+        preparedStartGeneration = nil
+        isStarting = false
+    }
+
+    private func requireStudioLayersReady() -> Bool {
+        guard studioLayersReady else {
+            onToast?(ToastRequest(text: String(localized: "Studio layers are not ready. Wait for rendering or fix the layer error.",
+                                              comment: "Recording blocked by the current Studio layer revision"),
+                                 systemSymbol: "exclamationmark.triangle", tint: .systemOrange, important: true))
+            return false
+        }
+        return true
+    }
+
+    static func acceptsPreparedStart(state: UIState, armed: Bool, starting: Bool, finalizing: Bool,
+                                     terminating: Bool, captureTransition: Bool, countdownSeconds: Int) -> Bool {
+        state == .idle && !armed && !starting && !finalizing && !terminating && !captureTransition
+            && StudioSession.countdownChoices.contains(countdownSeconds)
     }
 
     /// Opens the window picker and records the chosen window. Unlike the region overlay's
@@ -168,7 +309,8 @@ final class RecordingController: NSObject {
     /// desktop to drag a region on. The `.window` target follows that window across Spaces
     /// and keeps recording it when it's occluded or sent to the back.
     func recordWindow() async {
-        guard !isTerminating, uiState == .idle, !isStarting, !isFinalizing, armed == nil else { return }
+        guard !isTerminating, uiState == .idle, !isStarting, !isFinalizing, armed == nil,
+              requireStudioLayersReady() else { return }
         isStarting = true
         defer { isStarting = false }
 
@@ -195,7 +337,7 @@ final class RecordingController: NSObject {
             // The picker's "<App> — tam ekran" card: the game's own window never reached the
             // grid, so there is no window frame to arm a red placement rectangle against —
             // record the display it covers straight away, at the game scale.
-            let settings = RecordingSettings.load(from: .standard)
+            let settings = RecordingSettings.load(from: defaults)
             let ownApp = content.applications.first { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
             await begin(target: .display(
                 display,
@@ -209,7 +351,7 @@ final class RecordingController: NSObject {
         guard armed == nil, !isTerminating, case .window(let window) = target else { return }
         armed = target
         armedMissingBounds = 0
-        let settings = RecordingSettings.load(from: .standard)
+        let settings = RecordingSettings.load(from: defaults)
         // Arming CONFINES the camera preview to the window that will be recorded -- it never
         // opens one. begin() composites against this very rect, so a placement the owner
         // makes with the preview open lands in the file, and one made with it closed does
@@ -250,7 +392,7 @@ final class RecordingController: NSObject {
     }
 
     func startArmed() async {
-        guard let requestedTarget = armed, !isTerminating, !isStarting else { return }
+        guard let requestedTarget = armed, !isTerminating, !isStarting, requireStudioLayersReady() else { return }
         isStarting = true
         defer { isStarting = false }
         clearArmedControls()
@@ -320,7 +462,8 @@ final class RecordingController: NSObject {
     /// countdown, no stop pill over the game, and the "Oyunda 1080p kaydet" scale. The
     /// same hotkey stops the run (`toggleRecording()` handles that side).
     func recordFullScreen(gameLike: Bool = false) async {
-        guard !isTerminating, uiState == .idle, !isStarting, !isFinalizing, armed == nil else { return }
+        guard !isTerminating, uiState == .idle, !isStarting, !isFinalizing, armed == nil,
+              requireStudioLayersReady() else { return }
         isStarting = true
         defer { isStarting = false }
 
@@ -337,7 +480,7 @@ final class RecordingController: NSObject {
                 fail("recordFullScreen: no SCDisplay match for display \(displayID)")
                 return
             }
-            let settings = RecordingSettings.load(from: .standard)
+            let settings = RecordingSettings.load(from: defaults)
             // A short countdown keeps the panel-close animation and the parked pointer
             // out of the first frames, and gives the user a beat to set the stage. In a
             // game it would only delay a trigger the owner pressed mid-play.
@@ -453,7 +596,8 @@ final class RecordingController: NSObject {
     // MARK: - Start
 
     private func beginInteractive() async {
-        guard !isTerminating, uiState == .idle, !isStarting, !isFinalizing, armed == nil else { return }
+        guard !isTerminating, uiState == .idle, !isStarting, !isFinalizing, armed == nil,
+              requireStudioLayersReady() else { return }
         isStarting = true
         defer { isStarting = false }
 
@@ -466,6 +610,7 @@ final class RecordingController: NSObject {
         }
 
         guard let selection = await coordinator.selectCaptureTarget() else { return }
+        guard requireStudioLayersReady() else { return }
         // No compositor-flush wait here (unlike screenshots): SCStream.startCapture's own
         // warm-up before its first COMPLETE frame far outlasts the overlay's orderOut
         // flush, so the selection chrome is long gone by the time anything is recorded —
@@ -498,8 +643,9 @@ final class RecordingController: NSObject {
         }
     }
 
-    private func begin(target requestedTarget: RecordingEngine.Target, convertsFullscreen: Bool = true) async {
-        guard !isTerminating else { return }
+    private func begin(target requestedTarget: RecordingEngine.Target, convertsFullscreen: Bool = true,
+                       preparedGeneration: UUID? = nil) async {
+        guard !isTerminating, requireStudioLayersReady(), preparedGenerationIsCurrent(preparedGeneration) else { return }
         // Check the permission that actually gates the recording BEFORE possibly
         // popping a microphone TCC prompt for a session that can't start.
         guard CGPreflightScreenCaptureAccess() else {
@@ -507,7 +653,7 @@ final class RecordingController: NSObject {
             return
         }
 
-        var settings = RecordingSettings.load(from: .standard)
+        var settings = RecordingSettings.load(from: defaults)
         if settings.microphone {
             let granted = await ensureMicrophoneAccess()
             if !granted {
@@ -517,7 +663,7 @@ final class RecordingController: NSObject {
                 onToast?(ToastRequest(text: "Mikrofon izni yok — sesin kaydedilmeyecek", systemSymbol: "mic.slash", tint: .systemOrange, important: true))
             }
         }
-        guard !isTerminating else { return }
+        guard !isTerminating, requireStudioLayersReady(), preparedGenerationIsCurrent(preparedGeneration) else { return }
         if settings.camera.enabled {
             let granted: Bool
             switch AVCaptureDevice.authorizationStatus(for: .video) {
@@ -530,7 +676,7 @@ final class RecordingController: NSObject {
                 onToast?(ToastRequest(text: "Kamera izni yok — ekran kaydı kamerasız başlayacak", systemSymbol: "video.slash", tint: .systemOrange, important: true))
             }
         }
-        guard !isTerminating else { return }
+        guard !isTerminating, requireStudioLayersReady(), preparedGenerationIsCurrent(preparedGeneration) else { return }
 
         // Every window entry point (including the recording hotkey's click-to-pick)
         // uses the same fullscreen game policy as the explicit window picker.
@@ -541,9 +687,13 @@ final class RecordingController: NSObject {
             let ownApp = content.applications.first { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
             target = .display(display, scale: scale(for: display), excluding: ownApp)
         }
-        guard !isTerminating else { return }
+        guard !isTerminating, requireStudioLayersReady(), preparedGenerationIsCurrent(preparedGeneration) else { return }
 
         await MicrophoneMonitor.shared.prepareForRecording()
+        guard !isTerminating, requireStudioLayersReady(), preparedGenerationIsCurrent(preparedGeneration) else {
+            MicrophoneMonitor.shared.recordingEnded()
+            return
+        }
         let cameraRect: CGRect
         switch target {
         case .window(let window): cameraRect = CaptureAreaIndicator.windowBounds(window.windowID) ?? window.frame
@@ -574,7 +724,7 @@ final class RecordingController: NSObject {
                 }
             }
         }
-        guard !isTerminating else { return }
+        guard !isTerminating, requireStudioLayersReady(), preparedGenerationIsCurrent(preparedGeneration) else { return }
         do {
             let directory = try settings.outputDirectory()
             let url = settings.uniqueOutputURL(in: directory, date: Date())
@@ -585,6 +735,7 @@ final class RecordingController: NSObject {
             let cueTask = Task { @MainActor in await FeedbackSound.recordStart.playAndWait() }
             startCueTask = cueTask
             defer { cueTask.cancel(); startCueTask = nil }
+            guard requireStudioLayersReady(), preparedGenerationIsCurrent(preparedGeneration) else { return }
             try await engine.start(
                 target: target,
                 settings: settings,
@@ -671,6 +822,11 @@ final class RecordingController: NSObject {
         } catch {
             fail("Recording start failed: \(error)")
         }
+    }
+
+    private func preparedGenerationIsCurrent(_ token: UUID?) -> Bool {
+        guard let token else { return true }
+        return preparedStartGeneration == token && !Task.isCancelled && !coordinator.isCaptureTransitionActive
     }
 
     // MARK: - Auto-stop guards (disk / duration)
@@ -858,9 +1014,10 @@ final class RecordingController: NSObject {
 
     @objc nonisolated private func recordingSettingsChanged(_ notification: Notification) {
         Task { @MainActor [weak self] in
-            let settings = RecordingSettings.load(from: .standard)
-            self?.engine.updateAudioGains(settings)
-            self?.engine.updateCameraOptions(settings.camera)
+            guard let self else { return }
+            let settings = RecordingSettings.load(from: self.defaults)
+            self.engine.updateAudioGains(settings)
+            self.engine.updateCameraOptions(settings.camera)
         }
     }
 

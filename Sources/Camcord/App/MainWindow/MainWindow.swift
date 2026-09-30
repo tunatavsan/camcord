@@ -107,6 +107,7 @@ struct MainWindowView: View {
         .tint(Theme.Palette.ink.color)
         .environment(\.appServices, services)
         .environment(\.screenshotEditorSession, services?.editor)
+        .environment(\.studioSession, services?.studioSession)
         .modifier(EditorOpeningConfirmationModifier(session: services?.editor))
         .environment(\.mainWindowModel, model)
         .environment(\.mainWindowLifecycle, lifecycle)

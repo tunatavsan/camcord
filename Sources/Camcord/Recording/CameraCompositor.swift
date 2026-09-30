@@ -16,6 +16,7 @@ enum CameraCompositorError: Error {
 /// Attribution crosses the single combined render without adding another render pass.
 enum CameraCompositorStageFailure: Error {
     case fit(Error)
+    case layers(Error)
 }
 
 /// Sample-queue-confined Core Image compositor for a recorded frame: a resized window's content
@@ -60,11 +61,12 @@ final class CameraCompositor {
         screen: CMSampleBuffer,
         camera: CVPixelBuffer?,
         options: CameraOptions,
-        fit: CanvasFit? = nil
+        fit: CanvasFit? = nil,
+        layers: StudioLayerSnapshot = .empty
     ) throws -> CMSampleBuffer {
         let options = options.resolved()
         let camera = options.enabled ? camera : nil
-        guard camera != nil || fit != nil else { return screen }
+        guard camera != nil || fit != nil || !layers.isEmpty else { return screen }
         guard let screenBuffer = CMSampleBufferGetImageBuffer(screen) else {
             throw CameraCompositorError.missingScreenImage
         }
@@ -100,7 +102,8 @@ final class CameraCompositor {
             contentExtent = screenExtent
         }
         guard let camera else {
-            context.render(screenImage.cropped(to: screenExtent), to: output, bounds: screenExtent,
+            let composed = try applyLayers(layers, over: screenImage, extent: screenExtent)
+            context.render(composed.cropped(to: screenExtent), to: output, bounds: screenExtent,
                            colorSpace: colorSpace(from: screenBuffer))
             return try makeSampleBuffer(imageBuffer: output, copying: screen)
         }
@@ -159,13 +162,48 @@ final class CameraCompositor {
             .composited(over: clippedCamera.composited(over: shadow.composited(over: screenImage)))
             .cropped(to: screenExtent)
 
+        let layered = try applyLayers(layers, over: composed, extent: screenExtent)
         context.render(
-            composed,
+            layered,
             to: output,
             bounds: screenExtent,
             colorSpace: colorSpace(from: screenBuffer)
         )
         return try makeSampleBuffer(imageBuffer: output, copying: screen)
+    }
+
+    /// Immutable rasters already carry all text/decode work. Destination rectangles use
+    /// top-left canvas normalization; Core Image flips y once, after fit and camera.
+    private func applyLayers(_ snapshot: StudioLayerSnapshot, over background: CIImage,
+                             extent: CGRect) throws -> CIImage {
+        var result = background
+        for layer in snapshot.layers {
+            let normalized = layer.rect
+            let destination = CGRect(x: normalized.minX * extent.width,
+                                     y: (1 - normalized.maxY) * extent.height,
+                                     width: normalized.width * extent.width,
+                                     height: normalized.height * extent.height)
+            let source = CIImage(cgImage: layer.image)
+            let scale = min(destination.width / source.extent.width, destination.height / source.extent.height)
+            let width = source.extent.width * scale, height = source.extent.height * scale
+            let origin = layer.alignment == .topLeading
+                ? CGPoint(x: destination.minX, y: destination.maxY - height)
+                : CGPoint(x: destination.midX - width / 2, y: destination.midY - height / 2)
+            var image = source.clampedToExtent().transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+                .transformed(by: CGAffineTransform(translationX: origin.x, y: origin.y))
+                .cropped(to: CGRect(origin: origin, size: CGSize(width: width, height: height)))
+            if layer.opacity < 1 {
+                guard let filter = CIFilter(name: "CIColorMatrix", parameters: [
+                    kCIInputImageKey: image,
+                    "inputAVector": CIVector(x: 0, y: 0, z: 0, w: layer.opacity),
+                ]), let faded = filter.outputImage else {
+                    throw CameraCompositorStageFailure.layers(CameraCompositorError.filterUnavailable)
+                }
+                image = faded
+            }
+            result = image.composited(over: result).cropped(to: extent)
+        }
+        return result
     }
 
     /// The window's content, aspect-fit and centred, over the same content scaled to fill the

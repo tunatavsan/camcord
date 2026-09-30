@@ -7,8 +7,13 @@ import SwiftUI
 /// The buffer is immutable while either side holds it.
 struct PixelBufferBox: @unchecked Sendable {
     let value: CVPixelBuffer
+    /// Camera placement bounds in destination buffer pixels, with a top-left origin.
+    let cameraContentRect: CGRect?
 
-    init(_ value: CVPixelBuffer) { self.value = value }
+    init(_ value: CVPixelBuffer, cameraContentRect: CGRect? = nil) {
+        self.value = value
+        self.cameraContentRect = cameraContentRect
+    }
 
     var pixelSize: CGSize {
         CGSize(width: CVPixelBufferGetWidth(value), height: CVPixelBufferGetHeight(value))
@@ -245,6 +250,11 @@ final class CameraPreviewMonitor: ObservableObject {
     }
 
     private var activeSource: CameraCapture? { recordingSource ?? ownedCapture }
+
+    /// Immutable native frame for Studio's shared compositor; does not acquire the device.
+    func currentPreviewFrame() -> PixelBufferBox? {
+        activeSource?.latestFrame().map { PixelBufferBox($0) }
+    }
 
     private func updateImage(generation token: UInt64) async {
         guard !renderInFlight else { return }

@@ -12,6 +12,9 @@ final class CaptureCoordinator {
         var screenCaptureAuthorized: () -> Bool = { CGPreflightScreenCaptureAccess() }
         var screenshotSettings: () -> ScreenshotSettings = { ScreenshotSettings.load(from: .standard) }
         var fullScreen: (() async throws -> (image: CGImage, pointSize: CGSize))?
+        var captureFrozenDesktop: (ResolutionScale, CGPoint) async throws -> FrozenDesktopSnapshot = { scale, anchor in
+            try await ScreenshotService.captureFrozenDesktop(resolutionScale: scale, atCGPoint: anchor)
+        }
         var recognize: (CGImage) async throws -> String = { try await TextRecognitionService.read(in: $0).clipboardString }
         var recognitionFinished: () -> Void = {}
         var tagScrollCapture: @Sendable (URL) -> Bool = { CaptureFileRules.tagScrollCapture($0) }
@@ -57,7 +60,11 @@ final class CaptureCoordinator {
     /// on-screen phase, not the post-hide delay + SCK call after it — a re-press in
     /// that window would open a NEW overlay whose chrome gets baked into the still-
     /// pending shot. Also collapses double-clicks on the panel's tiles.
-    private var isCapturing = false
+    let captureTransition = CaptureTransitionState()
+    var isCaptureTransitionActive: Bool { captureTransition.isActive }
+    private var isCapturing = false {
+        didSet { updateCaptureTransition() }
+    }
     /// Newest accepted OCR/capture owns future clipboard writes. Generation is allocated at
     /// request acceptance, so two concurrent OCR jobs cannot complete out of order and let the
     /// older one overwrite the newer result.
@@ -105,7 +112,12 @@ final class CaptureCoordinator {
 
     private var holdRequests = LatestRequestGate()
     private var frozenHoldRequest: FrozenHoldRequest?
-    private var pendingHoldSnapshots = 0
+    private var pendingHoldSnapshots = 0 {
+        didSet { updateCaptureTransition() }
+    }
+    private func updateCaptureTransition() {
+        captureTransition.update(exclusiveCapture: isCapturing, pendingHoldSnapshots: pendingHoldSnapshots)
+    }
     private static let maximumPendingHoldSnapshots = 2
     private static let holdDragThreshold: CGFloat = 4
 
@@ -370,10 +382,7 @@ final class CaptureCoordinator {
             defer { self.pendingHoldSnapshots = max(0, self.pendingHoldSnapshots - 1) }
             do {
                 try Task.checkCancellation()
-                let snapshot = try await ScreenshotService.captureFrozenDesktop(
-                    resolutionScale: request.resolutionScale,
-                    atCGPoint: request.anchor
-                )
+                let snapshot = try await self.operations.captureFrozenDesktop(request.resolutionScale, request.anchor)
                 try Task.checkCancellation()
                 self.holdSnapshotDidFinish(snapshot, request: request)
             } catch is CancellationError {

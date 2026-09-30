@@ -240,7 +240,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Finder's explicit Open action hosts the pending-open decision in the same main window.
     func application(_ sender: NSApplication, open urls: [URL]) {
         guard let url = urls.first, let appServices else { return }
-        showMainWindow()
+        showMainWindow(activate: sender.isActive)
         Task { @MainActor in
             if case .failed(let message) = await appServices.editor.requestOpen(url: url) {
                 appServices.library.issue = message
@@ -248,9 +248,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func showMainWindow() {
+    private func showMainWindow(activate: Bool = true) {
         panelController?.close()
-        mainWindowController?.show()
+        mainWindowController?.show(activate: activate)
     }
 
     @objc private func openMainWindow(_ sender: Any?) {

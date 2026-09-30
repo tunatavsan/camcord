@@ -1753,6 +1753,23 @@
         }
       }
     },
+    "Display %u": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Display %u"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekran %u"
+          }
+        }
+      }
+    },
     "Dock icon": {
       "comment": "General setting: when Camcord shows a Dock icon",
       "extractionState": "manual",
@@ -3011,6 +3028,23 @@
         }
       }
     },
+    "Microphone data could not be read. Choose another input.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone data could not be read. Choose another input."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon verisi okunamadı. Başka bir giriş seç."
+          }
+        }
+      }
+    },
     "Microphone level": {
       "comment": "Setting: microphone gain",
       "extractionState": "manual",
@@ -3025,6 +3059,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Mikrofon seviyesi"
+          }
+        }
+      }
+    },
+    "Microphone permission is required. Open Permissions to enable it.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone permission is required. Open Permissions to enable it."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon izni gerekli. Açmak için İzinler bölümüne git."
           }
         }
       }
@@ -5611,6 +5662,23 @@
         }
       }
     },
+    "Studio layers are not ready. Wait for rendering or fix the layer error.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Studio layers are not ready. Wait for rendering or fix the layer error."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stüdyo katmanları hazır değil. İşleme bitene kadar bekle veya katman hatasını düzelt."
+          }
+        }
+      }
+    },
     "System level": {
       "comment": "Setting: system audio gain",
       "extractionState": "manual",
@@ -5787,6 +5855,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Görüntü değişti. İşlemi yeniden deneyin."
+          }
+        }
+      }
+    },
+    "The microphone could not start. Check its connection and selected input.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone could not start. Check its connection and selected input."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon açılamadı. Bağlantısını ve seçili girişi kontrol et."
           }
         }
       }

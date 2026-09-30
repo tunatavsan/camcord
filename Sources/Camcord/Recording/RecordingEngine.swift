@@ -72,9 +72,25 @@ final class RecordingEngine: NSObject {
         sampleQueue.async { writer.updateCameraOptions(options) }
     }
 
+    private var pendingStageSink: (@Sendable (PixelBufferBox) -> Void)?
+    private var studioLayers: StudioLayerSnapshot = .empty
+
+    func updateStudioLayers(_ snapshot: StudioLayerSnapshot) {
+        studioLayers = snapshot
+        guard let writer = streamWriter else { return }
+        sampleQueue.async { writer.updateStudioLayers(snapshot) }
+    }
+
     func setStageSink(_ sink: (@Sendable (PixelBufferBox) -> Void)?) {
+        pendingStageSink = sink
         guard let writer = streamWriter else { return }
         sampleQueue.async { writer.stageSink = sink }
+    }
+
+    /// Constructor phase only: no SCStream outputs have been registered for this writer.
+    func configurePreparedWriterStudioState(_ writer: StreamWriter) {
+        writer.stageSink = pendingStageSink
+        writer.updateStudioLayers(studioLayers)
     }
 
     func healthSnapshot() async -> RecordingHealth? {
@@ -248,6 +264,9 @@ final class RecordingEngine: NSObject {
             fitsWindowContent: target.isWindow
         )
 
+        // The writer has no outputs yet, so these constructor-state assignments are safe.
+        configurePreparedWriterStudioState(writer)
+
         let token = UUID()
         let relay = StreamDelegateRelay { [weak self] error in
             Task { @MainActor [weak self] in
@@ -321,6 +340,9 @@ final class RecordingEngine: NSObject {
         streamToken = token
         writerToken = writerID
         streamWriter = writer
+        // Subscribers/layers may have changed while SCStream.startCapture suspended.
+        let currentSink = pendingStageSink, currentLayers = studioLayers
+        sampleQueue.async { writer.stageSink = currentSink; writer.updateStudioLayers(currentLayers) }
         if cameraSource != nil {
             cameraTimer = Self.makeCameraTimer(writer: writer, fps: fps, queue: sampleQueue)
         }

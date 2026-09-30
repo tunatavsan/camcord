@@ -60,6 +60,10 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     var stageSink: (@Sendable (PixelBufferBox) -> Void)? {
         didSet { lastStageTime = .invalid }
     }
+    private var studioLayers: StudioLayerSnapshot = .empty
+
+    func updateStudioLayers(_ snapshot: StudioLayerSnapshot) { studioLayers = snapshot }
+
     var onCameraFailure: (@Sendable () -> Void)?
 
     func updateCameraOptions(_ options: CameraOptions) {
@@ -308,14 +312,16 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
             return false
         }
         var output = sampleBuffer
+        var didCompose = false
         let fit = fitsWindowContent ? Self.canvasFit(of: sampleBuffer) : nil
         let camera = cameraOptions.enabled && !cameraCompositingFailed ? cameraSource?.latestFrame() : nil
-        if fit != nil || camera != nil {
+        if fit != nil || camera != nil || !studioLayers.isEmpty {
             logFitIfChanged(fit)
             do {
                 if cameraCompositor == nil { cameraCompositor = CameraCompositor() }
                 output = try cameraCompositor!.composite(screen: sampleBuffer, camera: camera,
-                                                         options: cameraOptions, fit: fit)
+                                                         options: cameraOptions, fit: fit, layers: studioLayers)
+                didCompose = true
             } catch CameraCompositorError.poolExhausted {
                 // Encoder backpressure is temporary. Skip this video frame instead
                 // of permanently disabling the camera or flashing a camera-less frame.
@@ -325,6 +331,8 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
                 // Fit failures are independent of the healthy camera source. The original
                 // screen frame remains usable, and later frames retry the combined render.
                 logger.error("Canvas fit failed: \(String(describing: error), privacy: .public)")
+            } catch CameraCompositorStageFailure.layers(let error) {
+                logger.error("Overlay composition failed: \(String(describing: error), privacy: .public)")
             } catch where camera != nil {
                 cameraCompositingFailed = true
                 logger.error("Camera composition failed; screen capture continues: \(String(describing: error), privacy: .public)")
@@ -339,7 +347,8 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
             if !lastStageTime.isValid || CMTimeSubtract(now, lastStageTime) >= CMTime(value: 1, timescale: 10),
                let pixels = CMSampleBufferGetImageBuffer(output) {
                 lastStageTime = now
-                stageSink(PixelBufferBox(pixels))
+                let fullBounds = CGRect(x: 0, y: 0, width: CVPixelBufferGetWidth(pixels), height: CVPixelBufferGetHeight(pixels))
+                stageSink(PixelBufferBox(pixels, cameraContentRect: didCompose ? fit?.fitted ?? fullBounds : fullBounds))
             }
         }
         if append(output, retimedTo: retimedPTS, originalPTS: pts, input: videoInput) {
