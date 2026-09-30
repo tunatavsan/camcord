@@ -33,8 +33,11 @@ final class ScreenRecordingPermission {
     private(set) var granted: Bool
     private let check: @MainActor () -> Bool
     private var poll: Task<Void, Never>?
+    private let pollInterval: Duration
 
-    init(check: @escaping @MainActor () -> Bool = { CGPreflightScreenCaptureAccess() }) {
+    init(pollInterval: Duration = .seconds(1),
+         check: @escaping @MainActor () -> Bool = { CGPreflightScreenCaptureAccess() }) {
+        self.pollInterval = pollInterval
         self.check = check
         granted = check()
     }
@@ -53,19 +56,23 @@ final class ScreenRecordingPermission {
     func request() {
         _ = CGRequestScreenCaptureAccess()
         NSWorkspace.shared.open(PermissionRecovery.screenRecordingPaneURL)
-        startPolling()
     }
+
+    var isPolling: Bool { poll != nil }
 
     func startPolling() {
         guard poll == nil else { return }
+        let interval = pollInterval
         poll = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
+                do { try await Task.sleep(for: interval) } catch { return }
                 guard let self, !Task.isCancelled else { return }
                 self.refresh()
             }
         }
     }
+
+    isolated deinit { poll?.cancel() }
 
     func stopPolling() {
         poll?.cancel()
@@ -75,6 +82,7 @@ final class ScreenRecordingPermission {
 
 struct FirstRunView: View {
     let permission: ScreenRecordingPermission
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let captureRegion: () -> Void
     let later: () -> Void
 
@@ -154,10 +162,12 @@ struct FirstRunView: View {
         }
         .padding(Theme.Space.xl)
         .frame(width: 520)
-        .animation(Theme.Motion.panel, value: permission.granted)
+        .animation(Self.permissionAnimation(reduceMotion: reduceMotion), value: permission.granted)
         .windowBackdrop(.content)
-        .onAppear { permission.startPolling() }
-        .onDisappear { permission.stopPolling() }
+    }
+
+    static func permissionAnimation(reduceMotion: Bool) -> Animation {
+        Theme.Motion.resolve(Theme.Motion.panel, reduceMotion: reduceMotion)
     }
 }
 
@@ -200,10 +210,19 @@ final class FirstRunWindowController: NSObject, NSWindowDelegate {
     private let defaults: UserDefaults
     private let captureRegion: @MainActor () -> Void
     private var window: NSWindow?
+    private var hasVisibleLifecycle = false
+    private let presenter: @MainActor (NSWindow, Bool) -> Void
     let permission: ScreenRecordingPermission
 
-    init(defaults: UserDefaults = .standard, permission: ScreenRecordingPermission = ScreenRecordingPermission(),
+    init(presenter: (@MainActor (NSWindow, Bool) -> Void)? = nil,
+         defaults: UserDefaults = .standard, permission: ScreenRecordingPermission = ScreenRecordingPermission(),
          captureRegion: @escaping @MainActor () -> Void) {
+        self.presenter = presenter ?? { window, activate in
+            if activate {
+                NSApp.activate()
+                window.makeKeyAndOrderFront(nil)
+            } else { window.orderBack(nil) }
+        }
         self.defaults = defaults
         self.permission = permission
         self.captureRegion = captureRegion
@@ -216,6 +235,7 @@ final class FirstRunWindowController: NSObject, NSWindowDelegate {
     /// Shows the window when the policy asks for it; returns whether it did.
     @discardableResult
     func showIfNeeded(activate: Bool = true) -> Bool {
+        permission.refresh()
         guard FirstRunPolicy.shouldShow(defaults: defaults, screenRecordingGranted: permission.granted) else { return false }
         show(activate: activate)
         return true
@@ -225,15 +245,15 @@ final class FirstRunWindowController: NSObject, NSWindowDelegate {
         let window = window ?? makeWindow()
         self.window = window
         permission.refresh()
-        if activate {
-            NSApp.activate()
-            window.makeKeyAndOrderFront(nil)
-        } else {
-            window.orderBack(nil)
-        }
+        hasVisibleLifecycle = true
+        permission.startPolling()
+        presenter(window, activate)
     }
 
-    func close() { window?.close() }
+    func close() {
+        endVisibleLifecycle()
+        window?.close()
+    }
 
     private func makeWindow() -> NSWindow {
         let view = FirstRunView(permission: permission, captureRegion: { [weak self] in self?.startCapture() },
@@ -255,14 +275,20 @@ final class FirstRunWindowController: NSObject, NSWindowDelegate {
 
     private func startCapture() {
         FirstRunPolicy.markSeen(in: defaults)
-        window?.close()
+        close()
         captureRegion()
     }
 
     /// Closing counts as seen once Screen Recording is allowed; without it the window comes back
     /// at the next launch, because nothing can be captured.
-    func windowWillClose(_ notification: Notification) {
+    func windowWillClose(_ notification: Notification) { endVisibleLifecycle() }
+
+    private func endVisibleLifecycle() {
         permission.stopPolling()
-        if permission.granted { FirstRunPolicy.markSeen(in: defaults) }
+        guard hasVisibleLifecycle else { return }
+        hasVisibleLifecycle = false
+        if permission.granted, defaults.integer(forKey: FirstRunPolicy.seenKey) < FirstRunPolicy.currentGeneration {
+            FirstRunPolicy.markSeen(in: defaults)
+        }
     }
 }

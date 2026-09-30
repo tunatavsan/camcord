@@ -452,8 +452,8 @@ final class RecordingHubPanel {
     /// at rest (it follows the window like the border does), by retargeting the spring when
     /// it is still settling, and not at all mid-drag.
     private func relayout() {
-        resolveDock()
         guard dragStart == nil else { return }
+        resolveDock()
         let target = dock.anchor(of: dock.rect(size: capsule.size, in: area))
         if var running = settle {
             running.target = target
@@ -525,6 +525,8 @@ final class RecordingHubPanel {
             if phase == .ended {
                 dragStart = nil
                 dragSample = nil
+                // Reconcile changes held while dragging before choosing the new dock.
+                area = RecordingHubPlacement.area(window: windowFrame, display: displayFrame, mode: mode)
                 land()
             }
         }

@@ -286,6 +286,41 @@ struct RecordingHubPanelTests {
         hub.hide()
     }
 
+    @Test("window and tile changes preserve drag geometry through actual expansion ticks")
+    func geometryChangesDuringDrag() throws {
+        _ = NSApplication.shared
+        let hub = RecordingHubPanel(defaults: try freshDefaults(), panelPresenter: { _ in })
+        var tile: CGRect?
+        hub.tileFrame = { tile }
+        hub.showForTesting(mode: .recording, area: area, window: window)
+        hub.setHoveredForTesting(true)
+        hub.advanceMotionForTesting(seconds: 0.04)
+        let capsule = hub.capsuleForTesting
+        let grip = CGPoint(x: capsule.midX, y: capsule.midY)
+        hub.dragForTesting(.began, to: grip, at: 1)
+        let heldArea = hub.areaForTesting
+        let heldGrowth = hub.viewForTesting.growth
+        let moved = window.offsetBy(dx: 160, dy: -100)
+        tile = CGRect(x: moved.midX - 120, y: moved.maxY - 150, width: 240, height: 135)
+        hub.updateWindowForTesting(moved)
+        #expect(hub.areaForTesting == heldArea)
+        #expect(hub.viewForTesting.growth == heldGrowth)
+        hub.advanceMotionForTesting(seconds: 0.2)
+        #expect(hub.viewForTesting.growth == heldGrowth)
+        #expect(hub.areaForTesting == heldArea)
+        hub.dragForTesting(.changed, to: CGPoint(x: grip.x + 20, y: grip.y - 10), at: 2)
+        let pointerRect = hub.capsuleForTesting
+        hub.updateWindowForTesting(moved)
+        #expect(hub.capsuleForTesting == pointerRect)
+        hub.dragForTesting(.ended, to: CGPoint(x: grip.x + 20, y: grip.y - 10), at: 3)
+        hub.settleForTesting()
+        #expect(hub.areaForTesting == moved)
+        #expect(hub.dockForTesting != .topCenter)
+        #expect(moved.contains(hub.capsuleForTesting))
+        #expect(!hub.capsuleForTesting.intersects(try #require(tile)))
+        hub.hide()
+    }
+
     @Test("a drag snaps only inside the window")
     func dragConfinedToWindow() throws {
         _ = NSApplication.shared

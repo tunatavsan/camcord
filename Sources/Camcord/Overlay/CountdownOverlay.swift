@@ -3,13 +3,18 @@ import AppKit
 /// A CleanShot-style 3-2-1 countdown shown centered on the display about to be
 /// recorded: gives the user a beat to tidy the screen and keeps the panel-close
 /// animation + pointer parked on the record button out of the first frames.
-/// Returns true to proceed; false when the user cancelled by clicking the badge.
+/// Returns true to proceed; false on task cancellation, Esc, clicking the badge or an accessible press.
 @MainActor
 enum CountdownOverlay {
-    static func run(onScreenFrame frame: NSRect, seconds: Int = 3) async -> Bool {
+    static func run(onScreenFrame frame: NSRect, seconds: Int = 3,
+                    presenter: (@MainActor (NSPanel) -> Void)? = nil,
+                    sleepBeat: @escaping @MainActor () async throws -> Void = {
+                        try await Task.sleep(for: .milliseconds(100))
+                    }) async -> Bool {
+        guard !Task.isCancelled else { return false }
         let size = CGSize(width: 128, height: 128)
         let origin = CGPoint(x: frame.midX - size.width / 2, y: frame.midY - size.height / 2)
-        let panel = NSPanel(
+        let panel = CountdownPanel(
             contentRect: CGRect(origin: origin, size: size),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -25,26 +30,34 @@ enum CountdownOverlay {
 
         let view = CountdownView(frame: CGRect(origin: .zero, size: size))
         panel.contentView = view
-        panel.orderFrontRegardless()
+        panel.makeFirstResponder(view)
+        if let presenter { presenter(panel) } else {
+            panel.orderFrontRegardless()
+            panel.makeKey() // A nonactivating panel receives Esc without activating Camcord.
+        }
 
         defer { panel.orderOut(nil) }
         for n in stride(from: seconds, through: 1, by: -1) {
             view.show(n)
             // Sleep in short beats so a cancel click is honored within ~100ms.
             for _ in 0..<10 {
-                try? await Task.sleep(for: .milliseconds(100))
-                if view.cancelled { return false }
+                do { try await sleepBeat() } catch { return false }
+                if Task.isCancelled || view.cancelled { return false }
             }
         }
-        return true
+        return !Task.isCancelled && !view.cancelled
     }
+}
+
+private final class CountdownPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
 }
 
 /// Dark translucent rounded badge: big digit + a small cancel hint. Click = cancel.
 private final class CountdownView: NSView {
     private(set) var cancelled = false
     private let digit = NSTextField(labelWithString: "")
-    private let hint = NSTextField(labelWithString: "iptal için tıkla")
+    private let hint = NSTextField(labelWithString: String(localized: "Click or press Esc to cancel", comment: "Countdown cancellation hint"))
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -54,8 +67,8 @@ private final class CountdownView: NSView {
         layer?.cornerCurve = .continuous
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
-        setAccessibilityLabel("Kayıt geri sayımı")
-        setAccessibilityHelp("Geri sayımı iptal etmek için tıkla")
+        setAccessibilityLabel(String(localized: "Recording countdown", comment: "Accessibility: recording countdown badge"))
+        setAccessibilityHelp(String(localized: "Cancel the recording countdown", comment: "Accessibility: countdown cancellation action"))
 
         digit.font = .monospacedDigitSystemFont(ofSize: 58, weight: .bold)
         digit.textColor = .white
@@ -102,6 +115,11 @@ private final class CountdownView: NSView {
         layer.add(pop, forKey: "pop")
     }
 
+    override var acceptsFirstResponder: Bool { true }
+    override func cancelOperation(_ sender: Any?) { cancelled = true }
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { cancelOperation(nil) } else { super.keyDown(with: event) }
+    }
     override func mouseDown(with event: NSEvent) { cancelled = true }
 
     override func accessibilityPerformPress() -> Bool {

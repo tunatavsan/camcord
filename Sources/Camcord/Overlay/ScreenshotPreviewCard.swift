@@ -130,15 +130,68 @@ final class ScreenshotPreviewCard {
         guard !hasCleanedUpTempFiles else { return }
         hasCleanedUpTempFiles = true
         Task.detached(priority: .background) {
-            let tempDir = FileManager.default.temporaryDirectory
-            guard let urls = try? FileManager.default.contentsOfDirectory(at: tempDir, includingPropertiesForKeys: [.creationDateKey]) else { return }
-            let threshold = Date().addingTimeInterval(-3600 * 24) // 24 hours old
-            for url in urls where url.lastPathComponent.hasPrefix("Ekran Görüntüsü") {
-                if let values = try? url.resourceValues(forKeys: [.creationDateKey]),
-                   let date = values.creationDate, date < threshold {
-                    try? FileManager.default.removeItem(at: url)
-                }
-            }
+            ScreenshotTemporaryExports().cleanup()
+        }
+    }
+}
+
+/// Temporary exports have their own private directory; only immediate regular UUID PNGs
+/// belong to Camcord. Canonical-path checks reject a substituted root or child symlink.
+struct ScreenshotTemporaryExports: Sendable {
+    let directory: URL
+
+    init(directory: URL = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+         .appendingPathComponent("dev.tavsan.camcord.preview-exports", isDirectory: true)) {
+        self.directory = directory.standardizedFileURL
+    }
+
+    private func rootIsSafe() -> Bool {
+        guard directory.isFileURL,
+              directory.path == directory.resolvingSymlinksInPath().standardizedFileURL.path,
+              let values = try? directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        else { return false }
+        return values.isDirectory == true && values.isSymbolicLink != true
+    }
+
+    func owns(_ url: URL) -> Bool {
+        let url = url.standardizedFileURL
+        guard rootIsSafe(), url.deletingLastPathComponent().path == directory.path,
+              url.pathExtension == "png", UUID(uuidString: url.deletingPathExtension().lastPathComponent) != nil,
+              url.path == url.resolvingSymlinksInPath().standardizedFileURL.path,
+              let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        else { return false }
+        return values.isRegularFile == true && values.isSymbolicLink != true
+    }
+
+    func write(_ data: Data) throws -> URL {
+        let manager = FileManager.default
+        if !manager.fileExists(atPath: directory.path) {
+            // Check ancestors before creating anything, including a dangling root symlink.
+            let parent = directory.deletingLastPathComponent()
+            let parentValues = try? parent.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard directory.path == directory.resolvingSymlinksInPath().standardizedFileURL.path,
+                  parent.path == parent.resolvingSymlinksInPath().standardizedFileURL.path,
+                  parentValues?.isDirectory == true, parentValues?.isSymbolicLink != true,
+                  (try? manager.destinationOfSymbolicLink(atPath: directory.path)) == nil
+            else { throw CocoaError(.fileWriteInvalidFileName) }
+            try manager.createDirectory(at: directory, withIntermediateDirectories: false,
+                                        attributes: [.posixPermissions: 0o700])
+        }
+        guard rootIsSafe() else { throw CocoaError(.fileWriteInvalidFileName) }
+        let url = directory.appendingPathComponent(UUID().uuidString + ".png")
+        try data.write(to: url, options: .atomic)
+        guard owns(url) else { throw CocoaError(.fileWriteInvalidFileName) }
+        return url
+    }
+
+    func cleanup(now: Date = Date()) {
+        guard rootIsSafe(), let urls = try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        let threshold = now.addingTimeInterval(-24 * 3600)
+        for url in urls where owns(url) {
+            guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey]),
+                  let date = values.contentModificationDate, date < threshold else { continue }
+            try? FileManager.default.removeItem(at: url)
         }
     }
 }
@@ -414,19 +467,12 @@ private final class CardBoxView: NSView {
 
     private func exportedFileURL() async -> URL? {
         if let diskURL, FileManager.default.fileExists(atPath: diskURL.path) { return diskURL }
-        if let tempURL, FileManager.default.fileExists(atPath: tempURL.path) { return tempURL }
+        if let tempURL, ScreenshotTemporaryExports().owns(tempURL) { return tempURL }
 
         let cgImage = image
         let url = await Task.detached(priority: .userInitiated) { () -> URL? in
             guard let data = NSBitmapImageRep(cgImage: cgImage).representation(using: .png, properties: [:]) else { return nil }
-            let dest = FileManager.default.temporaryDirectory
-                .appendingPathComponent("Ekran Görüntüsü \(UUID().uuidString.prefix(8)).png")
-            do {
-                try data.write(to: dest)
-                return dest
-            } catch {
-                return nil
-            }
+            return try? ScreenshotTemporaryExports().write(data)
         }.value
 
         self.tempURL = url

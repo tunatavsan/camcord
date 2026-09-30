@@ -47,17 +47,73 @@ struct FirstRunTests {
         _ = NSApplication.shared
         let defaults = try freshDefaults()
         let grant = Grant()
-        let controller = FirstRunWindowController(defaults: defaults, permission: ScreenRecordingPermission { grant.value }) {}
+        let controller = FirstRunWindowController(presenter: { _, _ in }, defaults: defaults, permission: ScreenRecordingPermission { grant.value }) {}
         #expect(controller.showIfNeeded(activate: false))
-        controller.windowForTesting?.close()
+        controller.close()
         #expect(defaults.integer(forKey: FirstRunPolicy.seenKey) == 0)
         #expect(FirstRunPolicy.shouldShow(defaults: defaults, screenRecordingGranted: false))
 
         grant.value = true
         #expect(controller.showIfNeeded(activate: false))
-        controller.windowForTesting?.close()
+        controller.close()
         #expect(defaults.integer(forKey: FirstRunPolicy.seenKey) == FirstRunPolicy.currentGeneration)
         #expect(!controller.showIfNeeded(activate: false))
+    }
+
+    @Test("policy refreshes a previously granted permission before deciding")
+    func revokedPermission() throws {
+        let defaults = try freshDefaults()
+        FirstRunPolicy.markSeen(in: defaults)
+        let grant = Grant()
+        grant.value = true
+        let permission = ScreenRecordingPermission { grant.value }
+        let controller = FirstRunWindowController(presenter: { _, _ in }, defaults: defaults, permission: permission) {}
+        grant.value = false
+        #expect(controller.showIfNeeded(activate: false))
+        #expect(!permission.granted)
+        controller.close()
+    }
+
+    @Test("visible lifecycle restarts polling after close and reopening")
+    func reopenedPolling() async throws {
+        let defaults = try freshDefaults()
+        let grant = Grant()
+        let permission = ScreenRecordingPermission(pollInterval: .milliseconds(5)) { grant.value }
+        let controller = FirstRunWindowController(presenter: { _, _ in }, defaults: defaults, permission: permission) {}
+        controller.show(activate: false)
+        #expect(permission.isPolling)
+        controller.close()
+        #expect(!permission.isPolling)
+        controller.show(activate: false)
+        #expect(permission.isPolling)
+        grant.value = true
+        for _ in 0..<30 where !permission.granted { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(permission.granted)
+        controller.close()
+        grant.value = false
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(permission.granted, "closed windows must not keep polling")
+        #expect(!permission.isPolling)
+    }
+
+    @Test("the permission transition resolves Reduce Motion")
+    func reduceMotion() {
+        #expect(FirstRunView.permissionAnimation(reduceMotion: true) == Theme.Motion.reduced)
+        #expect(FirstRunView.permissionAnimation(reduceMotion: false) == Theme.Motion.panel)
+    }
+
+    @Test("closing before any show does not consume onboarding; future seen versions stay intact")
+    func closeBeforeShow() throws {
+        let defaults = try freshDefaults()
+        let controller = FirstRunWindowController(presenter: { _, _ in }, defaults: defaults,
+            permission: ScreenRecordingPermission { true }) {}
+        controller.close()
+        #expect(defaults.integer(forKey: FirstRunPolicy.seenKey) == 0)
+        #expect(controller.windowForTesting == nil)
+        defaults.set(2, forKey: FirstRunPolicy.seenKey)
+        controller.show(activate: false)
+        controller.close()
+        #expect(defaults.integer(forKey: FirstRunPolicy.seenKey) == 2)
     }
 
     @Test("the live check shows the first run as asked")

@@ -46,6 +46,9 @@ final class SelectionPanel: NSPanel {
 @MainActor
 final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     private let shareableContentCache: ShareableContentCache
+    private let presentation: (@MainActor () -> Void)?
+    private let clickedResolver: (@MainActor (CGPoint) async -> SCWindow?)?
+    private let frozenResolver: (@MainActor (CGWindowID) async -> SCWindow?)?
 
     private var panels: [SelectionPanel] = []
     private var views: [SelectionView] = []
@@ -96,9 +99,17 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
 
     private static let clickMovementThreshold: CGFloat = 4
 
-    init(shareableContentCache: ShareableContentCache) {
+    init(shareableContentCache: ShareableContentCache,
+         presentation: (@MainActor () -> Void)? = nil,
+         clickedResolver: (@MainActor (CGPoint) async -> SCWindow?)? = nil,
+         frozenResolver: (@MainActor (CGWindowID) async -> SCWindow?)? = nil) {
         self.shareableContentCache = shareableContentCache
+        self.presentation = presentation
+        self.clickedResolver = clickedResolver
+        self.frozenResolver = frozenResolver
     }
+
+    var isPresentingForTesting: Bool { isPresenting }
 
     /// Shows the overlay and suspends until the user picks a region/window or cancels.
     /// If a selection session is already active (e.g. a second hotkey/menu trigger fires
@@ -239,6 +250,8 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
 
     private func presentPanels(seedWindowSnap: Bool = true) {
         presentationWasBlind = false
+        // A presenter can leave the real continuation/gesture lifecycle offscreen.
+        if let presentation { presentation(); return }
         let started = ContinuousClock.now
         // No screens (all displays asleep/detached): without this guard no panel is
         // ever created, so no event could resume the continuation -- selectRegion()
@@ -507,10 +520,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     let resolved = await self.resolveFrozenWindow(id: frozenWindow.id)
-                    guard generation == self.clickGeneration, self.isPresenting else {
-                        self.finish(nil)
-                        return
-                    }
+                    guard generation == self.clickGeneration, self.isPresenting else { return }
                     guard let resolved else {
                         self.finish(nil)
                         return
@@ -534,10 +544,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let resolved = await self.resolveClickedWindow(atAppKitPoint: globalPoint) ?? fallback
-                guard generation == self.clickGeneration, self.isPresenting else {
-                    self.finish(nil)
-                    return
-                }
+                guard generation == self.clickGeneration, self.isPresenting else { return }
                 if let resolved {
                     // Tactile commit tick — a no-op on non-Force-Touch input devices.
                     NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
@@ -645,6 +652,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     /// just-opened window could not be picked at all and the click fell through to the
     /// window behind it.
     private func resolveClickedWindow(atAppKitPoint point: CGPoint) async -> SCWindow? {
+        if let clickedResolver { return await clickedResolver(point) }
         guard let primaryHeight = NSScreen.screens.first?.frame.height else { return nil }
         let cgPoint = appKitPointToCG(point, primaryScreenHeight: primaryHeight)
         guard let id = await WindowSnapper.clickTopmostWindowID(atCGPoint: cgPoint) else { return nil }
@@ -656,6 +664,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     }
 
     private func resolveFrozenWindow(id: CGWindowID) async -> SCWindow? {
+        if let frozenResolver { return await frozenResolver(id) }
         if let known = await shareableContentCache.lastKnownContent()?.windows.first(where: { $0.windowID == id }) {
             return known
         }
