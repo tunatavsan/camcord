@@ -9,7 +9,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var recordingController: RecordingController?
     private var hotkeyCenter: HotkeyCenter?
     private var eventTapEngine: EventTapEngine?
-    private var settingsWindowController: SettingsWindowController?
     private var statusItemController: StatusItemController?
     private var panelController: PanelController?
     private var recordingStateModel: RecordingStateModel?
@@ -42,8 +41,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // creates the tap only if bindings are enabled AND Accessibility is trusted.
         eventTapEngine.apply(TapBindings.load(from: .standard))
 
-        let settingsWindowController = SettingsWindowController(eventTapEngine: eventTapEngine)
-        self.settingsWindowController = settingsWindowController
 
         // The main window and the Dock icon. `.always` gets its icon now; the others wait
         // for the window.
@@ -55,8 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let statusItemController = StatusItemController(
             coordinator: coordinator,
             recordingController: recordingController,
-            eventTapEngine: eventTapEngine,
-            settingsWindowController: settingsWindowController
+            eventTapEngine: eventTapEngine
         )
         self.statusItemController = statusItemController
 
@@ -172,6 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.panelController = panelController
 
         statusItemController.onOpenMainWindow = { [weak self] in self?.showMainWindow() }
+        statusItemController.onOpenSettings = { [weak self] in self?.showSettingsModule() }
         statusItemController.onOpenDesignLab = { [weak self] in self?.designLab.show() }
         statusItemController.onShowPanel = { [weak panelController, weak statusItemController] in
             guard let button = statusItemController?.anchorButton else { return }
@@ -195,7 +192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         self.firstRun = firstRun
-        firstRun.showIfNeeded()
+        firstRun.showIfNeeded(activate: NSApp.isActive)
     }
 
     /// Focus-safe surfaces for the run's screenshots (LiveCheck); never activates the app.
@@ -277,8 +274,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainWindowController?.model.sidebarVisible.toggle()
     }
 
+    /// ⌘, opens the main window on Settings (K7).
     @objc private func showSettings(_ sender: Any?) {
-        settingsWindowController?.show()
+        showSettingsModule()
+    }
+
+    private func showSettingsModule() {
+        panelController?.close()
+        mainWindowController?.show(module: .settings)
     }
 
     @objc private func showControlPanel(_ sender: Any?) {
@@ -353,8 +356,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         actions.openMainWindow = { [weak self] in self?.showMainWindow() }
         actions.openSettings = { [weak self] in
-            self?.panelController?.close()
-            self?.settingsWindowController?.show()
+            self?.showSettingsModule()
         }
         return actions
     }

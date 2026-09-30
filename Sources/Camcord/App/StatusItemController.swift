@@ -12,7 +12,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let coordinator: CaptureCoordinator
     private let recordingController: RecordingController
     private let eventTapEngine: EventTapEngine
-    private let settingsWindowController: SettingsWindowController
+    /// Opens Settings: the main window on its Settings module (K7).
+    var onOpenSettings: (() -> Void)?
 
     private let captureRegionItem = NSMenuItem(title: "Bölgeyi Çek", action: nil, keyEquivalent: "")
     private let captureActiveWindowItem = NSMenuItem(title: "Aktif Pencereyi Çek", action: nil, keyEquivalent: "")
@@ -50,12 +51,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         coordinator: CaptureCoordinator,
         recordingController: RecordingController,
         eventTapEngine: EventTapEngine,
-        settingsWindowController: SettingsWindowController
     ) {
         self.coordinator = coordinator
         self.recordingController = recordingController
         self.eventTapEngine = eventTapEngine
-        self.settingsWindowController = settingsWindowController
         // variableLength from the start: the item sizes to its content (icon-only
         // when idle, icon+elapsed while recording). Switching lengths at runtime
         // would shift the anchor out from under an open popover.
@@ -552,6 +551,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     @objc private func openSettings() {
-        settingsWindowController.show()
+        onOpenSettings?()
     }
 }

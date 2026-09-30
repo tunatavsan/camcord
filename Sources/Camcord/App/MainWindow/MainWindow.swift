@@ -8,16 +8,32 @@ import SwiftUI
 final class MainWindowModel {
     @ObservationIgnored let defaults: UserDefaults
     var selection: ModuleID {
-        didSet { if selection != oldValue { ModuleSelection.save(selection, to: defaults) } }
+        didSet {
+            guard selection != oldValue else { return }
+            ModuleSelection.save(selection, to: defaults)
+            if oldValue != .settings { returnModule = oldValue }
+        }
     }
 
     /// The sidebar is shown (the toolbar button and ⌃⌘S hide it).
     var sidebarVisible = true
 
+    /// The Settings group on screen; while Settings is open the sidebar lists the groups (SPEC N3).
+    var settingsGroup: SettingsGroup {
+        didSet { defaults.set(settingsGroup.rawValue, forKey: SettingsGroup.defaultsKey) }
+    }
+
+    /// Where "← Camcord" in the Settings sidebar goes back to.
+    private(set) var returnModule: ModuleID = .library
+
     init(defaults: UserDefaults) {
         self.defaults = defaults
         selection = ModuleSelection.load(from: defaults)
+        settingsGroup = SettingsGroup.load(from: defaults)
     }
+
+    /// Leaves Settings for the module it was opened from.
+    func leaveSettings() { select(returnModule == .settings ? .library : returnModule) }
 
     /// Selects `id`, or the first available module when `id` cannot be selected.
     func select(_ id: ModuleID) { selection = ModuleRegistry.selectable(id) }
@@ -46,8 +62,18 @@ struct MainWindowView: View {
     var body: some View {
         HStack(spacing: 0) {
             if model.sidebarVisible {
-                MainWindowSidebar(selection: $model.selection)
-                    .frame(width: MainWindowLayout.sidebarWidth)
+                ZStack {
+                    if model.selection == .settings {
+                        SettingsSidebar(model: model)
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                    } else {
+                        MainWindowSidebar(selection: $model.selection)
+                            .transition(.move(edge: .leading).combined(with: .opacity))
+                    }
+                }
+                .animation(Theme.Motion.resolve(Theme.Motion.panel, reduceMotion: reduceMotion),
+                           value: model.selection == .settings)
+                .frame(width: MainWindowLayout.sidebarWidth)
                     .windowBackdrop(.sidebar)
                     .transition(.move(edge: .leading).combined(with: .opacity))
             }
@@ -66,7 +92,13 @@ struct MainWindowView: View {
         .frame(minWidth: 880, minHeight: 560)
         .tint(Theme.Palette.ink.color)
         .environment(\.appServices, services)
+        .environment(\.mainWindowModel, model)
     }
+}
+
+extension EnvironmentValues {
+    /// The window's model, for modules that drive the window (Settings takes over the sidebar).
+    @Entry var mainWindowModel: MainWindowModel?
 }
 
 enum MainWindowLayout {

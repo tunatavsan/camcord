@@ -141,8 +141,8 @@ struct EditLaterView: View {
     }
 }
 
-/// Settings inside the window: the existing Settings content, embedded. Its services come
-/// from the environment (`AppServices`), so it renders the real thing wherever they are.
+/// Settings inside the window (K7): its groups take over the sidebar, its pages are the
+/// prototype's cards (App/Settings/).
 struct SettingsModule: CamcordModule {
     let id = ModuleID.settings
     let title = LocalizedStringResource("Settings", comment: "Main window module")
@@ -151,25 +151,7 @@ struct SettingsModule: CamcordModule {
     let isAvailable = true
 
     func makeView() -> AnyView {
-        AnyView(SettingsModuleView(symbol: symbol, title: title))
-    }
-}
-
-private struct SettingsModuleView: View {
-    let symbol: String
-    let title: LocalizedStringResource
-    @Environment(\.appServices) private var services
-
-    var body: some View {
-        if let services {
-            SettingsRootView(eventTapEngine: services.eventTapEngine, defaultsSuite: services.defaults)
-        } else {
-            ModulePlaceholder(
-                symbol: symbol,
-                title: title,
-                message: LocalizedStringResource("Settings are loading.", comment: "Settings placeholder")
-            )
-        }
+        AnyView(SettingsModuleView())
     }
 }
 

@@ -62,20 +62,14 @@ struct AuditRenderShots {
         }
     }
 
-    @Test("settings panes")
+    @Test("settings pages")
     func settings() throws {
         _ = NSApplication.shared
-        let coordinator = CaptureCoordinator()
-        let engine = EventTapEngine(
-            coordinator: coordinator, recordingController: RecordingController(coordinator: coordinator),
-            bindings: TapBindings(mouseButton3: nil, mouseButton4: nil, mouseButton5: nil, doubleTapRightCommand: nil),
-            buttonIsDown: { _ in false }
-        )
-        for section in SettingsSection.allCases {
+        let store = SettingsStore(defaults: .standard, eventTapEngine: nil)
+        for group in SettingsGroup.allCases {
             for (look, appearance) in appearances {
-                let host = NSHostingView(rootView: SettingsRootView(eventTapEngine: engine, defaultsSuite: .standard,
-                                                                    selection: section))
-                try shoot(host, size: CGSize(width: 800, height: 640), name: "settings-\(section.rawValue)-\(look)",
+                let host = NSHostingView(rootView: SettingsPageView(group: group, store: store))
+                try shoot(host, size: CGSize(width: 800, height: 640), name: "settings-\(group.rawValue)-\(look)",
                           appearance: appearance)
             }
         }

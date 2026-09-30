@@ -110,12 +110,13 @@ struct MainWindowTests {
         _ = NSApplication.shared
         let defaults = try freshDefaults()
         let controller = MainWindowController(defaults: defaults, dock: DockController(defaults: defaults) { _ in }) {
-            $0.orderFront(nil)
+            _ in Issue.record("Background tests must not invoke the activating presenter")
         }
         controller.show(activate: false)
         let window = try #require(controller.windowForTesting)
-        window.orderFront(nil)
+        window.orderBack(nil)
         #expect(window.isVisible)
+        #expect(!window.isKeyWindow)
         var visibleDuringWork: Bool?
         await controller.stepAside { visibleDuringWork = window.isVisible }
         #expect(visibleDuringWork == false)
@@ -153,7 +154,7 @@ struct MainWindowTests {
             #expect(model.selection == .library)
         }
         let dock = DockController(defaults: defaults) { _ in }
-        let controller = MainWindowController(defaults: defaults, dock: dock) { $0.orderFront(nil) }
+        let controller = MainWindowController(defaults: defaults, dock: dock) { _ in Issue.record("Background tests must not invoke the activating presenter") }
         controller.show(module: .studio, activate: false)
         #expect(controller.model.selection == .studio)
         #expect(ModuleSelection.load(from: defaults) == .studio)
@@ -169,14 +170,18 @@ struct MainWindowTests {
         var applied: [NSApplication.ActivationPolicy] = []
         let dock = DockController(defaults: defaults) { applied.append($0) }
         var presented = 0
-        let controller = MainWindowController(defaults: defaults, dock: dock) { window in
+        let controller = MainWindowController(defaults: defaults, dock: dock) { _ in
             presented += 1
-            window.orderFront(nil)
+            Issue.record("Background tests must not invoke the activating presenter")
         }
-        controller.show()
+        let wasActive = NSApp.isActive
+        controller.show(activate: false)
         let window = try #require(controller.windowForTesting)
+        #expect(NSApp.isActive == wasActive)
         #expect(applied == [.regular])
-        #expect(presented == 1)
+        #expect(presented == 0)
+        #expect(window.isVisible)
+        #expect(!window.isKeyWindow)
         #expect(window.frameAutosaveName == MainWindowController.frameAutosaveName)
         #expect(!window.isReleasedWhenClosed)
         #expect(window.styleMask.contains(.closable))
@@ -192,7 +197,7 @@ struct MainWindowTests {
         #expect(window.contentViewController == nil)
 
         // Reopening reuses the same window (its frame) with a fresh tree.
-        controller.show()
+        controller.show(activate: false)
         #expect(controller.windowForTesting === window)
         #expect(window.contentViewController != nil)
         #expect(window.frame == frame)
@@ -214,14 +219,14 @@ struct MainWindowTests {
         #expect(!monitor.isObserved)
     }
 
-    /// The pixels of `view` rendered offscreen at 1×.
-    private func pixels(_ view: some View) throws -> Data {
+    /// Builds the real view offscreen; assertions inspect rendered controls and their store.
+    private func render(_ view: some View) throws {
         let host = NSHostingView(rootView: view)
         host.frame = CGRect(x: 0, y: 0, width: 720, height: 480)
         host.layoutSubtreeIfNeeded()
         let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
         host.cacheDisplay(in: host.bounds, to: rep)
-        return try #require(rep.tiffRepresentation)
+
     }
 
     @Test("the Settings module renders the real settings from the environment's services, the placeholder without")
@@ -238,18 +243,27 @@ struct MainWindowTests {
         let services = AppServices(defaults: defaults, coordinator: coordinator, recordingController: recording,
                                    eventTapEngine: engine, recordingState: RecordingStateModel())
         let module = SettingsModule()
-        let bare = try pixels(module.makeView())
-        let placeholder = try pixels(ModulePlaceholder(
-            symbol: module.symbol, title: module.title,
-            message: LocalizedStringResource("Settings are loading.", comment: "Settings placeholder")))
-        let real = try pixels(module.makeView().environment(\.appServices, services))
-        #expect(bare == placeholder)
-        #expect(real != placeholder)
+        let recorder = SettingsKeyRecorder()
+        SettingsKeyRecorder.active = recorder
+        defer {
+            SettingsKeyRecorder.active = nil
+            defaults.removePersistentDomain(forName: Self.suiteName)
+        }
+        try render(module.makeView())
+        #expect(recorder.keys.isEmpty)
+        #expect(recorder.stores.isEmpty)
+        try render(module.makeView().environment(\.appServices, services))
+        #expect(recorder.keys.contains(DockIconMode.defaultsKey))
+        #expect(recorder.stores.allSatisfy { $0.defaults === defaults })
+        let injectedStore = try #require(recorder.stores.last)
+        injectedStore.copyToast = false
+        #expect(!HUDToast.isEnabled(in: defaults))
 
-        // The window hands its services down to whichever module it shows.
+        // The actual window supplies the same services to its Settings module.
+        recorder.reset()
         ModuleSelection.save(.settings, to: defaults)
-        let windowWithout = try pixels(MainWindowView(defaults: defaults))
-        let windowWith = try pixels(MainWindowView(defaults: defaults, services: services))
-        #expect(windowWithout != windowWith)
+        try render(MainWindowView(defaults: defaults, services: services))
+        #expect(!recorder.stores.isEmpty)
+        #expect(recorder.stores.allSatisfy { $0.defaults === defaults })
     }
 }

@@ -19,6 +19,150 @@
         }
       }
     },
+    "%lld days": {
+      "comment": "A number of days",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld days"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld gün"
+          }
+        }
+      }
+    },
+    "%lld min": {
+      "comment": "A number of minutes",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld min"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld dk"
+          }
+        }
+      }
+    },
+    "24 fps · cinematic": {
+      "comment": "Frame rate option",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "24 fps · cinematic"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "24 fps · sinematik"
+          }
+        }
+      }
+    },
+    "A distinct sound for each action: region, window, text, recording, paste.": {
+      "comment": "Setting note",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A distinct sound for each action: region, window, text, recording, paste."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Her eylem için ayrı bir ses: bölge, pencere, metin, kayıt, yapıştırma."
+          }
+        }
+      }
+    },
+    "A full-screen game records at half resolution; frame rate and codec stay the same.": {
+      "comment": "Setting note",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A full-screen game records at half resolution; frame rate and codec stay the same."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tam ekran bir oyun yarı çözünürlükte kaydedilir; kare hızı ve codec değişmez."
+          }
+        }
+      }
+    },
+    "A recording is running. Levels change live.": {
+      "comment": "Setting status",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A recording is running. Levels change live."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt sürüyor. Seviyeler canlı değişir."
+          }
+        }
+      }
+    },
+    "A short confirmation when an image or text is copied.": {
+      "comment": "Setting note",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A short confirmation when an image or text is copied."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bir görüntü ya da metin kopyalanınca kısa bir onay gösterir."
+          }
+        }
+      }
+    },
+    "A thin glow follows the window you record and never appears in the file. The red frame you see after picking a window always shows.": {
+      "comment": "Setting footnote",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A thin glow follows the window you record and never appears in the file. The red frame you see after picking a window always shows."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydettiğin pencerenin çevresinde ince bir parıltı dolaşır ve dosyaya girmez. Pencereyi seçtikten sonra çıkan kırmızı çerçeve her zaman görünür."
+          }
+        }
+      }
+    },
     "Accessibility": {
       "comment": "Permission name",
       "extractionState": "manual",
@@ -33,6 +177,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Erişilebilirlik"
+          }
+        }
+      }
+    },
+    "Accessibility is needed for these": {
+      "comment": "Setting status",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accessibility is needed for these"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bunlar için Erişilebilirlik izni gerekli"
+          }
+        }
+      }
+    },
+    "Add or remove the camera in the recording": {
+      "comment": "Shortcut action",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add or remove the camera in the recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamerayı kayda ekle ya da çıkar"
           }
         }
       }
@@ -73,6 +253,24 @@
         }
       }
     },
+    "Also save to disk": {
+      "comment": "Setting",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Also save to disk"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diske de kaydet"
+          }
+        }
+      }
+    },
     "Always": {
       "comment": "Dock icon setting",
       "extractionState": "manual",
@@ -105,6 +303,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Uygulama"
+          }
+        }
+      }
+    },
+    "Audio": {
+      "comment": "Settings card",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ses"
           }
         }
       }
@@ -145,6 +361,114 @@
         }
       }
     },
+    "Back to Camcord": {
+      "comment": "Accessibility: leave Settings",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Back to Camcord"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camcord'a dön"
+          }
+        }
+      }
+    },
+    "Balanced": {
+      "comment": "Recording profile",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Balanced"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dengeli"
+          }
+        }
+      }
+    },
+    "Best": {
+      "comment": "Recording profile",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Best"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En iyi"
+          }
+        }
+      }
+    },
+    "Bit rate": {
+      "comment": "Setting: video bit rate",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bit rate"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bit hızı"
+          }
+        }
+      }
+    },
+    "Bottom left": {
+      "comment": "Corner",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bottom left"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sol alt"
+          }
+        }
+      }
+    },
+    "Bottom right": {
+      "comment": "Corner",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bottom right"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sağ alt"
+          }
+        }
+      }
+    },
     "Camcord captures your screen": {
       "comment": "First-run title",
       "extractionState": "manual",
@@ -177,6 +501,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kamera"
+          }
+        }
+      }
+    },
+    "Cancel": {
+      "comment": "Button",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vazgeç"
           }
         }
       }
@@ -235,6 +577,42 @@
         }
       }
     },
+    "Capture modifier (+ left / right)": {
+      "comment": "Mouse binding option",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capture modifier (+ left / right)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yakalama tuşu (+ sol / sağ)"
+          }
+        }
+      }
+    },
+    "Capture modifier: hold the button and drag with the left button for a screenshot, with the right button for text; a tap opens the region picker. Hold → region: hold and drag, release to capture; tap once, then hold, to capture text.": {
+      "comment": "Setting footnote",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capture modifier: hold the button and drag with the left button for a screenshot, with the right button for text; a tap opens the region picker. Hold → region: hold and drag, release to capture; tap once, then hold, to capture text."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yakalama tuşu: tuşu basılı tut, sol tuşla sürüklersen ekran görüntüsü, sağ tuşla sürüklersen metin çeker; tek dokunuş bölge seçimini açar. Basılı tut → bölge: tutup sürükle, bırakınca çeker; önce bir kez dokunup sonra tutarsan metin çeker."
+          }
+        }
+      }
+    },
     "Capture text": {
       "comment": "Action: recognise the text in a region",
       "extractionState": "manual",
@@ -271,6 +649,78 @@
         }
       }
     },
+    "Change…": {
+      "comment": "Button: choose another folder",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Change…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Değiştir…"
+          }
+        }
+      }
+    },
+    "Choose": {
+      "comment": "Folder panel: confirm the folder",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seç"
+          }
+        }
+      }
+    },
+    "Clear…": {
+      "comment": "Button: remove copied captures",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Temizle…"
+          }
+        }
+      }
+    },
+    "Click a field and press the keys you want.": {
+      "comment": "Setting footnote",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Click a field and press the keys you want."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bir alana tıkla ve istediğin tuşlara bas."
+          }
+        }
+      }
+    },
     "Close": {
       "comment": "Window menu",
       "extractionState": "manual",
@@ -289,6 +739,96 @@
         }
       }
     },
+    "Container": {
+      "comment": "Setting: file container",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Container"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kapsayıcı"
+          }
+        }
+      }
+    },
+    "Copied captures live in Camcord's own folder; the oldest go first when they pass the limit.": {
+      "comment": "Setting footnote",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copied captures live in Camcord's own folder; the oldest go first when they pass the limit."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kopyalanan çekimler Camcord'un kendi klasöründe durur; sınır aşılınca en eskiler önce gider."
+          }
+        }
+      }
+    },
+    "Copied confirmation": {
+      "comment": "Setting",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copied confirmation"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kopyalandı onayı"
+          }
+        }
+      }
+    },
+    "Couldn't open the folder. Check its location in Settings.": {
+      "comment": "Toast when a folder cannot be revealed",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't open the folder. Check its location in Settings."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Klasör açılamadı. Konumunu Ayarlar'dan kontrol et."
+          }
+        }
+      }
+    },
+    "Count down before full-screen recordings": {
+      "comment": "Setting: 3-2-1",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Count down before full-screen recordings"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tam ekran kayıttan önce geri say"
+          }
+        }
+      }
+    },
     "Create": {
       "comment": "Sidebar section: making things from captures",
       "extractionState": "manual",
@@ -303,6 +843,60 @@
           "stringUnit": {
             "state": "translated",
             "value": "Oluştur"
+          }
+        }
+      }
+    },
+    "Custom (advanced)": {
+      "comment": "Recording profile",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Custom (advanced)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Özel (gelişmiş)"
+          }
+        }
+      }
+    },
+    "Default camera": {
+      "comment": "Camera option: the system default",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Default camera"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Varsayılan kamera"
+          }
+        }
+      }
+    },
+    "Default input": {
+      "comment": "Microphone option: the system default",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Default input"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Varsayılan giriş"
           }
         }
       }
@@ -343,6 +937,42 @@
         }
       }
     },
+    "Double-tap right ⌘": {
+      "comment": "Mouse binding",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Double-tap right ⌘"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sağ ⌘'ye çift dokunuş"
+          }
+        }
+      }
+    },
+    "Dynamic range": {
+      "comment": "Setting: SDR or HDR",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dynamic range"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dinamik aralık"
+          }
+        }
+      }
+    },
     "Edit": {
       "comment": "Main window module",
       "extractionState": "manual",
@@ -375,6 +1005,132 @@
           "stringUnit": {
             "state": "translated",
             "value": "Düzenleme 1.0'dan sonra geliyor"
+          }
+        }
+      }
+    },
+    "Efficient · small": {
+      "comment": "Recording profile",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Efficient · small"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verimli · küçük"
+          }
+        }
+      }
+    },
+    "Feedback": {
+      "comment": "Settings card",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Feedback"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geri bildirim"
+          }
+        }
+      }
+    },
+    "Feedback sounds": {
+      "comment": "Setting",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Feedback sounds"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geri bildirim sesleri"
+          }
+        }
+      }
+    },
+    "File name prefix": {
+      "comment": "Setting",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File name prefix"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dosya adı öneki"
+          }
+        }
+      }
+    },
+    "Files": {
+      "comment": "Settings card",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Files"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dosyalar"
+          }
+        }
+      }
+    },
+    "Focus": {
+      "comment": "Settings card: Do Not Disturb",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Focus"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Odak"
+          }
+        }
+      }
+    },
+    "Folder": {
+      "comment": "Setting: a save folder",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Folder"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Klasör"
           }
         }
       }
@@ -451,6 +1207,330 @@
         }
       }
     },
+    "Frame rate": {
+      "comment": "Setting: frames per second",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Frame rate"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kare hızı"
+          }
+        }
+      }
+    },
+    "General": {
+      "comment": "Settings group",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "General"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Genel"
+          }
+        }
+      }
+    },
+    "HDR needs HEVC or ProRes; H.264 records SDR.": {
+      "comment": "Setting warning",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HDR needs HEVC or ProRes; H.264 records SDR."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HDR için HEVC ya da ProRes gerekir; H.264 SDR kaydeder."
+          }
+        }
+      }
+    },
+    "HDR · 10-bit": {
+      "comment": "Dynamic range option",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HDR · 10-bit"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HDR · 10 bit"
+          }
+        }
+      }
+    },
+    "HEVC 10-bit · about 20 Mbps: efficient and high quality (default).": {
+      "comment": "Profile note",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HEVC 10-bit · about 20 Mbps: efficient and high quality (default)."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HEVC 10 bit · yaklaşık 20 Mbps: verimli ve yüksek kalite (varsayılan)."
+          }
+        }
+      }
+    },
+    "HEVC 10-bit · about 45 Mbps: upload and YouTube quality.": {
+      "comment": "Profile note",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HEVC 10-bit · about 45 Mbps: upload and YouTube quality."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HEVC 10 bit · yaklaşık 45 Mbps: yükleme ve YouTube kalitesi."
+          }
+        }
+      }
+    },
+    "HEVC 10-bit · about 90 Mbps: the highest bit rate.": {
+      "comment": "Profile note",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HEVC 10-bit · about 90 Mbps: the highest bit rate."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HEVC 10 bit · yaklaşık 90 Mbps: en yüksek bit hızı."
+          }
+        }
+      }
+    },
+    "HEVC · about 8 Mbps: small files, good quality for archives and sharing.": {
+      "comment": "Profile note",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HEVC · about 8 Mbps: small files, good quality for archives and sharing."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HEVC · yaklaşık 8 Mbps: küçük dosya, arşiv ve paylaşım için iyi kalite."
+          }
+        }
+      }
+    },
+    "High quality": {
+      "comment": "Recording profile",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "High quality"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yüksek kalite"
+          }
+        }
+      }
+    },
+    "Highlight the window in window recordings": {
+      "comment": "Setting",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Highlight the window in window recordings"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pencere kaydında pencereyi vurgula"
+          }
+        }
+      }
+    },
+    "Hold → region": {
+      "comment": "Mouse binding option",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hold → region"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Basılı tut → bölge"
+          }
+        }
+      }
+    },
+    "If your voice is buried under the game, lower the system level or raise the microphone.": {
+      "comment": "Setting footnote",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "If your voice is buried under the game, lower the system level or raise the microphone."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sesin oyunun altında kalıyorsa sistem seviyesini azalt ya da mikrofonu yükselt."
+          }
+        }
+      }
+    },
+    "In use": {
+      "comment": "Setting: space the copied captures take",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In use"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kullanılan"
+          }
+        }
+      }
+    },
+    "Indicator": {
+      "comment": "Settings card",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Indicator"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gösterge"
+          }
+        }
+      }
+    },
+    "It belongs to “%@”. If you take it over, that action has no shortcut.": {
+      "comment": "Shortcut conflict body",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "It belongs to “%@”. If you take it over, that action has no shortcut."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Şu an “%@” için atanmış. Devralırsan o eylemin kısayolu kalmaz."
+          }
+        }
+      }
+    },
+    "Keep copied captures in the Library": {
+      "comment": "Setting",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep copied captures in the Library"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kopyalanan çekimleri Kitaplık'ta tut"
+          }
+        }
+      }
+    },
+    "Keep them for": {
+      "comment": "Setting: how long copied captures are kept",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep them for"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saklama süresi"
+          }
+        }
+      }
+    },
+    "Keyboard shortcuts": {
+      "comment": "Settings card",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keyboard shortcuts"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Klavye kısayolları"
+          }
+        }
+      }
+    },
     "Later": {
       "comment": "Tag on a feature that comes after 1.0",
       "extractionState": "manual",
@@ -501,6 +1581,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kitaplık"
+          }
+        }
+      }
+    },
+    "MP4 · most compatible": {
+      "comment": "Container option",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MP4 · most compatible"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MP4 · en uyumlu"
+          }
+        }
+      }
+    },
+    "Make an on and an off shortcut with “Set Focus” in the Shortcuts app and type their names here. Camcord runs them when a recording starts and ends; empty ones are skipped.": {
+      "comment": "Setting footnote",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Make an on and an off shortcut with “Set Focus” in the Shortcuts app and type their names here. Camcord runs them when a recording starts and ends; empty ones are skipped."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kestirmeler uygulamasında “Odağı Ayarla” ile bir açma ve bir kapatma kestirmesi oluştur, adlarını buraya yaz. Camcord bunları kayıt başlarken ve biterken çalıştırır; boş olanlar atlanır."
           }
         }
       }
@@ -559,6 +1675,42 @@
         }
       }
     },
+    "Microphone level": {
+      "comment": "Setting: microphone gain",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone level"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon seviyesi"
+          }
+        }
+      }
+    },
+    "Middle click (wheel)": {
+      "comment": "Mouse binding",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Middle click (wheel)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Orta tık (tekerlek)"
+          }
+        }
+      }
+    },
     "Minimize": {
       "comment": "Window menu",
       "extractionState": "manual",
@@ -573,6 +1725,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Küçült"
+          }
+        }
+      }
+    },
+    "Mirror": {
+      "comment": "Setting: mirror the camera",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mirror"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aynala"
+          }
+        }
+      }
+    },
+    "Mix system audio and microphone into one track": {
+      "comment": "Setting",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mix system audio and microphone into one track"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistem sesiyle mikrofonu tek parçada birleştir"
           }
         }
       }
@@ -595,6 +1783,114 @@
         }
       }
     },
+    "Mouse": {
+      "comment": "Settings card",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mouse"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fare"
+          }
+        }
+      }
+    },
+    "Mouse & Shortcuts": {
+      "comment": "Settings group",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mouse & Shortcuts"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fare ve kısayollar"
+          }
+        }
+      }
+    },
+    "Mouse button 4": {
+      "comment": "Mouse binding",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mouse button 4"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fare tuşu 4"
+          }
+        }
+      }
+    },
+    "Mouse button 5": {
+      "comment": "Mouse binding",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mouse button 5"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fare tuşu 5"
+          }
+        }
+      }
+    },
+    "Move all copied captures to the Trash?": {
+      "comment": "Confirm clearing the Library cache",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move all copied captures to the Trash?"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kopyalanan tüm çekimler Çöp Sepeti'ne taşınsın mı?"
+          }
+        }
+      }
+    },
+    "Move to Trash": {
+      "comment": "Button: trash files",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move to Trash"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çöp Sepeti'ne taşı"
+          }
+        }
+      }
+    },
     "Needed for every capture": {
       "comment": "Why Screen Recording is needed",
       "extractionState": "manual",
@@ -609,6 +1905,78 @@
           "stringUnit": {
             "state": "translated",
             "value": "Her çekim için gerekli"
+          }
+        }
+      }
+    },
+    "Needed for every screenshot and recording": {
+      "comment": "Permission missing",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Needed for every screenshot and recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Her ekran görüntüsü ve kayıt için gerekli"
+          }
+        }
+      }
+    },
+    "Needed for mouse-button shortcuts and auto-scroll": {
+      "comment": "Permission missing",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Needed for mouse-button shortcuts and auto-scroll"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fare tuşu kısayolları ve otomatik kaydırma için gerekli"
+          }
+        }
+      }
+    },
+    "Needed to add the camera to recordings": {
+      "comment": "Permission missing",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Needed to add the camera to recordings"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamerayı kayda eklemek için gerekli"
+          }
+        }
+      }
+    },
+    "Needed to record your voice": {
+      "comment": "Permission missing",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Needed to record your voice"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sesini kaydetmek için gerekli"
           }
         }
       }
@@ -645,6 +2013,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Henüz çekim yok"
+          }
+        }
+      }
+    },
+    "No limit": {
+      "comment": "Time limit option",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No limit"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sınırsız"
           }
         }
       }
@@ -703,6 +2089,24 @@
         }
       }
     },
+    "One track: the microphone is heard in every player (default).": {
+      "comment": "Setting note",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "One track: the microphone is heard in every player (default)."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tek parça: mikrofon her oynatıcıda duyulur (varsayılan)."
+          }
+        }
+      }
+    },
     "Open Camcord": {
       "comment": "Opens the main window",
       "extractionState": "manual",
@@ -757,6 +2161,222 @@
         }
       }
     },
+    "Open System Settings": {
+      "comment": "Button: open the privacy pane",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open System Settings"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistem Ayarları'nı aç"
+          }
+        }
+      }
+    },
+    "Open at login": {
+      "comment": "Setting: launch at login",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open at login"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Oturum açılınca başlat"
+          }
+        }
+      }
+    },
+    "Paste": {
+      "comment": "Mouse binding option",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paste"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yapıştır"
+          }
+        }
+      }
+    },
+    "Pause or resume recording": {
+      "comment": "Shortcut action",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pause or resume recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydı duraklat ya da sürdür"
+          }
+        }
+      }
+    },
+    "Permissions": {
+      "comment": "Settings group",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permissions"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İzinler"
+          }
+        }
+      }
+    },
+    "Position": {
+      "comment": "Setting: the tile's corner",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Position"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Konum"
+          }
+        }
+      }
+    },
+    "Position and size are proportional on every target: a tile at 35 % in a small window is 35 % of a full-screen recording too. A 16:9 camera looks larger on a 4:3 target.": {
+      "comment": "Setting footnote",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Position and size are proportional on every target: a tile at 35 % in a small window is 35 % of a full-screen recording too. A 16:9 camera looks larger on a 4:3 target."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Konum ve boyut her hedefte orantılıdır: küçük bir pencerede %35 olan kare, tam ekran kayıtta da %35'tir. 16:9 bir kamera 4:3 hedefte daha büyük görünür."
+          }
+        }
+      }
+    },
+    "Preview": {
+      "comment": "Settings card",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preview"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önizleme"
+          }
+        }
+      }
+    },
+    "ProRes 422 HQ · almost lossless: an editing master (large).": {
+      "comment": "Profile note",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ProRes 422 HQ · almost lossless: an editing master (large)."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ProRes 422 HQ · neredeyse kayıpsız: kurgu için ana kopya (büyük)."
+          }
+        }
+      }
+    },
+    "ProRes · master": {
+      "comment": "Recording profile",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ProRes · master"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ProRes · ana kopya"
+          }
+        }
+      }
+    },
+    "Profile": {
+      "comment": "Setting: recording quality profile",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Profile"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Profil"
+          }
+        }
+      }
+    },
+    "Quality": {
+      "comment": "Settings card",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quality"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kalite"
+          }
+        }
+      }
+    },
     "Record": {
       "comment": "Button: start a recording",
       "extractionState": "manual",
@@ -793,6 +2413,114 @@
         }
       }
     },
+    "Record games at 1080p": {
+      "comment": "Setting",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record games at 1080p"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Oyunları 1080p kaydet"
+          }
+        }
+      }
+    },
+    "Record system audio": {
+      "comment": "Setting",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record system audio"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistem sesini kaydet"
+          }
+        }
+      }
+    },
+    "Record the camera": {
+      "comment": "Setting",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record the camera"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamerayı kaydet"
+          }
+        }
+      }
+    },
+    "Record the microphone": {
+      "comment": "Setting",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record the microphone"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofonu kaydet"
+          }
+        }
+      }
+    },
+    "Record the pointer": {
+      "comment": "Setting",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record the pointer"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İmleci kaydet"
+          }
+        }
+      }
+    },
+    "Recording": {
+      "comment": "Settings group",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt"
+          }
+        }
+      }
+    },
     "Region": {
       "comment": "Capture kind: a region of the screen",
       "extractionState": "manual",
@@ -807,6 +2535,132 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bölge"
+          }
+        }
+      }
+    },
+    "Resolution": {
+      "comment": "Setting: capture resolution",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resolution"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çözünürlük"
+          }
+        }
+      }
+    },
+    "Retina (full)": {
+      "comment": "Resolution option",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retina (full)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retina (tam)"
+          }
+        }
+      }
+    },
+    "SDR · compatible": {
+      "comment": "Dynamic range option",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SDR · compatible"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SDR · uyumlu"
+          }
+        }
+      }
+    },
+    "Safety": {
+      "comment": "Settings card",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Safety"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Güvenlik"
+          }
+        }
+      }
+    },
+    "Saved files are not touched.": {
+      "comment": "Confirm clearing the Library cache: what stays",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved files are not touched."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydedilmiş dosyalara dokunulmaz."
+          }
+        }
+      }
+    },
+    "Saved here as well as copied, in a folder apart from recordings.": {
+      "comment": "Setting footnote",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved here as well as copied, in a folder apart from recordings."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Panoya kopyalanmanın yanında buraya da kaydedilir; kayıtlardan ayrı bir klasöre."
+          }
+        }
+      }
+    },
+    "Saving": {
+      "comment": "Settings card",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saving"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydetme"
           }
         }
       }
@@ -843,6 +2697,60 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ekran Kaydı"
+          }
+        }
+      }
+    },
+    "Screenshot": {
+      "comment": "Settings group",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screenshot"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekran görüntüsü"
+          }
+        }
+      }
+    },
+    "Screenshots and scroll captures you only copied": {
+      "comment": "Setting note",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screenshots and scroll captures you only copied"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yalnızca kopyaladığın ekran görüntüleri ve kaydırmalı çekimler"
+          }
+        }
+      }
+    },
+    "Screenshots are copied as lossless PNG; Retina is the sharpest.": {
+      "comment": "Setting footnote",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screenshots are copied as lossless PNG; Retina is the sharpest."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekran görüntüleri kayıpsız PNG olarak kopyalanır; en keskini Retina'dır."
           }
         }
       }
@@ -919,20 +2827,182 @@
         }
       }
     },
-    "Settings are loading.": {
-      "comment": "Settings placeholder",
+    "Settings groups": {
+      "comment": "Accessibility: the Settings sidebar",
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Settings are loading."
+            "value": "Settings groups"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ayarlar yükleniyor."
+            "value": "Ayar grupları"
+          }
+        }
+      }
+    },
+    "Shortcut name": {
+      "comment": "Placeholder",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shortcut name"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kestirme adı"
+          }
+        }
+      }
+    },
+    "Shortcut that turns it off": {
+      "comment": "Setting: a Shortcuts app name",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shortcut that turns it off"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kapatan kestirme"
+          }
+        }
+      }
+    },
+    "Shortcut that turns it on": {
+      "comment": "Setting: a Shortcuts app name",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shortcut that turns it on"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Açan kestirme"
+          }
+        }
+      }
+    },
+    "Show in Finder": {
+      "comment": "Button: reveal a folder in Finder",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show in Finder"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finder'da göster"
+          }
+        }
+      }
+    },
+    "Show or hide the camera preview": {
+      "comment": "Shortcut action",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show or hide the camera preview"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera önizlemesini göster ya da gizle"
+          }
+        }
+      }
+    },
+    "Size": {
+      "comment": "Setting: the tile's width",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Size"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Boyut"
+          }
+        }
+      }
+    },
+    "Space for copied captures": {
+      "comment": "Setting: size limit",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Space for copied captures"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kopyalananlar için alan"
+          }
+        }
+      }
+    },
+    "Speak to check the level": {
+      "comment": "Mic test running",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speak to check the level"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seviyeyi görmek için konuş"
+          }
+        }
+      }
+    },
+    "Standard (1×)": {
+      "comment": "Resolution option",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Standard (1×)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Standart (1×)"
           }
         }
       }
@@ -955,6 +3025,24 @@
         }
       }
     },
+    "Start or stop recording": {
+      "comment": "Shortcut action",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start or stop recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydı başlat ya da durdur"
+          }
+        }
+      }
+    },
     "Start recording": {
       "comment": "Accessibility: the Record button",
       "extractionState": "manual",
@@ -969,6 +3057,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kaydı başlat"
+          }
+        }
+      }
+    },
+    "Startup": {
+      "comment": "Settings card",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Startup"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Başlangıç"
           }
         }
       }
@@ -991,6 +3097,42 @@
         }
       }
     },
+    "Stop automatically": {
+      "comment": "Setting: a time limit",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop automatically"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otomatik durdur"
+          }
+        }
+      }
+    },
+    "Stop before the disk fills and keep the file": {
+      "comment": "Setting",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop before the disk fills and keep the file"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disk dolmadan durdur ve dosyayı koru"
+          }
+        }
+      }
+    },
     "Stop recording": {
       "comment": "Accessibility: the Stop button",
       "extractionState": "manual",
@@ -1005,6 +3147,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kaydı durdur"
+          }
+        }
+      }
+    },
+    "Stop test": {
+      "comment": "Button: stop the microphone test",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop test"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Testi durdur"
           }
         }
       }
@@ -1027,6 +3187,60 @@
         }
       }
     },
+    "System level": {
+      "comment": "Setting: system audio gain",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System level"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistem seviyesi"
+          }
+        }
+      }
+    },
+    "Take it over": {
+      "comment": "Button: move a shortcut to this action",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Take it over"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Devral"
+          }
+        }
+      }
+    },
+    "Test the microphone": {
+      "comment": "Setting",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Test the microphone"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofonu dene"
+          }
+        }
+      }
+    },
     "Text": {
       "comment": "Capture kind: recognise the text in a region",
       "extractionState": "manual",
@@ -1041,6 +3255,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Metin"
+          }
+        }
+      }
+    },
+    "The recording ends safely when free space drops under about 500 MB.": {
+      "comment": "Setting note",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The recording ends safely when free space drops under about 500 MB."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Boş alan yaklaşık 500 MB'ın altına inince kayıt güvenle sonlanır."
+          }
+        }
+      }
+    },
+    "This shortcut is taken": {
+      "comment": "Shortcut conflict title",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This shortcut is taken"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu kısayol kullanımda"
           }
         }
       }
@@ -1063,6 +3313,42 @@
         }
       }
     },
+    "Top left": {
+      "comment": "Corner",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Top left"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sol üst"
+          }
+        }
+      }
+    },
+    "Top right": {
+      "comment": "Corner",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Top right"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sağ üst"
+          }
+        }
+      }
+    },
     "Trimming and annotation are next. Until then, trim a recording in QuickTime Player and mark up a screenshot in Preview.": {
       "comment": "Edit page: what to use today",
       "extractionState": "manual",
@@ -1077,6 +3363,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Sırada kırpma ve not ekleme var. O zamana kadar kayıtları QuickTime Player'da kırpabilir, ekran görüntülerini Önizleme'de işaretleyebilirsin."
+          }
+        }
+      }
+    },
+    "Turn on Focus while recording": {
+      "comment": "Setting",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn on Focus while recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt sırasında Odak'ı aç"
+          }
+        }
+      }
+    },
+    "Two tracks, ideal for editing, but most players play only the first (system audio).": {
+      "comment": "Setting note",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Two tracks, ideal for editing, but most players play only the first (system audio)."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İki ayrı parça: kurgu için ideal, ama çoğu oynatıcı yalnızca ilkini (sistem sesi) çalar."
           }
         }
       }
@@ -1185,6 +3507,346 @@
           "stringUnit": {
             "state": "translated",
             "value": "Pencere kayıtları: dosya bu biçimde kalır; yeniden boyutlanan pencere bulanık bir arka planın ortasına yerleşir."
+          }
+        }
+      }
+    },
+    "Your recordings are in the Library.": {
+      "comment": "Setting footnote",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your recordings are in the Library."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıtların Kitaplık'ta."
+          }
+        }
+      }
+    },
+    "macOS keeps these switches in System Settings › Privacy & Security.": {
+      "comment": "Setting footnote",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS keeps these switches in System Settings › Privacy & Security."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS bu anahtarları Sistem Ayarları › Gizlilik ve Güvenlik'te tutar."
+          }
+        }
+      }
+    },
+    "Couldn't update copied captures": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't update copied captures"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kopyalanan çekimler güncellenemedi"
+          }
+        }
+      }
+    },
+    "Try again": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Try again"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tekrar dene"
+          }
+        }
+      }
+    },
+    "Some copied captures couldn't be read or moved to the Trash. Check folder access and try again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some copied captures couldn't be read or moved to the Trash. Check folder access and try again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bazı kopyalanan çekimler okunamadı veya Çöp Sepeti’ne taşınamadı. Klasör erişimini kontrol edip tekrar dene."
+          }
+        }
+      }
+    },
+    "The selected microphone is disconnected. Recordings use the default input until it returns.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected microphone is disconnected. Recordings use the default input until it returns."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçilen mikrofon bağlı değil. Yeniden bağlanana kadar kayıtlarda varsayılan giriş kullanılır."
+          }
+        }
+      }
+    },
+    "Disconnected microphone": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disconnected microphone"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bağlı olmayan mikrofon"
+          }
+        }
+      }
+    },
+    "The microphone test failed. Check permission and the selected input.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone test failed. Check permission and the selected input."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon testi başarısız oldu. İzni ve seçili girişi kontrol et."
+          }
+        }
+      }
+    },
+    "The selected camera is disconnected. Reconnect it or choose another camera.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected camera is disconnected. Reconnect it or choose another camera."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçilen kamera bağlı değil. Yeniden bağla veya başka bir kamera seç."
+          }
+        }
+      }
+    },
+    "Disconnected camera": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disconnected camera"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bağlı olmayan kamera"
+          }
+        }
+      }
+    },
+    "Unavailable: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unavailable: %@"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kullanılamıyor: %@"
+          }
+        }
+      }
+    },
+    "Camera preview": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camera preview"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera önizlemesi"
+          }
+        }
+      }
+    },
+    "Used by the recording": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Used by the recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt tarafından kullanılıyor"
+          }
+        }
+      }
+    },
+    "Stop preview": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop preview"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önizlemeyi durdur"
+          }
+        }
+      }
+    },
+    "Camera preview failed. Check permission and the selected device.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camera preview failed. Check permission and the selected device."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera önizlemesi başarısız oldu. İzni ve seçili aygıtı kontrol et."
+          }
+        }
+      }
+    },
+    "Starting camera…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starting camera…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera başlatılıyor…"
+          }
+        }
+      }
+    },
+    "Waiting for the recording camera…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for the recording camera…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt kamerası bekleniyor…"
+          }
+        }
+      }
+    },
+    "Live preview": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live preview"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Canlı önizleme"
+          }
+        }
+      }
+    },
+    "Start a preview to check your camera": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start a preview to check your camera"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kameranı kontrol etmek için önizlemeyi başlat"
+          }
+        }
+      }
+    },
+    "Couldn't change Open at login. Check Login Items in System Settings.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't change Open at login. Check Login Items in System Settings."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Oturum açınca başlat ayarı değiştirilemedi. Sistem Ayarları’nda Giriş Öğeleri’ni kontrol et."
+          }
+        }
+      }
+    },
+    "Settings are loading.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Settings are loading."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ayarlar yükleniyor."
           }
         }
       }
