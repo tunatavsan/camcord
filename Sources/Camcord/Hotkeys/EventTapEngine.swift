@@ -40,6 +40,13 @@ final class EventTapEngine: NSObject {
     private let coordinator: CaptureCoordinator
     private let recordingController: RecordingController
     private let buttonIsDown: (Int64) -> Bool
+    struct GestureActions {
+        var begin: (CGPoint, HoldCaptureMode) -> Bool
+        var update: (CGPoint) -> Void
+        var finish: (CGPoint) -> Void
+        var cancel: () -> Void
+    }
+    private let gestures: GestureActions
     private let logger = Logger(subsystem: "dev.tavsan.camcord", category: "event-tap-engine")
 
     private var bindings = TapBindings()
@@ -60,14 +67,24 @@ final class EventTapEngine: NSObject {
          buttonIsDown: @escaping (Int64) -> Bool = { button in
              guard let mouseButton = CGMouseButton(rawValue: UInt32(button)) else { return false }
              return CGEventSource.buttonState(.combinedSessionState, button: mouseButton)
-         }) {
+         },
+         gestures: GestureActions? = nil,
+         monitorsLifecycle: Bool = true) {
         self.coordinator = coordinator
         self.recordingController = recordingController
         self.bindings = bindings
         self.buttonIsDown = buttonIsDown
+        self.gestures = gestures ?? GestureActions(
+            begin: { coordinator.beginHoldRegionSelection(atCGPoint: $0, mode: $1) },
+            update: { coordinator.updateHoldRegionSelection(toCGPoint: $0) },
+            finish: { coordinator.finishHoldRegionSelection(atCGPoint: $0) },
+            cancel: { coordinator.cancelHoldRegionSelection() }
+        )
         super.init()
-        registerWorkspaceNotifications()
-        startWatchdog()
+        if monitorsLifecycle {
+            registerWorkspaceNotifications()
+            startWatchdog()
+        }
     }
 
     /// Tears down/(re)creates the tap as needed for the given bindings. Safe to call
@@ -105,7 +122,7 @@ final class EventTapEngine: NSObject {
             mask |= 1 << CGEventType.otherMouseUp.rawValue
         }
         let holdCaptureBound = [bindings.mouseButton3, bindings.mouseButton4, bindings.mouseButton5].contains(.holdCaptureRegion)
-        if holdCaptureBound {
+        if holdCaptureBound || captureModifierButton != nil {
             // Hold-to-capture drags the selection with the button held; the moves
             // arrive as otherMouseDragged (never mouseMoved) during the hold.
             mask |= 1 << CGEventType.otherMouseDragged.rawValue
@@ -168,7 +185,7 @@ final class EventTapEngine: NSObject {
         if activeHoldButton != nil {
             activeHoldButton = nil
             activeHoldDragged = false
-            coordinator.cancelHoldRegionSelection()
+            gestures.cancel()
         }
         resetModifierState(cancelChord: true)
         pendingHoldLocation = nil
@@ -215,10 +232,13 @@ final class EventTapEngine: NSObject {
     }
 
     func watchdogTick() {
+        // A disabled tap can miss an up. Only physically held buttons retain their
+        // consumed-down claim; the next ordinary click must not inherit a stale tail.
+        swallowedMouseDowns = swallowedMouseDowns.filter(buttonIsDown)
         if let button = activeHoldButton, !buttonIsDown(button) {
             activeHoldButton = nil
             activeHoldDragged = false
-            coordinator.cancelHoldRegionSelection()
+            gestures.cancel()
         }
         // Backstop for the one "must be impossible" failure: if the modifier is armed but
         // its button is NOT physically down, a button-up was lost while the tap stayed
@@ -268,7 +288,7 @@ final class EventTapEngine: NSObject {
         if activeHoldButton != nil {
             activeHoldButton = nil
             activeHoldDragged = false
-            coordinator.cancelHoldRegionSelection()
+            gestures.cancel()
         }
         resetModifierState(cancelChord: true)
         let label = reason == .tapDisabledByTimeout ? "timeout" : "user-input"
@@ -285,6 +305,35 @@ final class EventTapEngine: NSObject {
         timestamp: TimeInterval,
         location: CGPoint
     ) -> Bool {
+        let mouseButton: Int64?
+        switch type {
+        case .leftMouseDown, .leftMouseDragged, .leftMouseUp: mouseButton = 0
+        case .rightMouseDown, .rightMouseDragged, .rightMouseUp: mouseButton = 1
+        case .otherMouseDown, .otherMouseDragged, .otherMouseUp: mouseButton = button
+        default: mouseButton = nil
+        }
+        let ownedTail = mouseButton.map(swallowedMouseDowns.contains) ?? false
+        if type == .otherMouseUp, !ownedTail,
+           button != activeHoldButton, button != captureModifierButton,
+           activeHoldButton != nil || chordActive {
+            return false   // this button was held before capture armed
+        }
+        let swallowed = classify(type: type, button: button, keycode: keycode,
+                                 isRightCommandDown: isRightCommandDown, timestamp: timestamp, location: location)
+        guard let mouseButton else { return swallowed }
+        switch type {
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+            if swallowed { swallowedMouseDowns.insert(mouseButton) }
+            return swallowed
+        case .leftMouseUp, .rightMouseUp, .otherMouseUp:
+            swallowedMouseDowns.remove(mouseButton)
+        default: break
+        }
+        return swallowed || ownedTail
+    }
+
+    private func classify(type: CGEventType, button: Int64, keycode: Int64,
+                          isRightCommandDown: Bool, timestamp: TimeInterval, location: CGPoint) -> Bool {
         switch type {
         case .otherMouseDown, .otherMouseUp:
             return handleMouseButton(type: type, button: button, location: location)
@@ -323,10 +372,9 @@ final class EventTapEngine: NSObject {
     private var chordActive = false
     private var chordUsedThisArm = false
     private var lastChordLocation: CGPoint = .zero
-    /// After the modifier is released mid-chord, keep swallowing the still-held left/right
-    /// button's tail (drag/up) until it's physically released, so the app underneath never
-    /// sees an orphaned event whose matching down we already consumed.
-    private var swallowChordTail = false
+    /// Event ownership outlives capture ownership: every consumed down retains its own
+    /// drag/up tail, including additional buttons and rejected capture starts.
+    private var swallowedMouseDowns = Set<Int64>()
     /// Coalesces high-frequency drag updates to one overlay redraw per runloop tick, so
     /// the selection tracks smoothly instead of the tap callback blocking on every move.
     private var pendingChordLocation: CGPoint?
@@ -346,12 +394,13 @@ final class EventTapEngine: NSObject {
             activeHoldButton = nil
             holdGestureDetector.registerRelease(button: button, dragged: activeHoldDragged, at: nowTimestamp())
             // finish shoots when a drag happened, cancels a no-drag tap.
-            coordinator.finishHoldRegionSelection(atCGPoint: location)
+            gestures.finish(location)
             return true
         }
         // While a hold-to-capture is in progress, NO other mouse button may reach the app
         // underneath — swallow every other button press/release until the hold ends.
         if activeHoldButton != nil { return true }
+        if chordActive, button != captureModifierButton { return true }
         guard let action = tapAction(forMouseButton: button) else { return false }
 
         if action == .captureModifier {
@@ -367,9 +416,10 @@ final class EventTapEngine: NSObject {
                 let mode = holdGestureDetector.modeForPress(button: button, at: nowTimestamp())
                 // Only track the hold if the session actually started (screen-recording
                 // permission present, no other capture in flight).
-                if coordinator.beginHoldRegionSelection(atCGPoint: location, mode: mode) {
+                if gestures.begin(location, mode) {
                     activeHoldButton = button
                     activeHoldDragged = false
+                    buttonsDownAtArm = (buttonIsDown(0) ? 1 : 0) | (buttonIsDown(1) ? 2 : 0)
                 }
             case .paste:
                 performPaste()
@@ -393,7 +443,6 @@ final class EventTapEngine: NSObject {
             modifierArmed = true
             chordActive = false
             chordUsedThisArm = false
-            swallowChordTail = false
         case .otherMouseUp:
             let wasArmed = modifierArmed
             modifierArmed = false
@@ -401,8 +450,7 @@ final class EventTapEngine: NSObject {
                 // Modifier released mid-chord: finish the capture (anchor→here) and keep
                 // swallowing the still-held button's tail so nothing leaks underneath.
                 chordActive = false
-                coordinator.finishHoldRegionSelection(atCGPoint: location)
-                swallowChordTail = true
+                gestures.finish(location)
             } else if wasArmed, !chordUsedThisArm {
                 perform(.captureRegion)  // plain tap → open the region overlay (only if armed)
             }
@@ -421,12 +469,12 @@ final class EventTapEngine: NSObject {
         // A hold-to-capture is in progress → this click must NOT act on the app underneath
         // (the reported bug: a left click mid-hold closing an open menu).
         if activeHoldButton != nil { return true }
-        guard modifierArmed else { return swallowChordTail }   // not held → normal click
+        guard modifierArmed else { return false }   // owned tails are consumed by handle
         if !chordActive {
             chordActive = true
             chordUsedThisArm = true
             let mode: HoldCaptureMode = isRight ? .text : .screenshot
-            if !coordinator.beginHoldRegionSelection(atCGPoint: location, mode: mode) {
+            if !gestures.begin(location, mode) {
                 chordActive = false   // couldn't start (e.g. no permission) — swallow anyway
             }
         }
@@ -437,7 +485,7 @@ final class EventTapEngine: NSObject {
         if buttonsDownAtArm & (isRight ? 2 : 1) != 0 { return false }
         lastChordLocation = location
         if activeHoldButton != nil { return true }   // swallow left/right drags during a hold
-        guard modifierArmed else { return swallowChordTail }
+        guard modifierArmed else { return false }
         // Swallow even when no chord is live: the matching down WAS swallowed
         // (handleChordDown returns true whenever the modifier is armed), and an
         // orphaned drag would confuse the app underneath.
@@ -451,7 +499,7 @@ final class EventTapEngine: NSObject {
                 guard let self else { return }
                 self.chordUpdateScheduled = false
                 if self.chordActive, let loc = self.pendingChordLocation {
-                    self.coordinator.updateHoldRegionSelection(toCGPoint: loc)
+                    self.gestures.update(loc)
                 }
             }
         }
@@ -466,16 +514,12 @@ final class EventTapEngine: NSObject {
         }
         lastChordLocation = location
         if activeHoldButton != nil { return true }   // swallow the click's release during a hold
-        if swallowChordTail {
-            swallowChordTail = false   // orphaned button finally released → resume normal
-            return true
-        }
         guard modifierArmed else { return false }
         if chordActive {
             chordActive = false
             // finishHoldRegionSelection uses anchor→location, so the final endpoint is
             // exact regardless of any still-queued coalesced update.
-            coordinator.finishHoldRegionSelection(atCGPoint: location)
+            gestures.finish(location)
         }
         // Swallow the up unconditionally while armed — its down was swallowed too.
         return true
@@ -485,13 +529,12 @@ final class EventTapEngine: NSObject {
     /// recovery used by teardown, tap re-enable, and the watchdog backstop.
     private func resetModifierState(cancelChord: Bool) {
         if cancelChord, chordActive {
-            coordinator.cancelHoldRegionSelection()
+            gestures.cancel()
         }
         modifierArmed = false
         buttonsDownAtArm = 0
         chordActive = false
         chordUsedThisArm = false
-        swallowChordTail = false
         pendingChordLocation = nil
         chordUpdateScheduled = false
         pendingHoldLocation = nil
@@ -511,7 +554,7 @@ final class EventTapEngine: NSObject {
                 guard let self else { return }
                 self.holdUpdateScheduled = false
                 if self.activeHoldButton != nil, let loc = self.pendingHoldLocation {
-                    self.coordinator.updateHoldRegionSelection(toCGPoint: loc)
+                    self.gestures.update(loc)
                 }
             }
         }

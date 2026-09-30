@@ -34,23 +34,26 @@ final class ScrollStitcher {
     private let uniformBandRange = 24   // a strip flatter than this = blank over-scroll, skip it
     private let endStableLimit = 20.0   // a strip matching the reference's own tail = a bounce dup
     private static let tailDupLimit = 3.0  // MAD at/below which a committed tail strip is a repeat
+    private let maxTotalPixels: Int
+    private var outputWidth = 0
+    private(set) var limitReached = false
     private let maxTotalHeight: Int     // px safety cap on the stitched content
     private static let previewMaxHeightPx = 1200  // live preview renders at most this tall (tail only)
 
     private static let staticLimit = 3.0
 
-    enum Motion: Equatable {
+    enum Motion: Equatable, Sendable {
         case none, up(Int), down(Int, score: Double)
     }
 
-    struct Frame {
+    struct Frame: Sendable {
         let image: CGImage
         let sig: [UInt8]   // per-row grayscale, `columns` wide, full height
         let height: Int
         let width: Int
     }
 
-    enum Outcome: Equatable {
+    enum Outcome: Equatable, Sendable {
         case buffered              // warm-up: nothing committed yet (preview still valid)
         case appended              // a strip (or the baseline set) was committed after real motion
         case baselined             // forced baseline commit with NO confirmed motion (a static
@@ -116,7 +119,15 @@ final class ScrollStitcher {
     /// outside `add` must exclude the same rows or a tall sticky header reads as no motion.
     var detectedBands: (header: Int, footer: Int) { (headerH, footerH) }
 
-    init(maxTotalHeight: Int = 40_000) { self.maxTotalHeight = maxTotalHeight }
+    init(maxTotalHeight: Int = 40_000, maxTotalPixels: Int = 50_000_000) {
+        self.maxTotalHeight = max(1, maxTotalHeight)
+        self.maxTotalPixels = max(1, maxTotalPixels)
+    }
+
+    private var outputHeightLimit: Int {
+        guard outputWidth > 0 else { return maxTotalHeight }
+        return min(maxTotalHeight, maxTotalPixels / outputWidth)
+    }
 
     /// Number of stitched sections so far — for the live "N bölüm" readout.
     var sectionCount: Int {
@@ -134,7 +145,26 @@ final class ScrollStitcher {
         // end the next auto-scroll run on its first frame (a capture that commits nothing
         // never refreshes it), so auto would be dead for the rest of the session.
         tailRepeated = false
-        guard let f = Self.makeFrame(image) else {
+        guard !limitReached else { return .atCap }
+        outputWidth = max(outputWidth, image.width)
+        guard outputHeightLimit > 0 else { limitReached = true; return .atCap }
+        // A viewport can itself exceed the resource budget. Preserve its useful prefix,
+        // without allocating its full row signature or a larger composite.
+        let boundedImage: CGImage
+        if warmup.isEmpty, reference == nil, image.height >= outputHeightLimit {
+            guard let prefix = image.cropping(to: CGRect(x: 0, y: 0, width: image.width, height: outputHeightLimit))
+            else { return .ignored }
+            boundedImage = prefix
+            limitReached = true
+        } else if image.height > outputHeightLimit {
+            // A changed source viewport must not allocate an oversized signature before
+            // composition notices its budget. Keep the useful pixels already accepted.
+            limitReached = true
+            return .atCap
+        } else {
+            boundedImage = image
+        }
+        guard let f = Self.makeFrame(boundedImage) else {
             // Never leave a stale `.down` behind: the session reads `lastMotion` to decide
             // whether an auto-scroll is still advancing.
             (lastMotion, lastScore) = (.none, .infinity)
@@ -147,9 +177,10 @@ final class ScrollStitcher {
             }
             warmup.append(f)
             warmupPredictions.append(predictedOffset)
+            if limitReached { return .atCap }
             if warmup.count >= bandDetectFrames, warmupHasMovement() {
                 commitWarmup(forced: false)
-                return .appended
+                return limitReached ? .atCap : .appended
             }
             if warmup.count >= maxWarmup {
                 // We only reach the forced commit when movement was NEVER confirmed across
@@ -157,13 +188,15 @@ final class ScrollStitcher {
                 // baseline is real, but the page never moved — report `.baselined`, not
                 // `.appended`, so an auto-scroller can still tell it's going nowhere.
                 commitWarmup(forced: true)
-                return .baselined
+                return limitReached ? .atCap : .baselined
             }
             return .buffered
         }
 
-        if contentPixelHeight >= maxTotalHeight { return .atCap }
-        switch appendLive(f, predicted: predictedOffset) {
+        if contentPixelHeight + footerH >= outputHeightLimit { limitReached = true; return .atCap }
+        let result = appendLive(f, predicted: predictedOffset)
+        if contentPixelHeight + footerH >= outputHeightLimit { limitReached = true; return .atCap }
+        switch result {
         case .appended:
             consecutiveMisses = 0
             return .appended
@@ -246,7 +279,13 @@ final class ScrollStitcher {
         reference = first
         strips = []
 
-        for i in 1..<warmup.count { _ = appendLive(warmup[i], predicted: warmupPredictions[i]) }
+        for i in 1..<warmup.count {
+            _ = appendLive(warmup[i], predicted: warmupPredictions[i])
+            if contentPixelHeight + footerH >= outputHeightLimit {
+                limitReached = true
+                break
+            }
+        }
         detected = true
         warmup = []
         warmupPredictions = []
@@ -307,13 +346,14 @@ final class ScrollStitcher {
     private func commitPending(revealsContent: Bool = false) {
         guard let pending else { return }
         if pending.flat, !revealsContent { return }
-        if let strip = cropContent(pending.frame.image, offset: pending.offset, footerH: footerH) {
-            let top = pending.frame.height - footerH - pending.offset
+        let rows = min(pending.offset, max(0, outputHeightLimit - footerH - committedHeight))
+        let top = pending.frame.height - footerH - pending.offset
+        if let strip = crop(pending.frame.image, y: top, height: rows) {
             strips.append(strip)
             contentSig.append(
-                contentsOf: pending.frame.sig[(top * Self.columns)..<((top + pending.offset) * Self.columns)]
+                contentsOf: pending.frame.sig[(top * Self.columns)..<((top + rows) * Self.columns)]
             )
-            committedHeight += pending.offset
+            committedHeight += rows
             reference = pending.frame
             tailRepeated = tailDuplicatesBandAbove()
         }
@@ -621,7 +661,7 @@ final class ScrollStitcher {
     }
 
     private func pieces() -> [CGImage] {
-        if !detected { return warmup.last.map { [$0.image] } ?? [] }
+        if !detected { return boundedPieces(warmup.last.map { [$0.image] } ?? []) }
         var p: [CGImage] = []
         if let topImage { p.append(topImage) }
         p.append(contentsOf: strips)
@@ -629,7 +669,21 @@ final class ScrollStitcher {
             p.append(strip)
         }
         if let footerImage { p.append(footerImage) }
-        return p
+        return boundedPieces(p)
+    }
+
+    /// Every retained/output piece is clipped in top-to-bottom order before final raster
+    /// allocation. Division avoids overflow and includes the sticky footer in the budget.
+    private func boundedPieces(_ pieces: [CGImage]) -> [CGImage] {
+        var rowsLeft = outputHeightLimit
+        var bounded: [CGImage] = []
+        for piece in pieces where rowsLeft > 0 {
+            let rows = min(piece.height, rowsLeft)
+            if rows == piece.height { bounded.append(piece) }
+            else if let prefix = crop(piece, y: 0, height: rows) { bounded.append(prefix) }
+            rowsLeft -= rows
+        }
+        return bounded
     }
 
     /// Vertically stacks pieces (first = top). Optionally scales down to `maxWidth`.
@@ -644,7 +698,7 @@ final class ScrollStitcher {
         }()
         let outW = Int((CGFloat(srcW) * scale).rounded())
         let outH = Int((CGFloat(valid.reduce(0) { $0 + $1.height }) * scale).rounded())
-        guard outW > 0, outH > 0 else { return nil }
+        guard outW > 0, outH > 0, outH <= maxTotalPixels / outW else { return nil }
         let rgb = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
         guard let ctx = CGContext(
             data: nil, width: outW, height: outH,

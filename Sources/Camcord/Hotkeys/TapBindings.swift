@@ -77,10 +77,13 @@ struct TapBindings: Codable, Equatable {
             return TapBindings()
         }
         if !hasMigrated {
-            defaults.set(true, forKey: "hasMigratedV2")
             if decoded == legacyDefault {
-                return TapBindings()
+                let replacement = TapBindings()
+                replacement.save(to: defaults)
+                defaults.set(true, forKey: "hasMigratedV2")
+                return replacement
             }
+            defaults.set(true, forKey: "hasMigratedV2")
         }
         return decoded
     }

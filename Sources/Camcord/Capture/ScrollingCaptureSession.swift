@@ -3,6 +3,66 @@ import ApplicationServices
 @preconcurrency import ScreenCaptureKit
 import os
 
+/// Serial ownership of the existing matcher and raster composition. Only immutable
+/// snapshots cross back to the main actor; captures remain single-flight in the session.
+actor ScrollStitchWorker {
+    struct State: Sendable {
+        var firstFrame: ScrollStitcher.Frame?
+        var header = 0
+        var footer = 0
+        var sections = 0
+        var hasPending = false
+        var rebaselines = 0
+        var motion: ScrollStitcher.Motion = .none
+        var offset = 0
+        var score = 0.0
+        var tailRepeated = false
+    }
+    struct Update: Sendable {
+        let outcome: ScrollStitcher.Outcome
+        let state: State
+        let preview: CGImage?
+    }
+    private let stitcher: ScrollStitcher
+    private let workHook: (@Sendable () -> Void)?
+
+    init(maxTotalHeight: Int = 40_000, maxTotalPixels: Int = 50_000_000,
+         workHook: (@Sendable () -> Void)? = nil) {
+        stitcher = ScrollStitcher(maxTotalHeight: maxTotalHeight, maxTotalPixels: maxTotalPixels)
+        self.workHook = workHook
+    }
+
+    func add(_ image: CGImage, predictedOffset: Int) -> Update {
+        workHook?()
+        let outcome = stitcher.add(image, predictedOffset: predictedOffset)
+        let preview: CGImage?
+        switch outcome {
+        case .appended, .baselined, .buffered: preview = stitcher.previewImage(maxWidth: 384)
+        default: preview = nil
+        }
+        let bands = stitcher.detectedBands
+        return Update(outcome: outcome, state: State(
+            firstFrame: stitcher.firstFrame, header: bands.header, footer: bands.footer,
+            sections: stitcher.sectionCount, hasPending: stitcher.hasPending,
+            rebaselines: stitcher.rebaselineCount, motion: stitcher.lastMotion,
+            offset: stitcher.lastOffset, score: stitcher.lastScore,
+            tailRepeated: stitcher.tailRepeated), preview: preview)
+    }
+
+    func motion(from baseline: ScrollStitcher.Frame, to image: CGImage,
+                header: Int, footer: Int, predicted: Int, minimumShift: Int) -> ScrollStitcher.Motion {
+        workHook?()
+        guard let frame = ScrollStitcher.makeFrame(image) else { return .none }
+        return ScrollStitcher.motion(from: baseline, to: frame, headerH: header, footerH: footer,
+                                    predicted: predicted, minimumShift: minimumShift)
+    }
+
+    func finalImage() -> CGImage? {
+        workHook?()
+        return stitcher.finalImage()
+    }
+}
+
 /// Drives a **manual** scrolling capture: the user scrolls the target window while we
 /// watch the real scroll stream, grab a cursor-free frame of the fixed region each time
 /// enough was scrolled (and once more when scrolling settles), and stitch them into one
@@ -17,12 +77,36 @@ import os
 /// failures visible.
 @MainActor
 final class ScrollingCaptureSession {
+    enum Notice: Equatable, Sendable {
+        case captureFailed, preparationFailed, outputLimit
+    }
+    enum Outcome: Sendable {
+        case cancelled
+        case completed(CGImage, notice: Notice?)
+        case failed(Notice)
+    }
+
+    /// Inert presenters and scripted queries/captures exercise the real preparation,
+    /// pump and completion paths without creating windows, monitors or device requests.
+    struct Hooks {
+        var prepare: () async throws -> Void
+        var capture: (Duration) async throws -> CGImage
+        var show: (@escaping () -> Void, @escaping () -> Void) -> Void = { _, _ in }
+        var hide: () -> Void = {}
+        var update: (CGImage?, Int) -> Void = { _, _ in }
+        var hint: (String) -> Void = { _ in }
+        var preparationCompleted: () -> Void = {}
+        var captureCompleted: () -> Void = {}
+    }
     private let region: CGRect
-    private let display: SCDisplay
+    private let display: SCDisplay?
     private let scale: CGFloat
+    private let hooks: Hooks?
     private let logger = Logger(subsystem: "dev.tavsan.camcord", category: "scroll-session")
 
-    private let stitcher = ScrollStitcher()
+    private let worker: ScrollStitchWorker
+    private var stitchState = ScrollStitchWorker.State()
+    private var generation = 0
     private let indicator = CaptureAreaIndicator()
     private let preview = ScrollPreviewPanel()
 
@@ -43,6 +127,7 @@ final class ScrollingCaptureSession {
     /// True from "Done" pressed until the final flush completes: blocks NEW captures
     /// while still letting the in-flight one finish and one last settled frame be grabbed.
     private var finishing = false
+    private var completionNotice: Notice?
     /// Consecutive frame-capture failures; after a few in a row the session self-ends so
     /// it can't hang on-screen holding the app-wide exclusive-capture lock.
     private var captureFailures = 0
@@ -61,38 +146,59 @@ final class ScrollingCaptureSession {
     /// one segment can't feed its outcome into a later segment's freshly-reset progress.
     private var autoGeneration = 0
 
-    private var continuation: CheckedContinuation<CGImage?, Never>?
+    private var continuation: CheckedContinuation<Outcome, Never>?
 
     init(region: CGRect, display: SCDisplay) {
         self.region = region
         self.display = display
+        hooks = nil
+        worker = ScrollStitchWorker()
         self.scale = CGFloat(SCContentFilter(display: display, excludingWindows: []).pointPixelScale)
         // Capture roughly every ~40% of a viewport so consecutive frames always overlap,
         // even if the user scrolls briskly.
         self.triggerPoints = max(60, region.height * 0.4)
     }
 
-    /// Runs to completion. Returns the stitched image on Done, or nil if cancelled
-    /// (Esc / İptal) or nothing usable was captured.
-    func run() async -> CGImage? {
-        indicator.show(cgRect: region, color: .systemBlue, onStop: nil)
-        preview.show(
-            near: region,
-            onDone: { [weak self] in self?.finish(keep: true) },
-            onCancel: { [weak self] in self?.finish(keep: false) },
-            onToggleAuto: { [weak self] in self?.toggleAuto() }
-        )
-        installMonitors()
+    init(region: CGRect, scale: CGFloat = 1, hooks: Hooks,
+         maxTotalHeight: Int = 40_000, maxTotalPixels: Int = 50_000_000,
+         workHook: (@Sendable () -> Void)? = nil) {
+        self.region = region
+        display = nil
+        self.scale = scale
+        self.hooks = hooks
+        worker = ScrollStitchWorker(maxTotalHeight: maxTotalHeight, maxTotalPixels: maxTotalPixels, workHook: workHook)
+        triggerPoints = max(60, region.height * 0.4)
+    }
 
-        let result = await withCheckedContinuation { (c: CheckedContinuation<CGImage?, Never>) in
-            self.continuation = c
-            // Build the capture filter (now the HUD windows exist, so they're excluded),
-            // then take the baseline frame. Launched as a task so an immediate Cancel
-            // during prepare still resolves `c` and can't deadlock.
-            Task { @MainActor in
-                await self.prepare()
-                if !self.finished { self.pump(force: true) }
+    /// Runs to completion, distinguishing user cancellation from failures and useful partial output.
+    func run() async -> Outcome {
+        guard !Task.isCancelled else { return .cancelled }
+        let result = await withTaskCancellationHandler {
+            await withCheckedContinuation { (c: CheckedContinuation<Outcome, Never>) in
+                continuation = c
+                if let hooks {
+                    hooks.show({ [weak self] in self?.finish(keep: true) },
+                               { [weak self] in self?.finish(keep: false) })
+                } else {
+                    indicator.show(cgRect: region, color: .systemBlue, onStop: nil)
+                    preview.show(
+                        near: region,
+                        onDone: { [weak self] in self?.finish(keep: true) },
+                        onCancel: { [weak self] in self?.finish(keep: false) },
+                        onToggleAuto: { [weak self] in self?.toggleAuto() }
+                    )
+                    installMonitors()
+                }
+                guard !finished else { return }
+                // Immediate Cancel can resolve c while the bounded exclusion query awaits.
+                Task { @MainActor in
+                    await self.prepare()
+                    if !self.finished, !self.finishing { self.pump(force: true) }
+                }
             }
+        } onCancel: { [weak self] in
+            guard let self else { return }
+            Task { @MainActor in self.finish(keep: false) }
         }
         teardown()
         return result
@@ -101,31 +207,47 @@ final class ScrollingCaptureSession {
     /// Builds the display filter EXCLUDING our own HUD/indicator windows (so they never
     /// bleed into the capture) and the region source-rect config.
     private func prepare() async {
-        var excluded: [SCWindow] = []
-        // Bounded like every other SCK call in the app — a wedged content query must not
-        // hang the session (and the app-wide exclusive-capture lock) forever.
-        let content = try? await withHardTimeout(.seconds(2), onTimeout: CaptureError.timeout) {
-            try await SCShareableContent.current
-        }
-        if let content {
+        defer { hooks?.preparationCompleted() }
+        let token = generation
+        do {
+            if let hooks {
+                try await hooks.prepare()
+                guard !finished, generation == token else { return }
+                prepared = true
+                return
+            }
+            guard let display else { throw CaptureError.timeout }
+            // Fail closed: without a trustworthy exclusion list, our HUD can contaminate
+            // the baseline. A bounded query failure ends preparation before any capture.
+            let content = try await withHardTimeout(.seconds(2), onTimeout: CaptureError.timeout) {
+                try await SCShareableContent.current
+            }
+            guard !finished, generation == token else { return }
             let ownBundleID = Bundle.main.bundleIdentifier
-            excluded = content.windows.filter { $0.owningApplication?.bundleIdentifier == ownBundleID }
-        }
-        filter = SCContentFilter(display: display, excludingWindows: excluded)
+            let ownPID = ProcessInfo.processInfo.processIdentifier
+            let excluded = content.windows.filter {
+                $0.owningApplication?.processID == ownPID ||
+                (ownBundleID != nil && $0.owningApplication?.bundleIdentifier == ownBundleID)
+            }
+            filter = SCContentFilter(display: display, excludingWindows: excluded)
 
-        let config = SCStreamConfiguration()
-        config.sourceRect = CGRect(
-            x: region.minX - display.frame.minX,
-            y: region.minY - display.frame.minY,
-            width: region.width, height: region.height
-        )
-        config.width = RegionClamp.evenFloor(region.width * scale)
-        config.height = RegionClamp.evenFloor(region.height * scale)
-        config.showsCursor = false
-        config.captureResolution = .best
-        config.colorSpaceName = CGColorSpace.sRGB
-        self.config = config
-        prepared = true
+            let config = SCStreamConfiguration()
+            config.sourceRect = CGRect(
+                x: region.minX - display.frame.minX,
+                y: region.minY - display.frame.minY,
+                width: region.width, height: region.height
+            )
+            config.width = RegionClamp.evenFloor(region.width * scale)
+            config.height = RegionClamp.evenFloor(region.height * scale)
+            config.showsCursor = false
+            config.captureResolution = .best
+            config.colorSpaceName = CGColorSpace.sRGB
+            self.config = config
+            prepared = true
+        } catch {
+            guard !finished, generation == token else { return }
+            finish(keep: true, notice: .preparationFailed, flush: false)
+        }
     }
 
     // MARK: - Scroll monitoring
@@ -181,17 +303,17 @@ final class ScrollingCaptureSession {
         if autoScrolling { stopAutoScroll(reachedEnd: false); return }
         guard !finished, !finishing else { return }
         guard !autoEnded else {
-            preview.flashHint("Sayfa sonu")
+            flashHint("Sayfa sonu")
             return
         }
         // Synthesized events only reach other apps when we're an Accessibility-trusted
         // process (same requirement as the app's event tap).
         guard AXIsProcessTrusted() else {
-            preview.flashHint("Otomatik için Erişilebilirlik izni gerekli")
+            flashHint("Otomatik için Erişilebilirlik izni gerekli")
             return
         }
-        guard prepared, stitcher.firstFrame != nil else {
-            preview.flashHint("Sayfa hazırlanıyor · yeniden dene")
+        guard prepared, stitchState.firstFrame != nil else {
+            flashHint("Sayfa hazırlanıyor · yeniden dene")
             return
         }
         autoScrolling = true
@@ -214,7 +336,7 @@ final class ScrollingCaptureSession {
         defer {
             if calibrating, autoGeneration == generation {
                 stopAutoScroll(reachedEnd: false)
-                preview.flashHint("Sayfa kaydırılamıyor")
+                flashHint("Sayfa kaydırılamıyor")
             }
         }
         let ready = ContinuousClock.now.advanced(by: .milliseconds(500))
@@ -227,7 +349,7 @@ final class ScrollingCaptureSession {
             // branch — the whole point of measuring — was unreachable.
             let deadline = ContinuousClock.now.advanced(by: .milliseconds(1200))
             guard autoGeneration == generation, !captureInFlight,
-                  let baseline = stitcher.firstFrame else { return }
+                  let baseline = stitchState.firstFrame else { return }
             // 5 % of the viewport: enough to measure the sign, small enough that a wrong
             // first guess is barely visible (the persisted sign is tried FIRST).
             let burst = region.height * 0.05
@@ -247,13 +369,12 @@ final class ScrollingCaptureSession {
             )
             captureInFlight = false
             guard autoGeneration == generation, ContinuousClock.now < deadline,
-                  let image, let frame = ScrollStitcher.makeFrame(image) else { return }
-            let bands = stitcher.detectedBands
+                  let image else { return }
             let predictedPx = Int((burst * scale).rounded())
-            let motion = ScrollStitcher.motion(from: baseline, to: frame,
-                                               headerH: bands.header, footerH: bands.footer,
-                                               predicted: predictedPx,
-                                               minimumShift: max(4, predictedPx / 2))
+            let motion = await worker.motion(from: baseline, to: image,
+                                             header: stitchState.header, footer: stitchState.footer,
+                                             predicted: predictedPx, minimumShift: max(4, predictedPx / 2))
+            guard autoGeneration == generation, !finished, !finishing else { return }
             switch motion {
             case .down:
                 scroller.confirmDirection()
@@ -282,16 +403,16 @@ final class ScrollingCaptureSession {
         guard autoScrolling else { return }
         // The owner reads the file log to explain a run that ended early, so the reason the
         // end-of-page rules fired has to be in it — the per-capture line cannot show it.
-        let line = "scroll auto-stop reason=\(reason) end=\(reachedEnd) sections=\(stitcher.sectionCount)"
+        let line = "scroll auto-stop reason=\(reason) end=\(reachedEnd) sections=\(stitchState.sections)"
         logger.notice("\(line, privacy: .public)")
-        DiagnosticsLog.append(line)
+        if hooks == nil { DiagnosticsLog.append(line) }
         if reachedEnd { autoEnded = true }
         autoScrolling = false
         calibrating = false
         autoGeneration &+= 1   // captures launched under the old segment must not feed the next
         autoScroller?.stop()
         autoProgress = AutoScrollProgress()
-        preview.setAuto(running: false, reachedEnd: reachedEnd)
+        if hooks == nil { preview.setAuto(running: false, reachedEnd: reachedEnd) }
     }
 
     /// After a short quiet period, grab one more frame so the last bit scrolled (and any
@@ -333,16 +454,19 @@ final class ScrollingCaptureSession {
             self.captureInFlight = false
             // Persistent failures (permission lost mid-session, wedged replayd) must not
             // strand the HUD holding the exclusive lock — end the session.
-            if self.captureFailures >= 3, !self.finished, !self.finishing {
-                self.logger.error("scroll capture: repeated frame failures; ending session")
-                self.finish(keep: false)
-                return
-            }
+            self.finishAfterRepeatedCaptureFailures()
+            guard !self.finished, !self.finishing else { return }
             if self.pendingCapture, !self.finished, !self.finishing {
                 self.pendingCapture = false
                 self.pump()
             }
         }
+    }
+
+    private func finishAfterRepeatedCaptureFailures() {
+        guard captureFailures >= 3, !finished, !finishing else { return }
+        logger.error("scroll capture: repeated frame failures; ending session")
+        finish(keep: true, notice: .captureFailed, flush: false)
     }
 
     /// Auto-scroll state for the per-capture diagnostics line.
@@ -355,8 +479,9 @@ final class ScrollingCaptureSession {
     /// One line per capture, to the FILE sink as well as `Logger`: the installed app's
     /// `os_log` output is not retrievable with `log show`, so the file is the only record.
     private func logCapture(_ outcome: String, offset: Int, score: Double, extra: String = "") {
+        guard hooks == nil else { return }
         let line = "scroll outcome=\(outcome) offset=\(offset) score=\(score) "
-            + "pending=\(stitcher.hasPending) rebaselines=\(stitcher.rebaselineCount) auto=\(autoState)"
+            + "pending=\(stitchState.hasPending) rebaselines=\(stitchState.rebaselines) auto=\(autoState)"
             + (extra.isEmpty ? "" : " " + extra)
         logger.notice("\(line, privacy: .public)")
         DiagnosticsLog.append(line)
@@ -368,52 +493,67 @@ final class ScrollingCaptureSession {
     ) async -> CGImage? {
         // Never attempt a capture before the filter/config exist (a very fast Done can
         // reach the flush before prepare() finished) — safe no-op instead of a crash.
-        guard let filter, let config else { return nil }
+        guard hooks != nil || (filter != nil && config != nil) else { return nil }
+        defer { hooks?.captureCompleted() }
         // Which auto-scroll segment launched this capture — captured before the await so a
         // slow frame that resolves after auto is toggled off/on can't feed the next segment.
+        let sessionGeneration = generation
         let capturedGeneration = autoGeneration
         let predictedPx = Int((predictedPoints * scale).rounded())
         let image: CGImage
         do {
-            image = try await withHardTimeout(timeout, onTimeout: CaptureError.timeout) {
-                try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+            if let hooks {
+                image = try await hooks.capture(timeout)
+            } else if let filter, let config {
+                image = try await withHardTimeout(timeout, onTimeout: CaptureError.timeout) {
+                    try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+                }
+            } else {
+                return nil
             }
         } catch {
+            guard !finished, generation == sessionGeneration else { return nil }
             logCapture("failed", offset: 0, score: .nan, extra: "error=\(String(describing: error))")
             captureFailures += 1
             return nil
         }
+        guard !finished, generation == sessionGeneration else { return nil }
         captureFailures = 0
         guard !finished else { return nil }
         guard stitch else {
             logCapture("probe", offset: 0, score: .nan)
             return image
         }
-        let rebaselines = stitcher.rebaselineCount
-        let outcome = stitcher.add(image, predictedOffset: predictedPx)
-        logCapture(String(describing: outcome), offset: stitcher.lastOffset, score: stitcher.lastScore)
-        if stitcher.rebaselineCount > rebaselines { preview.flashHint("Kopukluk · yavaş kaydır") }
+        let rebaselines = stitchState.rebaselines
+        let update = await worker.add(image, predictedOffset: predictedPx)
+        guard !finished, generation == sessionGeneration else { return nil }
+        stitchState = update.state
+        let outcome = update.outcome
+        logCapture(String(describing: outcome), offset: stitchState.offset, score: stitchState.score)
+        if stitchState.rebaselines > rebaselines { flashHint("Kopukluk · yavaş kaydır") }
         // Only recompose the (O(n)) preview when the composite actually changed —
         // .appended/.baselined grows or seeds it, .buffered shows the newest warm-up frame;
         // .ignored (a pause / over-scroll / static frame) leaves it untouched, so skip.
         switch outcome {
         case .appended, .baselined, .buffered:
-            preview.update(image: stitcher.previewImage(maxWidth: 384), sections: stitcher.sectionCount)
+            let image = update.preview
+            if let hooks { hooks.update(image, stitchState.sections) }
+            else { preview.update(image: image, sections: stitchState.sections) }
         case .ignored, .noMotion, .movedUp:
             break
         case .atCap:
-            finish(keep: true)
+            finish(keep: true, notice: .outputLimit, flush: false)
             return nil
         }
         // A lost alignment (`.ignored`) is neither an advance nor a stall: the stitcher
         // re-baselines itself after two of them, and counting them as stalls would end the
         // run mid-page at exactly the count where that recovery starts.
         if autoScrolling, !calibrating, capturedGeneration == autoGeneration, outcome != .ignored {
-            let motion = stitcher.lastMotion
+            let motion = stitchState.motion
             if case .down = motion { autoScroller?.confirmDirection() }
             // A strip that merely repeats the band above it means the page bottom was just
             // stitched twice — the end, however the motion happened to classify.
-            if stitcher.tailRepeated {
+            if stitchState.tailRepeated {
                 stopAutoScroll(reachedEnd: true, reason: "tail-dup")
             } else {
                 switch autoProgress.record(motion) {
@@ -428,39 +568,50 @@ final class ScrollingCaptureSession {
 
     // MARK: - Finish
 
-    private func finish(keep: Bool) {
-        guard !finished, !finishing else { return }
-        // Stop auto-scroll through the shared helper so the HUD button/status revert
-        // immediately (Done during a long flush must not leave it stuck on "running").
+    private func finish(keep: Bool, notice: Notice? = nil, flush: Bool = true) {
+        guard !finished else { return }
         stopAutoScroll(reachedEnd: false)
-        // Cancel is immediate — discard whatever's stitched.
+        // Cancel remains immediate even during Done/final raster work. Invalidate every
+        // suspended capture/worker publication before resolving the continuation.
         guard keep else {
+            generation &+= 1
             finished = true
-            continuation?.resume(returning: nil)
+            continuation?.resume(returning: .cancelled)
             continuation = nil
             return
         }
-        // Done flushes outstanding work so the last frame isn't lost: wait out any
-        // in-flight capture, then grab one final settled frame to resolve a pending bounce.
+        if let notice { completionNotice = notice }
+        guard !finishing else { return }
         finishing = true
-        Task { @MainActor in await self.flushAndFinalize() }
+        let token = generation
+        Task { @MainActor in await self.flushAndFinalize(token: token, notice: notice, flush: flush) }
     }
 
-    private func flushAndFinalize() async {
-        // Bounded wait for the in-flight capture (itself hard-timeout'd at 2s).
-        var spins = 0
-        while captureInFlight, spins < 200 {
-            try? await Task.sleep(for: .milliseconds(16))
-            spins += 1
+    private func flushAndFinalize(token: Int, notice: Notice?, flush: Bool) async {
+        var finalNotice = notice
+        if flush {
+            // Existing bounded settled-frame flush, with cancellation checked after every
+            // suspension. Single-flight ownership includes matcher/preview work now.
+            var spins = 0
+            while captureInFlight, spins < 200, !finished, generation == token {
+                try? await Task.sleep(for: .milliseconds(16))
+                spins += 1
+            }
+            guard !finished, generation == token else { return }
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !finished, generation == token else { return }
+            if prepared, !captureInFlight {
+                accumulatedDeltaPoints = 0
+                await captureAndStitch(predictedPoints: 0)
+                if captureFailures > 0 { finalNotice = .captureFailed }
+            }
         }
-        // Always resolve the last pending strip with a frame at rest.
-        try? await Task.sleep(for: .milliseconds(180))
-        if prepared, !captureInFlight {
-            accumulatedDeltaPoints = 0
-            await captureAndStitch(predictedPoints: 0)
-        }
+        guard !finished, generation == token else { return }
+        let image = await worker.finalImage()
+        guard !finished, generation == token else { return }
         finished = true
-        continuation?.resume(returning: stitcher.finalImage())
+        continuation?.resume(returning: image.map { .completed($0, notice: completionNotice ?? finalNotice) }
+                             ?? .failed(completionNotice ?? finalNotice ?? .captureFailed))
         continuation = nil
     }
 
@@ -471,7 +622,30 @@ final class ScrollingCaptureSession {
         autoScroller = nil
         for monitor in scrollMonitors { NSEvent.removeMonitor(monitor) }
         scrollMonitors = []
-        indicator.hide()
-        preview.hide()
+        if let hooks { hooks.hide() }
+        else { indicator.hide(); preview.hide() }
+    }
+
+    var readyForCaptureForTesting: Bool { prepared && !captureInFlight }
+
+    private func flashHint(_ message: String) {
+        if let hooks { hooks.hint(message) } else { preview.flashHint(message) }
+    }
+
+    /// Inert auto producer for generation tests; never creates/posts an AutoScroller.
+    func resetAutoSegmentForTesting() {
+        guard hooks != nil else { return }
+        autoScrolling = true
+        autoGeneration &+= 1
+        autoProgress = AutoScrollProgress()
+    }
+    var autoProgressForTesting: AutoScrollProgress { autoProgress }
+
+    func captureNextFrameForTesting(predictedPoints: CGFloat = 0) async {
+        guard hooks != nil, !finished, !finishing, prepared, !captureInFlight else { return }
+        captureInFlight = true
+        await captureAndStitch(predictedPoints: predictedPoints)
+        captureInFlight = false
+        finishAfterRepeatedCaptureFailures()
     }
 }

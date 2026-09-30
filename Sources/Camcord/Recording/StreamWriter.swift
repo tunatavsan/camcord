@@ -20,6 +20,8 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     private let systemAudioInput: AVAssetWriterInput?
     private let microphoneInput: AVAssetWriterInput?
     private let hostTimeProvider: @Sendable () -> CMTime
+    private let writerStatusProvider: (@Sendable () -> AVAssetWriter.Status)?
+    private let videoReadinessProvider: (@Sendable () -> Bool)?
     private let frameDuration: CMTime
 
     private var pauseClock: PauseClock
@@ -103,6 +105,9 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         cameraSource: (any CameraFrameSource)? = nil,
         cameraOptions: CameraOptions = CameraOptions(),
         fitsWindowContent: Bool = false,
+        compositor: CameraCompositor? = nil,
+        writerStatusProvider: (@Sendable () -> AVAssetWriter.Status)? = nil,
+        videoReadinessProvider: (@Sendable () -> Bool)? = nil,
         hostTimeProvider: @escaping @Sendable () -> CMTime = {
             CMClockGetTime(CMClockGetHostTimeClock())
         }
@@ -114,6 +119,9 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         self.cameraSource = cameraOptions.enabled ? cameraSource : nil
         self.cameraOptions = cameraOptions.resolved()
         self.fitsWindowContent = fitsWindowContent
+        cameraCompositor = compositor
+        self.writerStatusProvider = writerStatusProvider
+        self.videoReadinessProvider = videoReadinessProvider
         self.hostTimeProvider = hostTimeProvider
         self.frameDuration = frameDuration
         systemGainDB = systemAudioGainDB.isFinite ? min(12, max(-60, systemAudioGainDB)) : 0
@@ -210,6 +218,12 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         // abrupt didStopWithError path, where nothing drained the stream) must not
         // reach an already-finished input — that's an uncaught NSException.
         guard !isFinished else { return }
+        // Writer failure can make readiness false (or leave only idle callbacks). Report
+        // it before either path can return, retaining nonblocking encoder backpressure.
+        guard currentWriterStatus == .writing else {
+            reportWriterFailureIfNeeded()
+            return
+        }
         guard sampleBuffer.isValid, CMSampleBufferDataIsReady(sampleBuffer) else { return }
 
         switch type {
@@ -289,7 +303,7 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         }
 
         health.video.delivered += 1
-        guard videoInput.isReadyForMoreMediaData else {
+        guard videoReadinessProvider?() ?? videoInput.isReadyForMoreMediaData else {
             health.video.dropped += 1
             return false
         }
@@ -307,6 +321,10 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
                 // of permanently disabling the camera or flashing a camera-less frame.
                 health.video.dropped += 1
                 return false
+            } catch CameraCompositorStageFailure.fit(let error) {
+                // Fit failures are independent of the healthy camera source. The original
+                // screen frame remains usable, and later frames retry the combined render.
+                logger.error("Canvas fit failed: \(String(describing: error), privacy: .public)")
             } catch where camera != nil {
                 cameraCompositingFailed = true
                 logger.error("Camera composition failed; screen capture continues: \(String(describing: error), privacy: .public)")
@@ -392,7 +410,7 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
 
     @discardableResult
     private func append(_ sampleBuffer: CMSampleBuffer, retimedTo retimedPTS: CMTime, originalPTS: CMTime, input: AVAssetWriterInput) -> Bool {
-        guard writer.status == .writing else {
+        guard currentWriterStatus == .writing else {
             reportWriterFailureIfNeeded()
             return false
         }
@@ -419,11 +437,13 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     }
 
     private func reportWriterFailureIfNeeded() {
-        guard writer.status == .failed, !didLogWriterFailure else { return }
+        guard currentWriterStatus == .failed, !didLogWriterFailure else { return }
         didLogWriterFailure = true
         logger.error("AVAssetWriter failed mid-recording: \(String(describing: self.writer.error), privacy: .public)")
         onRuntimeFailure?()
     }
+
+    private var currentWriterStatus: AVAssetWriter.Status { writerStatusProvider?() ?? writer.status }
 
     private func retimed(_ sampleBuffer: CMSampleBuffer, to newPTS: CMTime) -> CMSampleBuffer? {
         // A single CMSampleTimingInfo entry covering N samples must carry the

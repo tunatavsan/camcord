@@ -70,4 +70,17 @@ struct TextLayoutTests {
         let out = TextLayout.dedupOverlaps([a, b, c])
         #expect(out.map(\.text) == ["hello", "world"])
     }
+
+    @Test("tile dedup preserves repeated cells in separate columns and neighboring rows")
+    func duplicateTextHasSpatialIdentity() {
+        let first = line("Yes", x: 10, y: 100, w: 30, h: 20)
+        let seamCopy = line("Yes", x: 11, y: 101, w: 29, h: 20)
+        let otherColumn = line("Yes", x: 210, y: 100, w: 30, h: 20)
+        let nextRow = line("Yes", x: 10, y: 121, w: 30, h: 20)
+        let kept = TextLayout.dedupOverlaps([seamCopy, otherColumn, nextRow, first])
+        #expect(kept.count == 3)
+        #expect(kept.contains(otherColumn))
+        #expect(kept.contains(nextRow))
+        #expect(TextLayout.assemble(kept) == "Yes            Yes\nYes")
+    }
 }

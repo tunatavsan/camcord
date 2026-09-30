@@ -39,14 +39,16 @@ enum TextLayout {
     }
 
     /// Drops lines duplicated because they fell in two strips' overlap: identical text at a
-    /// near-identical vertical position.
+    /// near-identical position in both axes.
     static func dedupOverlaps(_ lines: [TextLine]) -> [TextLine] {
         let sorted = lines.sorted { $0.rect.minY < $1.rect.minY }
         var kept: [TextLine] = []
         for line in sorted {
             let duplicate = kept.contains { existing in
                 existing.text == line.text
-                    && abs(existing.rect.midY - line.rect.midY) < max(existing.rect.height, line.rect.height, 1)
+                    && abs(existing.rect.midY - line.rect.midY) < max(existing.rect.height, line.rect.height, 1) * 0.5
+                    && abs(existing.rect.midX - line.rect.midX) < max(existing.rect.width, line.rect.width, 1) * 0.5
+                    && existing.rect.intersection(line.rect).width > min(existing.rect.width, line.rect.width) * 0.5
             }
             if !duplicate { kept.append(line) }
         }

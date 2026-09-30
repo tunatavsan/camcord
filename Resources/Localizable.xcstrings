@@ -1,6 +1,42 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    " %lld": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " %lld"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " %lld"
+          }
+        }
+      }
+    },
+    "%lld captures": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld captures"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld çekim"
+          }
+        }
+      }
+    },
     "%lld dB": {
       "comment": "Accessibility: a level in decibels",
       "extractionState": "manual",
@@ -55,6 +91,60 @@
         }
       }
     },
+    "%lld px": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld px"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld piksel"
+          }
+        }
+      }
+    },
+    "%lld selected": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld selected"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld seçili"
+          }
+        }
+      }
+    },
+    "%lld × %lld px": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld × %lld px"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld × %lld piksel"
+          }
+        }
+      }
+    },
     "24 fps · cinematic": {
       "comment": "Frame rate option",
       "extractionState": "manual",
@@ -91,6 +181,24 @@
         }
       }
     },
+    "A file with that name already exists.": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A file with that name already exists."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu adda bir dosya zaten var."
+          }
+        }
+      }
+    },
     "A full-screen game records at half resolution; frame rate and codec stay the same.": {
       "comment": "Setting note",
       "extractionState": "manual",
@@ -105,6 +213,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Tam ekran bir oyun yarı çözünürlükte kaydedilir; kare hızı ve codec değişmez."
+          }
+        }
+      }
+    },
+    "A private export file could not be created safely.": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A private export file could not be created safely."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Özel dışa aktarma dosyası güvenle oluşturulamadı."
           }
         }
       }
@@ -199,6 +325,24 @@
         }
       }
     },
+    "Actual pixels": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Actual pixels"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gerçek pikseller"
+          }
+        }
+      }
+    },
     "Add or remove the camera in the recording": {
       "comment": "Shortcut action",
       "extractionState": "manual",
@@ -213,6 +357,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kamerayı kayda ekle ya da çıkar"
+          }
+        }
+      }
+    },
+    "All": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tümü"
           }
         }
       }
@@ -289,6 +451,42 @@
         }
       }
     },
+    "Annotation color": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Annotation color"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İşaretleme rengi"
+          }
+        }
+      }
+    },
+    "Annotation text": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Annotation text"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İşaretleme metni"
+          }
+        }
+      }
+    },
     "App": {
       "comment": "Sidebar section: the app itself",
       "extractionState": "manual",
@@ -303,6 +501,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Uygulama"
+          }
+        }
+      }
+    },
+    "Apply solid redactions": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apply solid redactions"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Karartmaları uygula"
+          }
+        }
+      }
+    },
+    "Arrow": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Arrow"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ok"
           }
         }
       }
@@ -379,6 +613,42 @@
         }
       }
     },
+    "Background": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Background"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Arka plan"
+          }
+        }
+      }
+    },
+    "Background and frame": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Background and frame"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Arka plan ve çerçeve"
+          }
+        }
+      }
+    },
     "Balanced": {
       "comment": "Recording profile",
       "extractionState": "manual",
@@ -429,6 +699,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bit hızı"
+          }
+        }
+      }
+    },
+    "Blur": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Blur"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bulanıklaştır"
           }
         }
       }
@@ -505,6 +793,38 @@
         }
       }
     },
+    "Camera preview": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camera preview"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera önizlemesi"
+          }
+        }
+      }
+    },
+    "Camera preview failed. Check permission and the selected device.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camera preview failed. Check permission and the selected device."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera önizlemesi başarısız oldu. İzni ve seçili aygıtı kontrol et."
+          }
+        }
+      }
+    },
     "Cancel": {
       "comment": "Button",
       "extractionState": "manual",
@@ -519,6 +839,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Vazgeç"
+          }
+        }
+      }
+    },
+    "Cancel the recording countdown": {
+      "extractionState": "manual",
+      "comment": "Accessibility: countdown cancellation action",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel the recording countdown"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt geri sayımını iptal et"
           }
         }
       }
@@ -685,6 +1023,42 @@
         }
       }
     },
+    "Choose a tool, then drag on the image. Arrow keys move the selected annotation.": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a tool, then drag on the image. Arrow keys move the selected annotation."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bir araç seçip görüntü üzerinde sürükleyin. Ok tuşları seçili işaretlemeyi taşır."
+          }
+        }
+      }
+    },
+    "Clear filters": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear filters"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Filtreleri temizle"
+          }
+        }
+      }
+    },
     "Clear…": {
       "comment": "Button: remove copied captures",
       "extractionState": "manual",
@@ -717,6 +1091,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bir alana tıkla ve istediğin tuşlara bas."
+          }
+        }
+      }
+    },
+    "Click or press Esc to cancel": {
+      "extractionState": "manual",
+      "comment": "Countdown cancellation hint",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Click or press Esc to cancel"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İptal için tıkla veya Esc’ye bas"
           }
         }
       }
@@ -757,6 +1149,24 @@
         }
       }
     },
+    "Copied capture": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copied capture"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kopyalanan çekim"
+          }
+        }
+      }
+    },
     "Copied captures live in Camcord's own folder; the oldest go first when they pass the limit.": {
       "comment": "Setting footnote",
       "extractionState": "manual",
@@ -793,6 +1203,112 @@
         }
       }
     },
+    "Copy": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kopyala"
+          }
+        }
+      }
+    },
+    "Corner radius": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Corner radius"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Köşe yarıçapı"
+          }
+        }
+      }
+    },
+    "Couldn't change Open at login. Check Login Items in System Settings.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't change Open at login. Check Login Items in System Settings."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Oturum açınca başlat ayarı değiştirilemedi. Sistem Ayarları’nda Giriş Öğeleri’ni kontrol et."
+          }
+        }
+      }
+    },
+    "Couldn't copy the selected captures.": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't copy the selected captures."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçilen çekimler kopyalanamadı."
+          }
+        }
+      }
+    },
+    "Couldn't keep this capture in the Library. The clipboard copy is still available.": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't keep this capture in the Library. The clipboard copy is still available."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu çekim Kitaplık’ta tutulamadı. Panodaki kopyası hâlâ kullanılabilir."
+          }
+        }
+      }
+    },
+    "Couldn't load captures": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't load captures"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çekimler yüklenemedi"
+          }
+        }
+      }
+    },
     "Couldn't open the folder. Check its location in Settings.": {
       "comment": "Toast when a folder cannot be revealed",
       "extractionState": "manual",
@@ -807,6 +1323,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "Klasör açılamadı. Konumunu Ayarlar'dan kontrol et."
+          }
+        }
+      }
+    },
+    "Couldn't save the screenshot. Camcord will keep a Library copy if copied captures are enabled.": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't save the screenshot. Camcord will keep a Library copy if copied captures are enabled."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekran görüntüsü kaydedilemedi. Kopyalanan çekimler etkinse Camcord bir Kitaplık kopyası tutacak."
+          }
+        }
+      }
+    },
+    "Couldn't update copied captures": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't update copied captures"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kopyalanan çekimler güncellenemedi"
           }
         }
       }
@@ -843,6 +1393,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Oluştur"
+          }
+        }
+      }
+    },
+    "Created": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Created"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Oluşturuldu"
+          }
+        }
+      }
+    },
+    "Crop": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Crop"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kırp"
           }
         }
       }
@@ -901,6 +1487,128 @@
         }
       }
     },
+    "Delete annotation": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete annotation"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İşaretlemeyi sil"
+          }
+        }
+      }
+    },
+    "Deselect all": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deselect all"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçimi kaldır"
+          }
+        }
+      }
+    },
+    "Dimensions": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dimensions"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çözünürlük"
+          }
+        }
+      }
+    },
+    "Discard edits and open": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discard edits and open"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Düzenlemeleri sil ve aç"
+          }
+        }
+      }
+    },
+    "Disconnected camera": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disconnected camera"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bağlı olmayan kamera"
+          }
+        }
+      }
+    },
+    "Disconnected microphone": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disconnected microphone"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bağlı olmayan mikrofon"
+          }
+        }
+      }
+    },
+    "Dismiss": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dismiss"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kapat"
+          }
+        }
+      }
+    },
     "Dock icon": {
       "comment": "General setting: when Camcord shows a Dock icon",
       "extractionState": "manual",
@@ -955,6 +1663,42 @@
         }
       }
     },
+    "Drag edited image": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drag edited image"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Düzenlenmiş görüntüyü sürükle"
+          }
+        }
+      }
+    },
+    "Duration": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Duration"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Süre"
+          }
+        }
+      }
+    },
     "Dynamic range": {
       "comment": "Setting: SDR or HDR",
       "extractionState": "manual",
@@ -969,6 +1713,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Dinamik aralık"
+          }
+        }
+      }
+    },
+    "Earlier": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Earlier"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önceki çekimler"
           }
         }
       }
@@ -991,6 +1753,24 @@
         }
       }
     },
+    "Edit a screenshot": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit a screenshot"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bir ekran görüntüsünü düzenleyin"
+          }
+        }
+      }
+    },
     "Edit comes after 1.0": {
       "comment": "Edit page title",
       "extractionState": "manual",
@@ -1009,6 +1789,24 @@
         }
       }
     },
+    "Effect size": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Effect size"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Efekt boyutu"
+          }
+        }
+      }
+    },
     "Efficient · small": {
       "comment": "Recording profile",
       "extractionState": "manual",
@@ -1023,6 +1821,60 @@
           "stringUnit": {
             "state": "translated",
             "value": "Verimli · küçük"
+          }
+        }
+      }
+    },
+    "Email address": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Email address"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "E-posta adresi"
+          }
+        }
+      }
+    },
+    "Export or discard your current edits before opening another image.": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Export or discard your current edits before opening another image."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Başka bir görüntü açmadan önce mevcut düzenlemelerinizi dışa aktarın veya silin."
+          }
+        }
+      }
+    },
+    "Export…": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Export…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dışa aktar…"
           }
         }
       }
@@ -1095,6 +1947,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Dosyalar"
+          }
+        }
+      }
+    },
+    "Find sensitive text": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find sensitive text"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hassas metin bul"
+          }
+        }
+      }
+    },
+    "Fit": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fit"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sığdır"
           }
         }
       }
@@ -1225,6 +2113,24 @@
         }
       }
     },
+    "Frame width": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Frame width"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çerçeve kalınlığı"
+          }
+        }
+      }
+    },
     "General": {
       "comment": "Settings group",
       "extractionState": "manual",
@@ -1239,6 +2145,60 @@
           "stringUnit": {
             "state": "translated",
             "value": "Genel"
+          }
+        }
+      }
+    },
+    "Gradient": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gradient"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Renk geçişi"
+          }
+        }
+      }
+    },
+    "Graphite": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Graphite"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grafit"
+          }
+        }
+      }
+    },
+    "Grid view": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grid view"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Izgara görünümü"
           }
         }
       }
@@ -1369,6 +2329,24 @@
         }
       }
     },
+    "Highlight": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Highlight"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vurgu"
+          }
+        }
+      }
+    },
     "Highlight the window in window recordings": {
       "comment": "Setting",
       "extractionState": "manual",
@@ -1477,6 +2455,24 @@
         }
       }
     },
+    "Just now": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Just now"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Az önce"
+          }
+        }
+      }
+    },
     "Keep copied captures in the Library": {
       "comment": "Setting",
       "extractionState": "manual",
@@ -1581,6 +2577,130 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kitaplık"
+          }
+        }
+      }
+    },
+    "Library action failed": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Library action failed"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kitaplık işlemi başarısız oldu"
+          }
+        }
+      }
+    },
+    "Line width": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Line width"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çizgi kalınlığı"
+          }
+        }
+      }
+    },
+    "List view": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "List view"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Liste görünümü"
+          }
+        }
+      }
+    },
+    "Live preview": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live preview"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Canlı önizleme"
+          }
+        }
+      }
+    },
+    "Loading captures…": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading captures…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çekimler yükleniyor…"
+          }
+        }
+      }
+    },
+    "Location": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Location"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Konum"
+          }
+        }
+      }
+    },
+    "Looks for email addresses and phone numbers on this image. Review suggestions before applying.": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Looks for email addresses and phone numbers on this image. Review suggestions before applying."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu görüntüdeki e-posta adreslerini ve telefon numaralarını arar. Uygulamadan önce önerileri inceleyin."
           }
         }
       }
@@ -1873,6 +2993,24 @@
         }
       }
     },
+    "Move selected captures to Trash?": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move selected captures to Trash?"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçilen çekimler Çöp Sepeti’ne taşınsın mı?"
+          }
+        }
+      }
+    },
     "Move to Trash": {
       "comment": "Button: trash files",
       "extractionState": "manual",
@@ -1887,6 +3025,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Çöp Sepeti'ne taşı"
+          }
+        }
+      }
+    },
+    "Name": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Name"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ad"
           }
         }
       }
@@ -1999,6 +3155,42 @@
         }
       }
     },
+    "New name": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New name"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yeni ad"
+          }
+        }
+      }
+    },
+    "No background": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No background"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Arka plan yok"
+          }
+        }
+      }
+    },
     "No captures yet": {
       "comment": "Empty Library title",
       "extractionState": "manual",
@@ -2035,6 +3227,42 @@
         }
       }
     },
+    "No matching captures": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matching captures"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eşleşen çekim yok"
+          }
+        }
+      }
+    },
+    "Not selected": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not selected"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçili değil"
+          }
+        }
+      }
+    },
     "Not set": {
       "comment": "A capture with no keyboard shortcut assigned",
       "extractionState": "manual",
@@ -2049,6 +3277,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Atanmadı"
+          }
+        }
+      }
+    },
+    "Numbered step": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Numbered step"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Numaralı adım"
+          }
+        }
+      }
+    },
+    "OK": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tamam"
           }
         }
       }
@@ -2179,6 +3443,24 @@
         }
       }
     },
+    "Open another image?": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open another image?"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Başka bir görüntü açılsın mı?"
+          }
+        }
+      }
+    },
     "Open at login": {
       "comment": "Setting: launch at login",
       "extractionState": "manual",
@@ -2193,6 +3475,96 @@
           "stringUnit": {
             "state": "translated",
             "value": "Oturum açılınca başlat"
+          }
+        }
+      }
+    },
+    "Open capture": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open capture"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çekimi aç"
+          }
+        }
+      }
+    },
+    "Open image…": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open image…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Görüntü aç…"
+          }
+        }
+      }
+    },
+    "Open or drop a PNG, JPEG or TIFF image to annotate, crop and redact it.": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open or drop a PNG, JPEG or TIFF image to annotate, crop and redact it."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İşaretlemek, kırpmak ve karartmak için PNG, JPEG veya TIFF biçiminde bir görüntü açın veya bırakın."
+          }
+        }
+      }
+    },
+    "Padding": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Padding"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Boşluk"
+          }
+        }
+      }
+    },
+    "Paper": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paper"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kağıt"
           }
         }
       }
@@ -2247,6 +3619,78 @@
           "stringUnit": {
             "state": "translated",
             "value": "İzinler"
+          }
+        }
+      }
+    },
+    "Phone number": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Phone number"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Telefon numarası"
+          }
+        }
+      }
+    },
+    "Pin": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pin"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sabitle"
+          }
+        }
+      }
+    },
+    "Pinned screenshot": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pinned screenshot"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sabitlenmiş ekran görüntüsü"
+          }
+        }
+      }
+    },
+    "Pixelate": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pixelate"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pikselleştir"
           }
         }
       }
@@ -2373,6 +3817,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kalite"
+          }
+        }
+      }
+    },
+    "Quick Look": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quick Look"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Göz At"
           }
         }
       }
@@ -2521,6 +3983,96 @@
         }
       }
     },
+    "Recording countdown": {
+      "extractionState": "manual",
+      "comment": "Accessibility: recording countdown badge",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording countdown"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt geri sayımı"
+          }
+        }
+      }
+    },
+    "Recordings": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recordings"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıtlar"
+          }
+        }
+      }
+    },
+    "Rectangle": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rectangle"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dikdörtgen"
+          }
+        }
+      }
+    },
+    "Redo": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Redo"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yinele"
+          }
+        }
+      }
+    },
+    "Refresh Library": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refresh Library"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kitaplığı yenile"
+          }
+        }
+      }
+    },
     "Region": {
       "comment": "Capture kind: a region of the screen",
       "extractionState": "manual",
@@ -2535,6 +4087,78 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bölge"
+          }
+        }
+      }
+    },
+    "Rename": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rename"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Adını değiştir"
+          }
+        }
+      }
+    },
+    "Rename capture": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rename capture"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çekimin adını değiştir"
+          }
+        }
+      }
+    },
+    "Rename…": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rename…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Adını değiştir…"
+          }
+        }
+      }
+    },
+    "Reset crop": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset crop"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kırpmayı sıfırla"
           }
         }
       }
@@ -2607,6 +4231,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Güvenlik"
+          }
+        }
+      }
+    },
+    "Saved file": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved file"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydedilen dosya"
           }
         }
       }
@@ -2719,6 +4361,42 @@
         }
       }
     },
+    "Screenshot editing canvas": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screenshot editing canvas"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekran görüntüsü düzenleme alanı"
+          }
+        }
+      }
+    },
+    "Screenshots": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screenshots"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekran görüntüleri"
+          }
+        }
+      }
+    },
     "Screenshots and scroll captures you only copied": {
       "comment": "Setting note",
       "extractionState": "manual",
@@ -2791,6 +4469,240 @@
         }
       }
     },
+    "Scroll capture could not prepare a clean image": {
+      "extractionState": "manual",
+      "comment": "Scroll capture outcome",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scroll capture could not prepare a clean image"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydırmalı çekim temiz bir görüntü hazırlayamadı"
+          }
+        }
+      }
+    },
+    "Scroll capture failed": {
+      "extractionState": "manual",
+      "comment": "Scroll capture outcome",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scroll capture failed"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydırmalı çekim başarısız oldu"
+          }
+        }
+      }
+    },
+    "Scroll capture reached the image size limit": {
+      "extractionState": "manual",
+      "comment": "Scroll capture outcome",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scroll capture reached the image size limit"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydırmalı çekim görüntü boyutu sınırına ulaştı"
+          }
+        }
+      }
+    },
+    "Scroll capture saved, but its capture type could not be recorded": {
+      "extractionState": "manual",
+      "comment": "Scroll capture metadata warning",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scroll capture saved, but its capture type could not be recorded"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydırmalı çekim kaydedildi, ancak çekim türü kaydedilemedi"
+          }
+        }
+      }
+    },
+    "Scroll capture stopped — captured content was kept": {
+      "extractionState": "manual",
+      "comment": "Scroll capture outcome",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scroll capture stopped — captured content was kept"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydırmalı çekim durdu — yakalanan içerik korundu"
+          }
+        }
+      }
+    },
+    "Scroll captures": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scroll captures"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydırmalı çekimler"
+          }
+        }
+      }
+    },
+    "Search captures": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search captures"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çekimlerde ara"
+          }
+        }
+      }
+    },
+    "Select": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seç"
+          }
+        }
+      }
+    },
+    "Select a capture to see its details.": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select a capture to see its details."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ayrıntıları görmek için bir çekim seçin."
+          }
+        }
+      }
+    },
+    "Select all": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select all"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tümünü seç"
+          }
+        }
+      }
+    },
+    "Select capture": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select capture"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çekimi seç"
+          }
+        }
+      }
+    },
+    "Selected": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçili"
+          }
+        }
+      }
+    },
+    "Selected annotation": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected annotation"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçili işaretleme"
+          }
+        }
+      }
+    },
     "Set up one source, your camera and your audio before you record.": {
       "comment": "Studio empty state",
       "extractionState": "manual",
@@ -2827,6 +4739,22 @@
         }
       }
     },
+    "Settings are loading.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Settings are loading."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ayarlar yükleniyor."
+          }
+        }
+      }
+    },
     "Settings groups": {
       "comment": "Accessibility: the Settings sidebar",
       "extractionState": "manual",
@@ -2841,6 +4769,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ayar grupları"
+          }
+        }
+      }
+    },
+    "Shadow": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shadow"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gölge"
+          }
+        }
+      }
+    },
+    "Share": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paylaş"
           }
         }
       }
@@ -2917,6 +4881,24 @@
         }
       }
     },
+    "Show inspector": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show inspector"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bilgi panelini göster"
+          }
+        }
+      }
+    },
     "Show or hide the camera preview": {
       "comment": "Shortcut action",
       "extractionState": "manual",
@@ -2949,6 +4931,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "Boyut"
+          }
+        }
+      }
+    },
+    "Solid redact": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solid redact"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Karart"
+          }
+        }
+      }
+    },
+    "Some copied captures couldn't be read or moved to the Trash. Check folder access and try again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some copied captures couldn't be read or moved to the Trash. Check folder access and try again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bazı kopyalanan çekimler okunamadı veya Çöp Sepeti’ne taşınamadı. Klasör erişimini kontrol edip tekrar dene."
           }
         }
       }
@@ -3007,6 +5023,22 @@
         }
       }
     },
+    "Start a preview to check your camera": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start a preview to check your camera"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kameranı kontrol etmek için önizlemeyi başlat"
+          }
+        }
+      }
+    },
     "Start a scroll capture": {
       "comment": "Action: start a scroll capture",
       "extractionState": "manual",
@@ -3061,6 +5093,22 @@
         }
       }
     },
+    "Starting camera…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starting camera…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera başlatılıyor…"
+          }
+        }
+      }
+    },
     "Startup": {
       "comment": "Settings card",
       "extractionState": "manual",
@@ -3075,6 +5123,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Başlangıç"
+          }
+        }
+      }
+    },
+    "Step number": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Step number"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Adım numarası"
           }
         }
       }
@@ -3129,6 +5195,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Disk dolmadan durdur ve dosyayı koru"
+          }
+        }
+      }
+    },
+    "Stop preview": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop preview"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önizlemeyi durdur"
           }
         }
       }
@@ -3259,6 +5341,112 @@
         }
       }
     },
+    "Text size": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text size"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metin boyutu"
+          }
+        }
+      }
+    },
+    "The Library is busy keeping recent captures. This capture is still on the clipboard.": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The Library is busy keeping recent captures. This capture is still on the clipboard."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kitaplık son çekimleri tutmakla meşgul. Bu çekim hâlâ panoda."
+          }
+        }
+      }
+    },
+    "The edit contains invalid image coordinates.": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The edit contains invalid image coordinates."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Düzenleme geçersiz görüntü koordinatları içeriyor."
+          }
+        }
+      }
+    },
+    "The edited image could not be rendered.": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The edited image could not be rendered."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Düzenlenmiş görüntü oluşturulamadı."
+          }
+        }
+      }
+    },
+    "The image changed. Try the action again.": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The image changed. Try the action again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Görüntü değişti. İşlemi yeniden deneyin."
+          }
+        }
+      }
+    },
+    "The microphone test failed. Check permission and the selected input.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone test failed. Check permission and the selected input."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon testi başarısız oldu. İzni ve seçili girişi kontrol et."
+          }
+        }
+      }
+    },
     "The recording ends safely when free space drops under about 500 MB.": {
       "comment": "Setting note",
       "extractionState": "manual",
@@ -3277,6 +5465,128 @@
         }
       }
     },
+    "The screenshot editor is not available yet. Use Quick Look to preview this capture.": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The screenshot editor is not available yet. Use Quick Look to preview this capture."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekran görüntüsü editörü henüz kullanılamıyor. Bu çekimi önizlemek için Göz At’ı kullanın."
+          }
+        }
+      }
+    },
+    "The selected camera is disconnected. Reconnect it or choose another camera.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected camera is disconnected. Reconnect it or choose another camera."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçilen kamera bağlı değil. Yeniden bağla veya başka bir kamera seç."
+          }
+        }
+      }
+    },
+    "The selected microphone is disconnected. Recordings use the default input until it returns.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected microphone is disconnected. Recordings use the default input until it returns."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçilen mikrofon bağlı değil. Yeniden bağlanana kadar kayıtlarda varsayılan giriş kullanılır."
+          }
+        }
+      }
+    },
+    "This file location is unsafe or no longer available.": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file location is unsafe or no longer available."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu dosya konumu güvenli değil veya artık kullanılamıyor."
+          }
+        }
+      }
+    },
+    "This image could not be opened. Choose a PNG, JPEG or TIFF image.": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This image could not be opened. Choose a PNG, JPEG or TIFF image."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu görüntü açılamadı. PNG, JPEG veya TIFF biçiminde bir görüntü seçin."
+          }
+        }
+      }
+    },
+    "This image is damaged or exceeds the supported size.": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This image is damaged or exceeds the supported size."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu görüntü bozuk veya desteklenen boyutu aşıyor."
+          }
+        }
+      }
+    },
+    "This image is too large to edit safely.": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This image is too large to edit safely."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu görüntü güvenle düzenlenemeyecek kadar büyük."
+          }
+        }
+      }
+    },
     "This shortcut is taken": {
       "comment": "Shortcut conflict title",
       "extractionState": "manual",
@@ -3291,6 +5601,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu kısayol kullanımda"
+          }
+        }
+      }
+    },
+    "Thumbnail unavailable": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thumbnail unavailable"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Küçük resim kullanılamıyor"
+          }
+        }
+      }
+    },
+    "Today": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Today"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bugün"
           }
         }
       }
@@ -3367,6 +5713,40 @@
         }
       }
     },
+    "Try again": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Try again"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tekrar dene"
+          }
+        }
+      }
+    },
+    "Try another search or filter.": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Try another search or filter."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Başka bir arama veya filtre deneyin."
+          }
+        }
+      }
+    },
     "Turn on Focus while recording": {
       "comment": "Setting",
       "extractionState": "manual",
@@ -3403,6 +5783,146 @@
         }
       }
     },
+    "Unavailable: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unavailable: %@"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kullanılamıyor: %@"
+          }
+        }
+      }
+    },
+    "Undo": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Undo"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geri al"
+          }
+        }
+      }
+    },
+    "Unexported edits": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unexported edits"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dışa aktarılmamış düzenlemeler"
+          }
+        }
+      }
+    },
+    "Unknown": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unknown"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bilinmiyor"
+          }
+        }
+      }
+    },
+    "Use 1–120 characters without a leading period, slashes or control characters.": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use 1–120 characters without a leading period, slashes or control characters."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Başında nokta, eğik çizgi veya kontrol karakteri olmayan, 1–120 karakter uzunluğunda bir ad kullanın."
+          }
+        }
+      }
+    },
+    "Use a name of 1–120 characters without slashes or control characters.": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use a name of 1–120 characters without slashes or control characters."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eğik çizgi veya kontrol karakteri içermeyen, 1–120 karakter uzunluğunda bir ad kullanın."
+          }
+        }
+      }
+    },
+    "Use solid redact for secrets. Blur and pixelate only obscure the image visually.": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use solid redact for secrets. Blur and pixelate only obscure the image visually."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gizli bilgiler için karartmayı kullanın. Bulanıklaştırma ve pikselleştirme görüntüyü yalnızca görsel olarak gizler."
+          }
+        }
+      }
+    },
+    "Used by the recording": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Used by the recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt tarafından kullanılıyor"
+          }
+        }
+      }
+    },
     "View": {
       "comment": "Menu title",
       "extractionState": "manual",
@@ -3417,6 +5937,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Görüntü"
+          }
+        }
+      }
+    },
+    "Waiting for the recording camera…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for the recording camera…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt kamerası bekleniyor…"
           }
         }
       }
@@ -3511,6 +6047,60 @@
         }
       }
     },
+    "Yesterday": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yesterday"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dün"
+          }
+        }
+      }
+    },
+    "You can restore these files from the Trash.": {
+      "extractionState": "manual",
+      "comment": "Library interface",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You can restore these files from the Trash."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu dosyaları Çöp Sepeti’nden geri yükleyebilirsiniz."
+          }
+        }
+      }
+    },
+    "Your current edits have not been exported.": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your current edits have not been exported."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mevcut düzenlemeleriniz henüz dışa aktarılmadı."
+          }
+        }
+      }
+    },
     "Your recordings are in the Library.": {
       "comment": "Setting footnote",
       "extractionState": "manual",
@@ -3529,6 +6119,42 @@
         }
       }
     },
+    "Zoom in": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zoom in"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yakınlaştır"
+          }
+        }
+      }
+    },
+    "Zoom out": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zoom out"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uzaklaştır"
+          }
+        }
+      }
+    },
     "macOS keeps these switches in System Settings › Privacy & Security.": {
       "comment": "Setting footnote",
       "extractionState": "manual",
@@ -3543,310 +6169,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "macOS bu anahtarları Sistem Ayarları › Gizlilik ve Güvenlik'te tutar."
-          }
-        }
-      }
-    },
-    "Couldn't update copied captures": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn't update copied captures"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kopyalanan çekimler güncellenemedi"
-          }
-        }
-      }
-    },
-    "Try again": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Try again"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tekrar dene"
-          }
-        }
-      }
-    },
-    "Some copied captures couldn't be read or moved to the Trash. Check folder access and try again.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Some copied captures couldn't be read or moved to the Trash. Check folder access and try again."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bazı kopyalanan çekimler okunamadı veya Çöp Sepeti’ne taşınamadı. Klasör erişimini kontrol edip tekrar dene."
-          }
-        }
-      }
-    },
-    "The selected microphone is disconnected. Recordings use the default input until it returns.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The selected microphone is disconnected. Recordings use the default input until it returns."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Seçilen mikrofon bağlı değil. Yeniden bağlanana kadar kayıtlarda varsayılan giriş kullanılır."
-          }
-        }
-      }
-    },
-    "Disconnected microphone": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Disconnected microphone"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bağlı olmayan mikrofon"
-          }
-        }
-      }
-    },
-    "The microphone test failed. Check permission and the selected input.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The microphone test failed. Check permission and the selected input."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mikrofon testi başarısız oldu. İzni ve seçili girişi kontrol et."
-          }
-        }
-      }
-    },
-    "The selected camera is disconnected. Reconnect it or choose another camera.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The selected camera is disconnected. Reconnect it or choose another camera."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Seçilen kamera bağlı değil. Yeniden bağla veya başka bir kamera seç."
-          }
-        }
-      }
-    },
-    "Disconnected camera": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Disconnected camera"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bağlı olmayan kamera"
-          }
-        }
-      }
-    },
-    "Unavailable: %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unavailable: %@"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kullanılamıyor: %@"
-          }
-        }
-      }
-    },
-    "Camera preview": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Camera preview"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kamera önizlemesi"
-          }
-        }
-      }
-    },
-    "Used by the recording": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Used by the recording"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kayıt tarafından kullanılıyor"
-          }
-        }
-      }
-    },
-    "Stop preview": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stop preview"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Önizlemeyi durdur"
-          }
-        }
-      }
-    },
-    "Camera preview failed. Check permission and the selected device.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Camera preview failed. Check permission and the selected device."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kamera önizlemesi başarısız oldu. İzni ve seçili aygıtı kontrol et."
-          }
-        }
-      }
-    },
-    "Starting camera…": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Starting camera…"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kamera başlatılıyor…"
-          }
-        }
-      }
-    },
-    "Waiting for the recording camera…": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Waiting for the recording camera…"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kayıt kamerası bekleniyor…"
-          }
-        }
-      }
-    },
-    "Live preview": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Live preview"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Canlı önizleme"
-          }
-        }
-      }
-    },
-    "Start a preview to check your camera": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Start a preview to check your camera"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kameranı kontrol etmek için önizlemeyi başlat"
-          }
-        }
-      }
-    },
-    "Couldn't change Open at login. Check Login Items in System Settings.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn't change Open at login. Check Login Items in System Settings."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Oturum açınca başlat ayarı değiştirilemedi. Sistem Ayarları’nda Giriş Öğeleri’ni kontrol et."
-          }
-        }
-      }
-    },
-    "Settings are loading.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Settings are loading."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ayarlar yükleniyor."
           }
         }
       }

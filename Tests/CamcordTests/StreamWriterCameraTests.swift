@@ -9,6 +9,85 @@ import os
 
 @Suite("Stream writer camera cadence", .serialized)
 struct StreamWriterCameraTests {
+    @Test("fit errors retain a healthy camera; camera errors degrade once and pool drops remain transient",
+          arguments: [0, 1, 2])
+    func compositorErrorAttribution(stage: Int) async throws {
+        let url = temporaryMovieURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let attempts = OSAllocatedUnfairLock(initialState: 0)
+        let firstFailure: () throws -> Void = {
+            let fail = attempts.withLock { $0 += 1; return $0 == 1 }
+            if fail {
+                if stage == 2 { throw CameraCompositorError.poolExhausted(kCVReturnWouldExceedAllocationThreshold) }
+                throw CameraCompositorError.filterUnavailable
+            }
+        }
+        let compositor = CameraCompositor(fitPreflight: stage == 0 ? firstFailure : nil,
+                                           cameraPreflight: stage != 0 ? firstFailure : nil)
+        let source = FakeCameraFrameSource(try pixelBuffer(width: 80, height: 60, color: .red))
+        let options = CameraOptions(enabled: true, corner: .bottomRight, widthFraction: 0.30, mirrored: false)
+        let writer = try StreamWriter(
+            outputURL: url, container: .mov, codec: .h264, bitrateMbps: 2,
+            pixelWidth: 320, pixelHeight: 180, frameDuration: CMTime(value: 1, timescale: 30),
+            dynamicRange: .sdr, includeSystemAudio: false, includeMicrophone: false,
+            cameraSource: source, cameraOptions: options, fitsWindowContent: true, compositor: compositor
+        )
+        let failures = OSAllocatedUnfairLock(initialState: 0)
+        writer.onCameraFailure = { failures.withLock { $0 += 1 } }
+        for index in 0..<2 {
+            let sample = try screenSample(pts: CMTime(value: Int64(100 + index), timescale: 30))
+            if stage == 0 {
+                let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true)!
+                let dictionary = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
+                let key = SCStreamFrameInfo.contentRect.rawValue as NSString
+                let rect = CGRect(x: 0, y: 0, width: 240, height: 180).dictionaryRepresentation
+                CFDictionarySetValue(dictionary, Unmanaged.passUnretained(key).toOpaque(),
+                                     Unmanaged.passUnretained(rect).toOpaque())
+            }
+            writer.consume(sample, of: .screen)
+            try await Task.sleep(for: .milliseconds(35))
+        }
+        writer.markFinished(atHostTime: nil)
+        _ = try await writer.finishWriting()
+        let frames = try await decodedFrames(at: url)
+        #expect(failures.withLock { $0 } == (stage == 1 ? 1 : 0))
+        if stage == 2 {
+            #expect(writer.healthSnapshot().video.appended == 1)
+            #expect(writer.healthSnapshot().video.dropped == 1)
+            #expect(!frames.isEmpty)
+        } else { #expect(frames.count == 2) }
+        let last = try #require(frames.last)
+        // Fit: the fitted content is centered at x=40..280; place the tile within it.
+        let point = stage == 0 ? CGPoint(x: 225, y: 45) : CGPoint(x: 260, y: 48)
+        #expect(stage == 1 ? last.color(atCI: point).isMostlyBlue : last.color(atCI: point).isMostlyRed)
+    }
+
+    @Test("a failed writer reports once even when video readiness becomes false after an accepted frame")
+    func failedWriterBeforeReadiness() async throws {
+        let url = temporaryMovieURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let failed = OSAllocatedUnfairLock(initialState: false)
+        let callbacks = OSAllocatedUnfairLock(initialState: 0)
+        let writer = try StreamWriter(
+            outputURL: url, container: .mov, codec: .h264, bitrateMbps: 2,
+            pixelWidth: 320, pixelHeight: 180, frameDuration: CMTime(value: 1, timescale: 30),
+            dynamicRange: .sdr, includeSystemAudio: false, includeMicrophone: false,
+            writerStatusProvider: { failed.withLock { $0 } ? .failed : .writing },
+            videoReadinessProvider: { !failed.withLock { $0 } }
+        )
+        writer.onRuntimeFailure = { callbacks.withLock { $0 += 1 } }
+        writer.consume(try screenSample(pts: CMTime(value: 100, timescale: 30)), of: .screen)
+        #expect(writer.healthSnapshot().video.appended == 1)
+        failed.withLock { $0 = true }
+        for index in 101...103 {
+            writer.consume(try screenSample(pts: CMTime(value: Int64(index), timescale: 30)), of: .screen)
+        }
+        #expect(callbacks.withLock { $0 } == 1)
+        #expect(writer.healthSnapshot().video.appended == 1)
+        writer.markFinished(atHostTime: nil)
+        _ = try await writer.finishWriting()
+    }
+
     @MainActor
     @Test("the engine's real camera timer runs off the main actor and writes playable frames")
     func engineCameraTimerExecutorBoundary() async throws {

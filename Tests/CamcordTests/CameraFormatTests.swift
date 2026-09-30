@@ -56,6 +56,17 @@ struct CameraFormatTests {
         #expect(CameraFormatSelection.auto([format(1920, 1080, 100...120)]) == nil)
     }
 
+    @Test("Auto favors useful 16:9 pixels before square or 4:3 area savings")
+    func autoPrefersTileAspect() throws {
+        let formats = [format(1080, 1080, 1...60), format(1440, 1080, 1...60),
+                       format(1920, 1080, 1...30), format(1920, 1080, 1...120)]
+        let auto = try #require(CameraFormatSelection.auto(formats))
+        #expect((auto.width, auto.height, auto.fps) == (1920, 1080, 60))
+        #expect(auto.index == 3)
+        let manual = try #require(CameraFormatSelection.resolve(.manual(width: 1080, height: 1080, fps: 60), formats: formats))
+        #expect((manual.width, manual.height, manual.fps) == (1080, 1080, 60))
+    }
+
     @Test("Manual lists each W×H @ fps once, at standard rates the ranges reach, sorted")
     func manualList() {
         let formats = [format(1920, 1080, 1...30), format(1280, 720, 1...60), format(1920, 1080, 1...30),

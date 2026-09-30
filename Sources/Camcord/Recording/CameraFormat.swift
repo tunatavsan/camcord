@@ -55,7 +55,8 @@ enum CameraFormatSelection {
     /// Auto never asks a camera for more than this.
     static let autoRateLimit: Double = 60
 
-    /// Auto: the smallest format at least 1080 tall, at the highest rate ≤ 60 it runs; with
+    /// Auto: among formats at least 1080 tall, favor the 16:9 tile aspect, then smaller area
+    /// and the highest rate ≤ 60 it runs. With
     /// nothing that tall, the largest format there is. Same-sized formats: the faster one.
     /// Landscape formats only, when the camera has any: the tile is 16:9, and a MacBook camera
     /// also lists 1080×1920 at the same size as 1920×1080.
@@ -69,7 +70,13 @@ enum CameraFormatSelection {
         let usable = landscape.isEmpty ? all : landscape
         let tall = usable.filter { $0.height >= 1080 }
         if !tall.isEmpty {
-            return tall.min { ($0.width * $0.height, -$0.fps) < ($1.width * $1.height, -$1.fps) }
+            if landscape.isEmpty {
+                return tall.min { ($0.width * $0.height, -$0.fps) < ($1.width * $1.height, -$1.fps) }
+            }
+            return tall.min {
+                (abs(Double($0.width) / Double($0.height) - 16.0 / 9.0), $0.width * $0.height, -$0.fps)
+                    < (abs(Double($1.width) / Double($1.height) - 16.0 / 9.0), $1.width * $1.height, -$1.fps)
+            }
         }
         return usable.max { ($0.width * $0.height, $0.fps) < ($1.width * $1.height, $1.fps) }
     }

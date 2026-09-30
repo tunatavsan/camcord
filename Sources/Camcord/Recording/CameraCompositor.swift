@@ -13,6 +13,11 @@ enum CameraCompositorError: Error {
     case filterUnavailable
 }
 
+/// Attribution crosses the single combined render without adding another render pass.
+enum CameraCompositorStageFailure: Error {
+    case fit(Error)
+}
+
 /// Sample-queue-confined Core Image compositor for a recorded frame: a resized window's content
 /// re-centred in the fixed canvas over a blurred backdrop of itself (`CanvasFit`), then the
 /// camera tile. One render pass for both. The output always uses the screen buffer's exact
@@ -32,14 +37,20 @@ final class CameraCompositor {
     }
 
     private let context: CIContext
+    private let fitPreflight: (() throws -> Void)?
+    private let cameraPreflight: (() throws -> Void)?
     private var pools: [PoolKey: CVPixelBufferPool] = [:]
     private var outputFormat: CMVideoFormatDescription?
     private let poolAllocationAttributes = [
         kCVPixelBufferPoolAllocationThresholdKey as String: 4
     ] as CFDictionary
 
-    init(context: CIContext = CIContext(options: [.cacheIntermediates: false])) {
+    init(context: CIContext = CIContext(options: [.cacheIntermediates: false]),
+         fitPreflight: (() throws -> Void)? = nil,
+         cameraPreflight: (() throws -> Void)? = nil) {
         self.context = context
+        self.fitPreflight = fitPreflight
+        self.cameraPreflight = cameraPreflight
     }
 
     /// `fit` re-centres a window's live content (nil: the frame already fills the canvas);
@@ -77,7 +88,12 @@ final class CameraCompositor {
         let screenImage: CIImage
         let contentExtent: CGRect
         if let fit, fit.canvas == screenExtent.size {
-            screenImage = try fitted(capturedImage, fit: fit, extent: screenExtent)
+            do {
+                try fitPreflight?()
+                screenImage = try fitted(capturedImage, fit: fit, extent: screenExtent)
+            } catch {
+                throw CameraCompositorStageFailure.fit(error)
+            }
             contentExtent = fit.flipped(fit.fitted)
         } else {
             screenImage = capturedImage
@@ -88,6 +104,7 @@ final class CameraCompositor {
                            colorSpace: colorSpace(from: screenBuffer))
             return try makeSampleBuffer(imageBuffer: output, copying: screen)
         }
+        try cameraPreflight?()
 
         // Whole pixels, so the one-pixel hairline on its edge lands on one pixel.
         let cameraRect = CameraOptions.pixelAligned(

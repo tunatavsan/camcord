@@ -22,6 +22,27 @@ struct PixelBufferBox: @unchecked Sendable {
 final class CameraPreviewMonitor: ObservableObject {
     static let shared = CameraPreviewMonitor()
 
+    /// Device operations are injectable; the monitor still owns real capture identities,
+    /// while lifecycle regressions can pause a stop without opening hardware.
+    struct Operations {
+        var authorize: (Bool) async -> Bool = { requestPermission in
+            switch AVCaptureDevice.authorizationStatus(for: .video) {
+            case .authorized: return true
+            case .notDetermined where requestPermission:
+                return await AVCaptureDevice.requestAccess(for: .video)
+            default: return false
+            }
+        }
+        var start: (CameraCapture, String?, CameraFormatChoice) async throws -> Void = {
+            try await $0.start(deviceID: $1, format: $2)
+        }
+        var waitForFirstFrame: (CameraCapture) async throws -> Void = { try await $0.waitForFirstFrame() }
+        var stop: (CameraCapture) async -> Void = { await $0.stop() }
+    }
+    private let operations: Operations
+
+    init(operations: Operations = Operations()) { self.operations = operations }
+
     @Published private(set) var image: NSImage?
     @Published private(set) var isStarting = false
     @Published private(set) var isRunning = false
@@ -49,19 +70,9 @@ final class CameraPreviewMonitor: ObservableObject {
         isStarting = true
         message = nil
 
-        let authorized: Bool
-        switch AVCaptureDevice.authorizationStatus(for: .video) {
-        case .authorized:
-            authorized = true
-        case .notDetermined where requestPermission:
-            authorized = await AVCaptureDevice.requestAccess(for: .video)
-        case .notDetermined:
-            authorized = false
-        default:
-            authorized = false
-        }
+        let authorized = await operations.authorize(requestPermission)
         guard !Task.isCancelled, generation == token, !recordingLocked else {
-            isStarting = false
+            if generation == token { isStarting = false }
             return
         }
         guard authorized else {
@@ -79,8 +90,8 @@ final class CameraPreviewMonitor: ObservableObject {
         ownedDeviceID = deviceID
         ownedFormat = format
         do {
-            try await capture.start(deviceID: deviceID, format: format)
-            try await capture.waitForFirstFrame()
+            try await operations.start(capture, deviceID, format)
+            try await operations.waitForFirstFrame(capture)
             guard generation == token, !recordingLocked, ownedCapture === capture else {
                 if ownedCapture === capture {
                     ownedCapture = nil
@@ -89,14 +100,14 @@ final class CameraPreviewMonitor: ObservableObject {
                     isStarting = false
                     isRunning = false
                 }
-                await capture.stop()
+                await operations.stop(capture)
                 return
             }
             isStarting = false
             isRunning = true
             startPollingIfNeeded()
         } catch {
-            await capture.stop()
+            await operations.stop(capture)
             guard generation == token, ownedCapture === capture else { return }
             ownedCapture = nil
             ownedCaptureID = nil
@@ -110,8 +121,10 @@ final class CameraPreviewMonitor: ObservableObject {
     /// Stops only the Settings-owned rehearsal. A recording's camera belongs to the
     /// recording engine and is never stopped through this surface.
     func stop() async {
-        guard recordingSource == nil, ownedCapture != nil || isStarting else { return }
+        guard recordingSource == nil else { return }
+        // Invalidate a restart even while its previous capture is already awaiting stop.
         generation &+= 1
+        guard ownedCapture != nil || isStarting else { return }
         let capture = ownedCapture
         ownedCapture = nil
         ownedCaptureID = nil
@@ -119,7 +132,7 @@ final class CameraPreviewMonitor: ObservableObject {
         isRunning = false
         image = nil
         stopPolling()
-        if let capture { await capture.stop() }
+        if let capture { await operations.stop(capture) }
     }
 
     /// Only a preview running the SAME camera in the SAME format becomes the recording's
@@ -144,8 +157,10 @@ final class CameraPreviewMonitor: ObservableObject {
     func cameraSettingsChanged(_ options: CameraOptions) async {
         guard ownedCapture != nil, !isStarting,
               Self.isStale(deviceID: ownedDeviceID, format: ownedFormat, for: options) else { return }
-        await stop()
         let resolved = options.resolved()
+        let restartGeneration = generation &+ 1
+        await stop()
+        guard !Task.isCancelled, visible, !recordingLocked, generation == restartGeneration else { return }
         await start(deviceID: resolved.deviceID, format: resolved.format)
     }
 
@@ -163,7 +178,7 @@ final class CameraPreviewMonitor: ObservableObject {
         message = nil
         stopPolling()
         if canTransfer { return capture }
-        if let capture { await capture.stop() }
+        if let capture { await operations.stop(capture) }
         return nil
     }
 

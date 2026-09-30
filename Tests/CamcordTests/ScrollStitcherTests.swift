@@ -512,4 +512,41 @@ struct ScrollStitcherTests {
         if run >= minRun { bands += 1 }
         return bands
     }
+    @Test("native composition is clipped to an exact useful prefix before the pixel budget is exceeded",
+          arguments: [100, 150, 175, 180])
+    func pixelBudgetPreservesPrefix(rows: Int) throws {
+        let stitcher = ScrollStitcher(maxTotalPixels: width * rows + width - 1)
+        var outcome: ScrollStitcher.Outcome = .buffered
+        for offset in stride(from: 0, through: 180, by: 30) {
+            outcome = stitcher.add(viewport(contentOffset: offset, height: 120), predictedOffset: 30)
+            if outcome == .atCap { break }
+        }
+        #expect(outcome == .atCap && stitcher.limitReached)
+        let image = try #require(stitcher.finalImage())
+        #expect(image.width == width && image.height == rows)
+        expectPageRows(image, startingAt: 0)
+    }
+
+    @Test("height caps and less-than-one-row budgets reject oversized allocation")
+    func outputAllocationBounds() throws {
+        let heightLimited = ScrollStitcher(maxTotalHeight: 70, maxTotalPixels: Int.max)
+        #expect(heightLimited.add(viewport(contentOffset: 0, height: 120), predictedOffset: 0) == .atCap)
+        let prefix = try #require(heightLimited.finalImage())
+        #expect(prefix.height == 70)
+        expectPageRows(prefix, startingAt: 0)
+        let noRow = ScrollStitcher(maxTotalPixels: width - 1)
+        #expect(noRow.add(viewport(contentOffset: 0, height: 120), predictedOffset: 0) == .atCap)
+        #expect(noRow.finalImage() == nil)
+    }
+
+    @Test("an oversized replacement viewport cannot allocate a signature beyond the output budget")
+    func changedViewportLimit() throws {
+        let stitcher = ScrollStitcher(maxTotalPixels: width * 150)
+        #expect(stitcher.add(viewport(contentOffset: 0, height: 120), predictedOffset: 0) == .buffered)
+        #expect(stitcher.add(viewport(contentOffset: 30, height: 300), predictedOffset: 30) == .atCap)
+        let image = try #require(stitcher.finalImage())
+        #expect(image.width == width && image.height == 120)
+        expectPageRows(image, startingAt: 0)
+    }
+
 }
