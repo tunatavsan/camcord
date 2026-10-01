@@ -31,12 +31,19 @@ struct LibraryView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.l) {
-            heading
-            filters
+        VStack(alignment: .leading, spacing: 0) {
+            if !store.items.isEmpty {
+                heading.padding(.bottom, Theme.Space.l)
+                LibraryFilterBar(items: store.items, filter: $store.filter, search: $store.search)
+                    .padding(.bottom, Theme.Library.filterBottom)
+            }
             content
         }
         .padding(Theme.Space.xl)
+        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .overlay(alignment: .topTrailing) {
+            if store.items.isEmpty { headingControls.padding(Theme.Space.xl) }
+        }
         .foregroundStyle(Theme.Palette.ink.color)
         .tint(Theme.Palette.ink.color)
         .dragContainer(for: URL.self, itemID: \.self) { (urls: [URL]) in urls }
@@ -54,7 +61,11 @@ struct LibraryView: View {
         .onExitCommand { quickLookURL = nil; store.selection.removeAll() }
         .onMoveCommand { direction in moveSelection(direction) }
         .quickLookPreview($quickLookURL, in: store.selectedItems.map(\.url))
-        .inspector(isPresented: inspectorPresentation) { inspector.frame(minWidth: 260, idealWidth: 300, maxWidth: 360) }
+        .inspector(isPresented: inspectorPresentation) {
+            LibraryInspectorView(items: store.selectedItems, thumbnails: store.thumbnails,
+                                 copy: copySelection, reveal: revealSelection, rename: beginRename, trash: requestTrash)
+                .inspectorColumnWidth(Theme.Library.inspectorWidth)
+        }
         .sheet(isPresented: Binding(get: { renameID != nil }, set: { if !$0 { renameID = nil } })) { renameSheet }
         .confirmationDialog("Move selected captures to Trash?", isPresented: $confirmsTrash, titleVisibility: .visible) {
             Button("Move to Trash", role: .destructive) {
@@ -88,8 +99,18 @@ struct LibraryView: View {
     private var heading: some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) {
             Text("Library").font(Theme.Font.display).tracking(Theme.Font.displayTracking)
-            Text("\(store.items.count) captures").font(Theme.Font.data).foregroundStyle(Theme.Palette.ink3.color)
+            HStack(spacing: Theme.Space.xs) {
+                Text("\(store.items.count) captures")
+                Text(verbatim: "· " + ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file))
+            }
+            .font(Theme.Font.data).foregroundStyle(Theme.Palette.ink3.color).lineLimit(1)
             Spacer()
+            headingControls
+        }
+    }
+
+    private var headingControls: some View {
+        HStack(spacing: Theme.Space.m) {
             Button { store.usesGrid.toggle() } label: {
                 Image(systemName: store.usesGrid ? "list.bullet" : "square.grid.2x2")
             }.help(Text(store.usesGrid ? "List view" : "Grid view"))
@@ -101,37 +122,6 @@ struct LibraryView: View {
             Button { Task { await store.refresh() } } label: { Image(systemName: "arrow.clockwise") }
                 .help(Text("Refresh Library")).accessibilityLabel(Text("Refresh Library"))
         }.buttonStyle(.borderless)
-    }
-    private var filters: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: Theme.Space.l) { filterButtons; searchField }
-            VStack(alignment: .leading, spacing: Theme.Space.m) { filterButtons; searchField }
-        }
-    }
-    private var filterButtons: some View {
-        HStack(spacing: Theme.Space.xs) {
-            filterButton("All", kind: nil)
-            filterButton("Screenshots", kind: .screenshot)
-            filterButton("Scroll captures", kind: .scrollCapture)
-            filterButton("Recordings", kind: .recording)
-        }.padding(Theme.Space.xs)
-            .background(Theme.Palette.surface.color, in: Capsule())
-    }
-    private func filterButton(_ title: LocalizedStringKey, kind: CaptureItem.Kind?) -> some View {
-        Button { store.filter = kind } label: {
-            HStack(spacing: Theme.Space.xs) {
-                Text(title).font(Theme.Font.caption)
-                Text(verbatim: String(store.items.filter { kind == nil || $0.kind == kind }.count)).font(Theme.Font.dataSmall)
-            }.padding(.horizontal, Theme.Space.s).padding(.vertical, Theme.Space.s)
-                .background(store.filter == kind ? Theme.Palette.selectionStrong.color : Theme.Palette.surface.color, in: Capsule())
-        }.buttonStyle(.plain).accessibilityAddTraits(store.filter == kind ? .isSelected : [])
-    }
-    private var searchField: some View {
-        HStack(spacing: Theme.Space.s) {
-            Image(systemName: "magnifyingglass").foregroundStyle(Theme.Palette.ink3.color).accessibilityHidden(true)
-            TextField("Search captures", text: $store.search).textFieldStyle(.plain)
-        }.padding(Theme.Space.s).frame(minWidth: 140, maxWidth: 260)
-            .background(Theme.Palette.field.color, in: RoundedRectangle(cornerRadius: Theme.Radius.control))
     }
     @ViewBuilder private var content: some View {
         if store.isLoading && store.items.isEmpty {
@@ -149,11 +139,7 @@ struct LibraryView: View {
             actions: { Button("Clear filters") { store.search = ""; store.filter = nil } }
         } else {
             if store.usesGrid { grid } else { list }
-            HStack {
-                Text("\(store.selection.count) selected")
-                Spacer()
-                Text(verbatim: ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file))
-            }.font(Theme.Font.dataSmall).foregroundStyle(Theme.Palette.ink3.color)
+
         }
     }
     private var totalBytes: Int64 {
@@ -161,9 +147,10 @@ struct LibraryView: View {
             let (sum, overflow) = total.addingReportingOverflow(max(item.byteSize, 0)); return overflow ? .max : sum
         }
     }
-    private var groups: [(date: Date, items: [CaptureItem])] {
+    private var groups: [LibraryDateGroup] {
         Dictionary(grouping: store.filteredItems) { Calendar.current.startOfDay(for: $0.createdAt) }
-            .sorted { $0.key > $1.key }.map { ($0.key, $0.value) }
+            .sorted { $0.key > $1.key }
+            .map { LibraryDateGroup(date: $0.key, title: groupTitle($0.key), items: $0.value) }
     }
     private func groupTitle(_ date: Date) -> String {
         if Calendar.current.isDateInToday(date) { return String(localized: "Today") }
@@ -171,21 +158,7 @@ struct LibraryView: View {
         return date.formatted(date: .abbreviated, time: .omitted)
     }
     private var grid: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: Theme.Space.xl) {
-                    ForEach(groups, id: \.date) { group in
-                        VStack(alignment: .leading, spacing: Theme.Space.m) {
-                            HStack { Text(verbatim: groupTitle(group.date)).font(Theme.Font.body.weight(.semibold))
-                                Text(verbatim: String(group.items.count)).font(Theme.Font.dataSmall).foregroundStyle(Theme.Palette.ink3.color) }
-                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 168), spacing: Theme.Space.l)], spacing: Theme.Space.xl) {
-                                ForEach(group.items) { item in tile(item).id(item.id) }
-                            }
-                        }
-                    }
-                }
-            }.onChange(of: store.items.first?.id) { _, id in if let id { proxy.scrollTo(id, anchor: .top) } }
-        }
+        LibraryGridContent(groups: groups, newestID: store.items.first?.id, tile: tile)
     }
     private var list: some View {
         List(selection: $store.selection) {
@@ -210,41 +183,14 @@ struct LibraryView: View {
         }.listStyle(.inset).scrollContentBackground(.hidden)
     }
     private func tile(_ item: CaptureItem) -> some View {
-        Button { select(item.id); hasFocus = true } label: {
-            VStack(alignment: .leading, spacing: Theme.Space.s) {
-                LibraryThumbnail(item: item, thumbnails: store.thumbnails)
-                    .frame(height: 126).frame(maxWidth: .infinity)
-                    .overlay(alignment: .bottomTrailing) {
-                        kindBadge(item).font(Theme.Font.dataSmall).padding(Theme.Space.xs)
-                            .background(Theme.Palette.surface.color, in: Capsule()).padding(Theme.Space.s)
-                    }
-                Text(verbatim: item.title).font(Theme.Font.body).lineLimit(1)
-                HStack {
-                    Text(item.createdAt, style: .time)
-                    Spacer()
-                    if Date().timeIntervalSince(item.createdAt) >= 0 && Date().timeIntervalSince(item.createdAt) < 600 { Text("Just now") }
-                }.font(Theme.Font.dataSmall).foregroundStyle(Theme.Palette.ink3.color)
-            }.padding(Theme.Space.s)
-                .background(store.selection.contains(item.id) ? Theme.Palette.selection.color : Theme.Palette.surface.color,
-                            in: RoundedRectangle(cornerRadius: Theme.Radius.box))
-                .overlay(RoundedRectangle(cornerRadius: Theme.Radius.box)
-                    .strokeBorder(store.selection.contains(item.id) ? Theme.Palette.ink.color : Theme.Palette.hairline.color,
-                                  lineWidth: store.selection.contains(item.id) ? 2 : 1))
-                .contentShape(.rect)
-        }.buttonStyle(.plain)
-            .simultaneousGesture(TapGesture(count: 2).onEnded { Task { await store.open(item) } })
-            .contextMenu { actions(item) }
-            .draggable(containerItemID: item.url)
-            .accessibilityLabel(Text(verbatim: item.title))
-            .accessibilityValue(Text(item.kind.label))
-            .accessibilityAddTraits(store.selection.contains(item.id) ? .isSelected : [])
-            .accessibilityAction(named: Text("Open capture")) { Task { await store.open(item) } }
-            .accessibilityAction(named: Text("Quick Look")) { store.selection = [item.id]; preview() }
-    }
-    @ViewBuilder private func kindBadge(_ item: CaptureItem) -> some View {
-        if item.kind == .recording, let seconds = item.duration {
-            Text(verbatim: Duration.seconds(seconds).formatted(.time(pattern: .minuteSecond)))
-        } else { Text(item.kind.label) }
+        let age = Date().timeIntervalSince(item.createdAt)
+        return LibraryCaptureTile(item: item, thumbnails: store.thumbnails,
+                                  isSelected: store.selection.contains(item.id),
+                                  isFresh: item.id == store.items.first?.id && age >= 0 && age < Theme.Library.freshSeconds,
+                                  select: { select(item.id); hasFocus = true },
+                                  open: { Task { await store.open(item) } },
+                                  preview: { store.selection = [item.id]; preview() },
+                                  actions: { actions(item) })
     }
     private func select(_ id: String) {
         let modifiers = NSApp.currentEvent?.modifierFlags ?? []
@@ -278,41 +224,8 @@ struct LibraryView: View {
         Divider()
         Button("Move to Trash", role: .destructive) { if !store.selection.contains(item.id) { store.selection = [item.id] }; requestTrash() }
     }
-    private var inspector: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Theme.Space.l) {
-                if let item = store.selectedItems.first {
-                    LibraryThumbnail(item: item, thumbnails: store.thumbnails).frame(height: 200)
-                    Text(verbatim: item.title).font(Theme.Font.title).textSelection(.enabled)
-                    if store.selection.count > 1 { Text("\(store.selection.count) selected").font(Theme.Font.data) }
-                    Grid(alignment: .leading, horizontalSpacing: Theme.Space.m, verticalSpacing: Theme.Space.m) {
-                        fact("Created", item.createdAt.formatted(date: .abbreviated, time: .shortened))
-                        fact("Size", ByteCountFormatter.string(fromByteCount: item.byteSize, countStyle: .file))
-                        if let size = item.pixelSize { fact("Dimensions", "\(Int(size.width)) × \(Int(size.height))") }
-                        if item.kind == .recording { fact("Duration", item.duration.map { Duration.seconds($0).formatted(.time(pattern: .minuteSecond)) } ?? String(localized: "Unknown")) }
-                        fact("Location", item.origin == .clipboardCache ? String(localized: "Copied capture") : String(localized: "Saved file"))
-                    }.font(Theme.Font.data)
-                    Text(verbatim: FolderPicker.display(item.url.path)).font(Theme.Font.dataSmall).foregroundStyle(Theme.Palette.ink3.color).textSelection(.enabled)
-                    HStack {
-                        Button("Open capture") { Task { await store.open(item) } }
-                        Button("Quick Look") { preview() }
-                    }
-                    HStack {
-                        Button("Copy") { Task { await store.copySelection() } }
-                        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(store.selectedItems.map(\.url)) }
-                    }
-                    HStack {
-                        Button("Rename…") { beginRename() }.disabled(store.selection.count != 1)
-                        ShareLink(items: store.selectedItems.map(\.url)) { Text("Share") }
-                    }
-                    Button("Move to Trash", role: .destructive) { requestTrash() }
-                } else { Text("Select a capture to see its details.").foregroundStyle(Theme.Palette.ink3.color) }
-            }.padding(Theme.Space.l).frame(maxWidth: .infinity, alignment: .leading)
-        }.background(Theme.Palette.surface.color)
-    }
-    private func fact(_ title: LocalizedStringKey, _ value: String) -> some View {
-        GridRow { Text(title).foregroundStyle(Theme.Palette.ink3.color); Text(verbatim: value).textSelection(.enabled) }
-    }
+    private func copySelection() { Task { await store.copySelection() } }
+    private func revealSelection() { NSWorkspace.shared.activateFileViewerSelecting(store.selectedItems.map(\.url)) }
     private func preview() { quickLookURL = store.selectedItems.first?.url }
     private func requestTrash() { if !store.selection.isEmpty { confirmsTrash = true } }
     private func beginRename() {
@@ -337,27 +250,5 @@ struct LibraryView: View {
 extension CaptureItem.Kind {
     var label: LocalizedStringKey {
         switch self { case .screenshot: "Screenshot"; case .scrollCapture: "Scroll capture"; case .recording: "Recording" }
-    }
-}
-
-private struct LibraryThumbnail: View {
-    let item: CaptureItem
-    let thumbnails: LibraryThumbnails
-    @State private var image: CGImage?
-    @State private var isLoading = true
-    var body: some View {
-        ZStack {
-            Theme.Palette.well.color
-            if let image { Image(decorative: image, scale: 1).resizable().scaledToFit().padding(Theme.Space.xs) }
-            else if isLoading { ProgressView().controlSize(.small) }
-            else { Image(systemName: item.kind == .recording ? "film" : "photo.badge.exclamationmark")
-                    .font(Theme.Font.title).foregroundStyle(Theme.Palette.ink3.color).accessibilityLabel(Text("Thumbnail unavailable")) }
-        }.clipShape(.rect(cornerRadius: Theme.Radius.thumb))
-            .task(id: item) {
-                image = nil; isLoading = true
-                let decoded = await thumbnails.image(for: item)
-                guard !Task.isCancelled else { return }
-                image = decoded; isLoading = false
-            }
     }
 }

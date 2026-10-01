@@ -8,6 +8,52 @@ import SwiftUI
 
 enum Theme {}
 
+extension Theme {
+    /// Library content geometry; chrome and materials remain system-owned.
+    enum Library {
+        static let badgeInk = SwiftUI.Color(nsColor: ThemeColor.RGBA(0xE8EAED).nsColor)
+        static let badgeFill = SwiftUI.Color(nsColor: ThemeColor.RGBA(0x0A0B0D, alpha: 0.72).nsColor)
+        static let inspectorWidth: CGFloat = 300
+        static let inspectorInset: CGFloat = 20
+        static let controlHeight: CGFloat = 28
+        static let primaryHeight: CGFloat = 36
+        static let controlInset: CGFloat = 12
+        static let controlGap: CGFloat = 6
+        static let searchWidth: CGFloat = 220
+        static let searchInset: CGFloat = 10
+        static let filterGap: CGFloat = 2
+        static let filterBottom: CGFloat = 20
+        static let groupGap: CGFloat = 26
+        static let headerGap: CGFloat = 10
+        static let gridMinimum: CGFloat = 168
+        static let gridRowGap: CGFloat = 22
+        static let thumbnailAspect: CGFloat = 16 / 10.5
+        static let tileGap: CGFloat = 7
+        static let metaInset: CGFloat = 2
+        static let hairline: CGFloat = 0.5
+        static let selectionLine: CGFloat = 2
+        static let selectionArm: CGFloat = 14
+        static let selectionCorner: CGFloat = 6
+        static let selectionOutset: CGFloat = 6
+        static let badgeInset: CGFloat = 7
+        static let badgeHeight: CGFloat = 18
+        static let badgePadding: CGFloat = 6
+        static let badgeGap: CGFloat = 4
+        static let freshSeconds: TimeInterval = 600
+        static let emptyGap: CGFloat = 14
+        static let emptyMark: CGFloat = 64
+        static let emptyMarkLineFraction: CGFloat = 0.05
+        static let emptyTitleInset: CGFloat = 6
+        static let shortcutWidth: CGFloat = 92
+        static let shortcutMaxWidth: CGFloat = 492
+        static let shortcutTopInset: CGFloat = 12
+        static let shortcutBottomInset: CGFloat = 10
+        static let shortcutSideInset: CGFloat = 6
+        static let shortcutIcon: CGFloat = 20
+        static let disabledOpacity: Double = 0.45
+    }
+}
+
 // MARK: - Colour
 
 /// One colour token: its value in the dark and light appearances and their high-contrast

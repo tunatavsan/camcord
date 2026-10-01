@@ -22,66 +22,9 @@ struct LibraryModule: CamcordModule {
     }
 }
 
-/// The empty Library (K1): the mark, "No captures yet", the five hotkeys as key caps, and two
-/// ways to start. No question, no composer.
+/// Library's centered capture entry point and configured shortcuts.
 struct LibraryEmptyView: View {
-    @Environment(\.appServices) private var services
-
-    var body: some View {
-        EmptyState(title: LocalizedStringResource("No captures yet", comment: "Empty Library title")) {
-            VStack(spacing: Theme.Space.xl) {
-                HStack(spacing: Theme.Space.s) {
-                    ForEach(CaptureKind.allCases) { kind in
-                        HotkeyTile(kind: kind)
-                    }
-                }
-                HStack(spacing: Theme.Space.s) {
-                    Button {
-                        services?.capture(.region)
-                    } label: {
-                        Label { Text(CaptureKind.region.actionTitle) } icon: { Image(systemName: CaptureKind.region.symbol) }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Theme.Palette.ink.color)
-                    Button {
-                        services?.toggleRecording()
-                    } label: {
-                        Label { Text("Record", comment: "Button: start a recording") } icon: {
-                            Image(systemName: "record.circle").foregroundStyle(Theme.Palette.record.color)
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                }
-                .controlSize(.large)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-/// One capture's key cap in the empty Library: its symbol, its name, its hotkey.
-private struct HotkeyTile: View {
-    let kind: CaptureKind
-
-    var body: some View {
-        VStack(spacing: Theme.Space.s - 2) {
-            Image(systemName: kind.symbol)
-                .font(Theme.Font.title.weight(.regular))
-                .foregroundStyle(Theme.Palette.ink.color)
-                .accessibilityHidden(true)
-            Text(kind.title)
-                .font(Theme.Font.caption)
-                .foregroundStyle(Theme.Palette.ink2.color)
-                .lineLimit(1)
-                .minimumScaleFactor(0.85)
-            KeyCap(shortcut: kind.shortcut)
-        }
-        .frame(width: 96)
-        .padding(.vertical, Theme.Space.m)
-        .background(Theme.Palette.surface.color, in: RoundedRectangle(cornerRadius: Theme.Radius.box, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.box, style: .continuous).strokeBorder(Theme.Palette.hairline.color))
-        .accessibilityElement(children: .combine)
-    }
+    var body: some View { LibraryEmptyContent() }
 }
 
 struct StudioModule: CamcordModule {

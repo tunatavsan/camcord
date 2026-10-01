@@ -10319,6 +10319,114 @@
           }
         }
       }
+    },
+    "Kind": {
+      "comment": "Library inspector capture kind",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kind"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tür"
+          }
+        }
+      }
+    },
+    "Taken": {
+      "comment": "Library inspector capture date and time",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Taken"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çekim"
+          }
+        }
+      }
+    },
+    "Capture actions are unavailable in this window.": {
+      "comment": "Disabled capture action explanation when app services are absent",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capture actions are unavailable in this window."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu pencerede yakalama eylemleri kullanılamıyor."
+          }
+        }
+      }
+    },
+    "%lld captures selected": {
+      "comment": "Library selection scope",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld captures selected"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld yakalama seçildi"
+          }
+        }
+      }
+    },
+    "First selected capture": {
+      "comment": "Library selection scope",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "First selected capture"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İlk seçili yakalama"
+          }
+        }
+      }
+    },
+    "Selection actions": {
+      "comment": "Library selection scope",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selection actions"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçim eylemleri"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

@@ -43,6 +43,7 @@ private struct ShellConfiguration {
     let appearance: NSAppearance.Name
     let module: ModuleID
     let emptyLibrary: Bool
+    let libraryState: String?
     let editorState: String
     let editorSampleSheet: Bool
     let studioState: String
@@ -71,7 +72,10 @@ private struct ShellConfiguration {
         studioState = ["setup", "recording", "done", "permission"].contains(requestedStudioState) ? requestedStudioState : "permission"
         editorState = environment["CAMCORD_EDITOR_STATE"] ?? "loaded"
         editorSampleSheet = environment["CAMCORD_EDITOR_SAMPLE_SHEET"] == "1"
-        emptyLibrary = environment["CAMCORD_SHELL_LIBRARY"] == "empty" || module == .edit && editorState == "empty"
+        let requestedLibraryState = environment["CAMCORD_LIBRARY_STATE"]
+        libraryState = module == .library && requestedLibraryState.map(LibraryPresentationFixture.states.contains) == true
+            ? requestedLibraryState : nil
+        emptyLibrary = libraryState == "empty" || environment["CAMCORD_SHELL_LIBRARY"] == "empty" || module == .edit && editorState == "empty"
     }
 }
 
@@ -86,6 +90,7 @@ private final class ShellFixture {
     private let captures: URL
     private let cache: URL
     private let ownedImages: [URL]
+    private let libraryAssetManifest: [[String: Any]]
     private var neutral: NSWindow?
     private var launchCompletion: [String: Any] = [:]
 
@@ -100,7 +105,9 @@ private final class ShellFixture {
         try FileManager.default.createDirectory(at: captures, withIntermediateDirectories: false)
         try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: false)
         var images: [URL] = []
-        if !configuration.emptyLibrary {
+        if !configuration.emptyLibrary, configuration.libraryState != nil {
+            images = try await LibraryPresentationFixture.writeFiles(in: captures)
+        } else if !configuration.emptyLibrary {
             for (index, name) in ["Capture workflow", "Review checklist", "Layout notes", "Source selection",
                                   "Export review", "Window details"].enumerated() {
                 let url = captures.appendingPathComponent(name + ".png")
@@ -131,7 +138,9 @@ private final class ShellFixture {
                                    cacheDirectory: cache)
         await library.refresh()
         #expect(library.items.count == images.count)
-        library.selection = Set(library.items.prefix(1).map(\.id))
+        if let state = configuration.libraryState { LibraryPresentationFixture.configure(library, state: state) }
+        else { library.selection = Set(library.items.prefix(1).map(\.id)) }
+        libraryAssetManifest = configuration.libraryState == nil ? [] : try LibraryPresentationFixture.facts(library.items, includeHash: true)
         for item in library.items { _ = await library.thumbnails.image(for: item) }
 
         let fixtureDefaults = defaults
@@ -314,6 +323,14 @@ private final class ShellFixture {
             "studioPresentationAssets": studioPresentation?.assetURLs.map(\.lastPathComponent) ?? [],
             "settingsGroup": controller.model.settingsGroup.rawValue,
             "captureCount": services.library.items.count,
+            "libraryState": configuration.libraryState as Any? ?? NSNull(),
+            "actualRecordingBusy": services.recordingController.isBusy,
+            "actualCaptureKinds": services.library.items.map { $0.kind.rawValue },
+            "filteredCaptureCount": services.library.filteredItems.count,
+            "actualUsesGrid": services.library.usesGrid,
+            "selectedCaptureCount": services.library.selection.count,
+            "actualCaptureItems": try LibraryPresentationFixture.facts(services.library.items),
+            "libraryAssetManifest": libraryAssetManifest,
             "knownBytes": MainWindowLayout.totalKnownBytes(services.library.items.map(\.byteSize)),
             "requestedOuterSize": [configuration.size.width, configuration.size.height],
             "appearance": configuration.appearance.rawValue,
