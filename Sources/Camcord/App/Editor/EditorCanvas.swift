@@ -382,7 +382,10 @@ struct EditorCanvas: NSViewRepresentable {
         if let original, let candidateAnnotation, candidateAnnotation.valid, original != candidateAnnotation {
             session.updateSelected { $0 = candidateAnnotation }
         } else if original == nil, let candidateAnnotation, candidateAnnotation.valid {
-            session.edit { $0.annotations.append(candidateAnnotation) }; session.selectedID = candidateAnnotation.id
+            let growsText = sourcePoint(convert(event.locationInWindow,from:nil)).map { point in
+                candidateAnnotation.kind == .text && (abs(point.x-start.x) < 1 || abs(point.y-start.y) < 1)
+            } ?? false
+            session.commitAnnotation(candidateAnnotation,growsText:growsText)
             if candidateAnnotation.kind == .text { session.showsAnnotationEditor = true }
         } else if let cropCandidate, !cropCandidate.isEmpty { session.edit { $0.crop = cropCandidate.integral } }
         else if original == nil, let point = sourcePoint(convert(event.locationInWindow, from: nil)) { session.add(tool: session.tool, from: start, to: point) }

@@ -49,7 +49,7 @@ struct EditorAnnotationText: NSViewRepresentable {
     func textDidChange(_ notification: Notification) {
         guard session?.selectedAnnotation?.kind == .text else { return }
         guard string.utf8.count <= 16_384 else { string = session?.selectedAnnotation?.text ?? ""; return }
-        session?.updateSelected { $0.text = string }
+        session?.updateSelectedText(string)
     }
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "z" {

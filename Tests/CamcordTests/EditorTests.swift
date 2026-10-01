@@ -1085,6 +1085,16 @@ struct EditorNativeInteractionTests {
         let click = canvas.viewRect(CGRect(x:400,y:350,width:0,height:0)).origin
         canvas.mouseDown(with:try event(.leftMouseDown,click)); canvas.mouseUp(with:try event(.leftMouseUp,click))
         #expect(session.selectedAnnotation?.kind == .text && session.selectedAnnotation?.rect.height == paint.height)
+        session.undo(); session.style.fontSize = 93; session.selectedID = nil; canvas.refreshLayers()
+        let largeClick = canvas.viewRect(CGRect(x:30,y:20,width:0,height:0)).origin
+        canvas.mouseDown(with:try event(.leftMouseDown,largeClick)); canvas.mouseUp(with:try event(.leftMouseUp,largeClick))
+        let initial = try #require(session.selectedAnnotation)
+        session.updateSelectedText("Review")
+        let fitted = try #require(session.selectedAnnotation)
+        #expect(fitted.style.fontSize == 93 && session.style.fontSize == 93)
+        #expect(fitted.rect.width > initial.rect.width || fitted.rect.height > initial.rect.height)
+        #expect(doc.bounds.contains(fitted.rect))
+        session.undo(); #expect(session.selectedAnnotation?.text == initial.text && session.selectedAnnotation?.rect == initial.rect)
         #expect(!window.isVisible)
     }
     @Test("Fit stays fixed through native legacy gutter changes, annotation gestures and UndoRedo")
@@ -1142,6 +1152,55 @@ struct EditorNativeInteractionTests {
         let patched = try pixels()
         #expect(zip(baseline,patched).map { abs(Int($0)-Int($1)) }.max() == 0)
         #expect(stride(from:3,to:patched.count,by:4).map { patched[$0] }.min() == UInt8((alpha*255).rounded()))
+        #expect(!window.isVisible)
+    }
+    @Test("Native padded and rounded tile edges match monolithic flat source strips at fractional zoom", arguments:[CGFloat(0.75),CGFloat(1.33),CGFloat(1.93),CGFloat(1855)/960])
+    func nativePaddedTileEdges(physicalZoom:CGFloat) async throws {
+        for alpha in [CGFloat(1),CGFloat(0.5)] {
+            for preset in [EditorBackground.Preset.paper,.none] {
+                try await nativePaddedTileEdges(physicalZoom:physicalZoom,alpha:alpha,preset:preset)
+            }
+        }
+    }
+    private func nativePaddedTileEdges(physicalZoom:CGFloat,alpha:CGFloat,preset:EditorBackground.Preset) async throws {
+        let source = try EditorRenderer.context(width:960,height:600)
+        source.setFillColor(CGColor(srgbRed:0.35,green:0.65,blue:0.48,alpha:alpha)); source.fill(CGRect(x:0,y:0,width:960,height:600))
+        let session = EditorSession(); session.open(CapturedScreenshot(id:UUID(),image:try #require(source.makeImage()),pointSize:CGSize(width:960,height:600),kind:.screenshot,saveToDiskRequested:false)); await session.waitForRendering()
+        session.edit { $0.background = EditorBackground(preset:preset,padding:32,cornerRadius:24,frameWidth:2,shadow:false,imageCorners:preset == .none ? .rounded : .square) }; await session.waitForRendering()
+        let window = NSWindow(contentRect:CGRect(x:0,y:0,width:1315,height:792),styleMask:[.titled],backing:.buffered,defer:false); window.isReleasedWhenClosed = false
+        let host = NSView(frame:CGRect(x:0,y:0,width:1315,height:792)); window.contentView = host
+        let scroll = EditorScrollNSView(frame:CGRect(x:184.375,y:16.625,width:1127,height:735)); scroll.allowsMagnification = true; scroll.minMagnification = 0.02; scroll.maxMagnification = 16
+        let canvas = EditorCanvasNSView(); canvas.session = session; scroll.documentView = canvas; host.addSubview(scroll)
+        defer { session.stop(); window.close() }
+        session.fitZoom = false; session.zoom = physicalZoom/window.backingScaleFactor; scroll.synchronize(viewport:scroll.contentSize); canvas.refreshLayers()
+        let layer = try #require(canvas.layer), delegate = layer.delegate; layer.delegate = nil
+        defer { layer.delegate = delegate }
+        let scale = scroll.magnification*window.backingScaleFactor
+        let origin = window.convertToBacking(CGRect(origin:canvas.convert(CGPoint.zero,to:nil),size:.zero)).origin
+        let phase = CGPoint(x:origin.x-floor(origin.x),y:-origin.y-floor(-origin.y))
+        #expect(abs(canvas.convert(CGSize(width:1,height:1),to:nil).width*window.backingScaleFactor-scale) < 0.0001)
+        let sample = canvas.viewRect(CGRect(x:10,y:320,width:780,height:100))
+        func pixels(_ renderedLayer:CALayer) throws -> [UInt8] {
+            let c = try EditorRenderer.context(width:Int(ceil(canvas.bounds.width*scale))+2,height:Int(ceil(canvas.bounds.height*scale))+2)
+            c.translateBy(x:phase.x,y:CGFloat(c.height)-phase.y); c.scaleBy(x:scale,y:-scale); renderedLayer.render(in:c)
+            let rect = CGRect(x:phase.x+sample.minX*scale,y:phase.y+sample.minY*scale,width:sample.width*scale,height:sample.height*scale).integral
+            return try rgba(#require(c.makeImage()?.cropping(to:rect)))
+        }
+        canvas.canvasShadowLayer.shadowOpacity = 0
+        // The native tree currently contains one complete source bitmap. Its
+        // flat band lies outside the arrow and crosses replacement tile edges.
+        let monolithic = try pixels(layer)
+        session.add(tool:.arrow,from:CGPoint(x:80,y:80),to:CGPoint(x:700,y:280)); session.selectedID = nil; canvas.refreshLayers(); canvas.canvasShadowLayer.shadowOpacity = 0
+        let tiles = try #require(layer.sublayers?[2].sublayers)
+        #expect(!tiles.isEmpty)
+        for tile in tiles {
+            let edge = window.convertToBacking(canvas.convert(tile.frame,to:nil))
+            for value in [edge.minX,edge.minY,edge.maxX,edge.maxY] { #expect(abs(value-value.rounded()) < 0.0001) }
+        }
+        let patched = try pixels(layer)
+        let monolithicDelta = zip(monolithic,patched).map { abs(Int($0)-Int($1)) }.max() ?? 0
+        print("Tile reference: physical zoom \(physicalZoom), alpha \(alpha), background \(preset), maximum channel difference \(monolithicDelta)")
+        #expect(monolithicDelta == 0)
         #expect(!window.isVisible)
     }
     @Test("True arrow points survive old records, all directions, zero-axis geometry and independent resize")

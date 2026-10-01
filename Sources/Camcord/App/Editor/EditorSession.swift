@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import Observation
 import UniformTypeIdentifiers
+import CoreText
 
 @MainActor @Observable
 final class EditorSession {
@@ -50,6 +51,7 @@ final class EditorSession {
     private var snapshotCosts: [Int] = []
     private var continuousDepth = 0
     private var continuousRecorded = false
+    @ObservationIgnored private var growingTextIDs: Set<UUID> = []
     func beginContinuousEdit() { if continuousDepth == 0 { continuousRecorded = false }; continuousDepth += 1 }
     func endContinuousEdit() { continuousDepth = max(0, continuousDepth - 1) }
     private(set) var displayBase: EditorDisplayBase?
@@ -142,7 +144,7 @@ final class EditorSession {
     private func accept(_ original: EditorDocument) {
         var value = original; value.edits.background = rememberedBackground
         loadGeneration += 1; isLoading = false; document = value; cleanEdits = value.edits; nextStepNumber = 1
-        editUndoManager.removeAllActions(withTarget: self); snapshotCosts = []; selectedID = nil; pendingCapture = nil; pendingURL = nil; fitZoom = true; error = nil
+        editUndoManager.removeAllActions(withTarget: self); snapshotCosts = []; growingTextIDs = []; selectedID = nil; pendingCapture = nil; pendingURL = nil; fitZoom = true; error = nil
         preview = nil; previewRevision = -1
         displayBase = EditorDisplayBase(image: value.source, pointSize: value.pointSize, underlay: value.source)
         displayBaseEdits = EditorEdits(crop: value.bounds)
@@ -172,14 +174,15 @@ final class EditorSession {
             editUndoManager.levelsOfUndo = min(60, max(1, 16_000_000 / maximum))
             editUndoManager.beginUndoGrouping()
         }
+        let growingIDs = growingTextIDs
         editUndoManager.registerUndo(withTarget: self) { target in
-            MainActor.assumeIsolated { target.restoreSnapshot(edits) }
+            MainActor.assumeIsolated { target.restoreSnapshot(edits, growingIDs: growingIDs) }
         }
         if !editUndoManager.isUndoing && !editUndoManager.isRedoing { editUndoManager.endUndoGrouping() }
     }
-    private func restoreSnapshot(_ edits: EditorEdits) {
+    private func restoreSnapshot(_ edits: EditorEdits, growingIDs: Set<UUID>) {
         guard let current = document?.edits else { return }
-        recordSnapshot(current); document?.edits = edits; continuousRecorded = false
+        recordSnapshot(current); document?.edits = edits; growingTextIDs = growingIDs; continuousRecorded = false
         if let selectedID, !edits.annotations.contains(where: { $0.id == selectedID }) { self.selectedID = nil }
         if selectedID == nil { selectedID = edits.annotations.last?.id }
         changed()
@@ -233,11 +236,67 @@ final class EditorSession {
             if !rect.isEmpty { edit { $0.crop = rect.integral.intersection(document.bounds) } }; return
         }
         guard let annotation = candidate(tool: tool, from: from, to: to) else { return }
-        edit { $0.annotations.append(annotation) }; selectedID = annotation.id
+        let drag = EditorGeometry.drag(from: from, to: to, bounds: document.bounds)
+        commitAnnotation(annotation, growsText: tool == .text && (drag.width < 1 || drag.height < 1))
+    }
+    func commitAnnotation(_ annotation: EditorAnnotation, growsText: Bool = false) {
+        guard let document else { return }
+        var value = annotation
+        if growsText && value.kind == .text { value.rect = fittedTextRect(value, document: document) }
+        edit { $0.annotations.append(value) }
+        guard self.document?.edits.annotations.contains(where: { $0.id == value.id }) == true else { return }
+        if growsText && value.kind == .text { growingTextIDs.insert(value.id) }
+        selectedID = value.id
     }
     func updateSelected(_ mutation: (inout EditorAnnotation) -> Void) {
         guard let selectedID else { return }
-        edit { if let index = $0.annotations.firstIndex(where: { $0.id == selectedID }) { mutation(&$0.annotations[index]) } }
+        let previous = selectedAnnotation, document = document
+        let grows = growingTextIDs.contains(selectedID)
+        var manuallyResized = false
+        edit { edits in
+            guard let index = edits.annotations.firstIndex(where: { $0.id == selectedID }) else { return }
+            mutation(&edits.annotations[index])
+            manuallyResized = edits.annotations[index].rect.size != previous?.rect.size
+            if grows, !manuallyResized, let document, edits.annotations[index].kind == .text,
+               edits.annotations[index].style != previous?.style || edits.annotations[index].text != previous?.text {
+                edits.annotations[index].rect = fittedTextRect(edits.annotations[index], document: document)
+            }
+        }
+        if manuallyResized && selectedAnnotation?.rect.size != previous?.rect.size { growingTextIDs.remove(selectedID) }
+    }
+    /// Text and its automatic box growth belong to the same document undo entry.
+    func updateSelectedText(_ text: String) {
+        guard let selectedID, let document, selectedAnnotation?.kind == .text, text.utf8.count <= 16_384 else { return }
+        let grows = growingTextIDs.contains(selectedID)
+        edit { edits in
+            guard let index = edits.annotations.firstIndex(where: { $0.id == selectedID }) else { return }
+            edits.annotations[index].text = text
+            if grows { edits.annotations[index].rect = fittedTextRect(edits.annotations[index], document: document) }
+        }
+    }
+    /// Click-created text grows right and down until the source edge requires wrapping.
+    /// Explicitly dragged or resized boxes retain the user's chosen geometry.
+    private func fittedTextRect(_ annotation: EditorAnnotation, document: EditorDocument) -> CGRect {
+        guard annotation.kind == .text, annotation.style.valid, annotation.text.utf8.count <= 16_384 else { return annotation.rect }
+        let scale = CGSize(width: CGFloat(document.source.width) / document.pointSize.width,
+                           height: CGFloat(document.source.height) / document.pointSize.height)
+        let available = CGSize(width: max(0, document.bounds.maxX - annotation.rect.minX),
+                               height: max(0, document.bounds.maxY - annotation.rect.minY))
+        guard available.width > 0, available.height > 0 else { return annotation.rect }
+        let font = NSFont.systemFont(ofSize: annotation.style.fontSize, weight: .semibold)
+        let string = NSAttributedString(string: annotation.text, attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font])
+        let setter = CTFramesetterCreateWithAttributedString(string)
+        let padding = annotation.style.textBackground ? CGSize(width: 16, height: 8) : .zero
+        let natural = CTFramesetterSuggestFrameSizeWithConstraints(setter, CFRange(), nil,
+            CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude), nil)
+        // One point of rounding room prevents a fractional final glyph from wrapping.
+        let width = min(available.width, max(annotation.rect.width, ceil(natural.width + padding.width + 1) * scale.width))
+        let contentWidth = max(1, width / scale.width - padding.width)
+        let wrapped = CTFramesetterSuggestFrameSizeWithConstraints(setter, CFRange(), nil,
+            CGSize(width: contentWidth, height: CGFloat.greatestFiniteMagnitude), nil)
+        let lineHeight = ceil(font.ascender - font.descender + font.leading)
+        let height = min(available.height, max(annotation.rect.height, ceil(max(lineHeight, wrapped.height) + padding.height) * scale.height))
+        return CGRect(origin: annotation.rect.origin, size: CGSize(width: width, height: height))
     }
     func setSelectionRect(_ rect: CGRect) {
         guard let bounds = document?.bounds, EditorGeometry.valid(rect) else { return }
@@ -248,7 +307,7 @@ final class EditorSession {
         var rect = annotation.rect; rect.origin.x = min(max(0, rect.minX + dx), bounds.width - rect.width); rect.origin.y = min(max(0, rect.minY + dy), bounds.height - rect.height)
         setSelectionRect(rect)
     }
-    func deleteSelected() { guard let selectedID else { return }; edit { $0.annotations.removeAll { $0.id == selectedID } }; self.selectedID = nil }
+    func deleteSelected() { guard let selectedID else { return }; edit { $0.annotations.removeAll { $0.id == selectedID } }; growingTextIDs.remove(selectedID); self.selectedID = nil }
     func chooseColor(_ color: EditorColor) { hasChosenColor = true; style.color = color }
     func chooseLineWidth(_ width: Double) { hasChosenLineWidth = true; style.lineWidth = width }
     func rememberStyle() { guard style.valid, let data = try? JSONEncoder().encode(style) else { return }; defaults?.set(data, forKey: "editor.toolStyle") }

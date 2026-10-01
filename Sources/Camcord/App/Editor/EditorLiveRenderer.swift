@@ -142,7 +142,10 @@ import Metal
         output.translateBy(x: -destination.minX * scale, y: -y * scale); output.scaleBy(x: scale, y: scale)
         if base.backdrop == nil { try EditorRenderer.prepareBackground(document, context: output, presentationScale: scale, clipSource: false, shadowSource: base.underlay) }
         if base.sourceClip == nil { EditorRenderer.clipSource(document, context: output, destination: CGRect(x: inset, y: inset, width: currentCrop.width, height: currentCrop.height)) }
-        output.draw(image, in: CGRect(x: destination.minX, y: y, width: region.width, height: region.height))
+        // The bounded raster rounds its dimensions up to whole pixels. Cover
+        // that same extent after clipping, or its fractional final row/column
+        // retains backdrop pixels and becomes a visible tile seam.
+        output.draw(image, in: CGRect(x: destination.minX, y: y, width: CGFloat(width)/scale, height: CGFloat(height)/scale))
         guard let result = output.makeImage() else { throw EditorError.render }; return result
     }
 }
