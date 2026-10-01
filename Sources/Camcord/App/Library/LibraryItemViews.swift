@@ -109,8 +109,13 @@ private struct LibrarySelectionCorners: Shape {
 struct LibraryThumbnail: View {
     let item: CaptureItem
     let thumbnails: LibraryThumbnails
+    @Environment(\.mainWindowModuleActive) private var moduleActive
+    @Environment(\.mainWindowLifecycle) private var lifecycle
     @State private var image: CGImage?
     @State private var isLoading = true
+
+    private var isActive: Bool { moduleActive && (lifecycle?.allowsLivePreview ?? true) }
+    private struct Request: Equatable { let item: CaptureItem; let isActive: Bool }
 
     var body: some View {
         ZStack {
@@ -127,7 +132,8 @@ struct LibraryThumbnail: View {
             }
         }
         .clipShape(.rect(cornerRadius: Theme.Radius.thumb))
-        .task(id: item) {
+        .task(id: Request(item: item, isActive: isActive)) {
+            guard isActive else { return }
             image = nil
             isLoading = true
             let decoded = await thumbnails.image(for: item)

@@ -1423,3 +1423,100 @@ private actor EditorDisplayRenderGate {
     func waitForStart() async { await gate.waitForStart() }
     func resume() async { await gate.resume() }
 }
+
+@Suite("Retained editor activity", .timeLimit(.minutes(1))) @MainActor
+struct EditorRetainedActivityTests {
+    @Test("Repeated activity transitions preserve edits, Undo, style, zoom and safe pixels while retiring privacy input")
+    func retainedState() async throws {
+        let session = EditorSession(), activity = EditorWorkspaceActivity()
+        session.open(CapturedScreenshot(id: UUID(), image: try EditorRendererTests.image(width: 80, height: 60),
+                                        pointSize: CGSize(width: 80, height: 60), kind: .screenshot, saveToDiskRequested: false))
+        session.add(tool: .blur, from: CGPoint(x: 12, y: 12), to: CGPoint(x: 40, y: 40))
+        await session.waitForRendering()
+        session.tool = .rectangle; session.chooseLineWidth(7); session.fitZoom = false; session.zoom = 1.8
+        session.showsBackgroundInspector = true
+        let document = try #require(session.document), selectedID = session.selectedID, style = session.style
+        let requests = session.displayRasterRequests
+        activity.update(active: true, session: session)
+        #expect(session.displayRasterRequests == requests)
+        for _ in 0..<3 {
+            let safeImage = try #require(session.displayBase?.image)
+            #expect(session.displayBase?.privacySource != nil)
+            activity.update(active: false, session: session)
+            activity.update(active: false, session: session)
+            #expect(!session.isActive && !session.isRendering && !session.isFindingText)
+            #expect(session.displayBase?.privacySource == nil && session.displayBase?.image === safeImage)
+            #expect(session.document?.id == document.id && session.document?.edits == document.edits)
+            #expect(session.selectedID == selectedID && session.style == style && session.canUndo)
+            #expect(session.zoom == 1.8 && !session.fitZoom && session.showsBackgroundInspector)
+            let hiddenRequests = session.displayRasterRequests
+            activity.update(active: true, session: session)
+            activity.update(active: true, session: session)
+            await session.waitForRendering()
+            #expect(session.displayRasterRequests == hiddenRequests + 1)
+            #expect(session.displayBase?.privacySource != nil)
+        }
+        #expect(session.displayRasterRequests == requests + 3)
+        session.undo(); #expect(session.document?.edits.annotations.isEmpty == true)
+        session.redo(); #expect(session.document?.edits == document.edits)
+        activity.update(active: false, session: session)
+    }
+
+    @Test("Hidden native canvas rejects stale responder keys, accessibility edits and display-frame privacy work")
+    func hiddenNativeRoutes() async throws {
+        let session = EditorSession()
+        session.open(CapturedScreenshot(id: UUID(), image: try EditorRendererTests.image(width: 80, height: 60),
+                                        pointSize: CGSize(width: 80, height: 60), kind: .screenshot, saveToDiskRequested: false))
+        session.add(tool: .blur, from: CGPoint(x: 12, y: 12), to: CGPoint(x: 40, y: 40))
+        await session.waitForRendering()
+        let canvas = EditorCanvasNSView(frame: CGRect(x: 0, y: 0, width: 200, height: 160))
+        canvas.cursorPublisher = { _ in }; canvas.session = session; canvas.refreshLayers()
+        session.updateSelected { $0.rect.origin.x += 1 }
+        canvas.refreshLayers(); canvas.renderPrivacyDisplayFrame()
+        #expect(canvas.privacyPatchComputations > 0)
+        let safeContents = try #require(canvas.baseLayer.contents) as AnyObject
+        let frames = canvas.privacyDisplayFrames, computations = canvas.privacyPatchComputations
+        let revision = session.revision, tool = session.tool, zoom = session.zoom, selectedID = session.selectedID
+        canvas.isModuleActive = false; session.stop()
+        #expect(!canvas.acceptsFirstResponder && canvas.undoManager == nil && !canvas.hasPrivacyDisplayLink)
+        for (key, code, flags) in [("z", UInt16(6), NSEvent.ModifierFlags.command),
+                                   ("c", UInt16(8), .command), ("s", UInt16(1), .command),
+                                   ("r", UInt16(15), []), ("\u{7f}", UInt16(51), [])] {
+            let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+                timestamp: 0, windowNumber: 0, context: nil, characters: key, charactersIgnoringModifiers: key,
+                isARepeat: false, keyCode: code))
+            #expect(!canvas.performKeyEquivalent(with: event)); canvas.keyDown(with: event)
+        }
+        canvas.undo(nil); canvas.redo(nil); canvas.renderPrivacyDisplayFrame(); canvas.refreshLayers(renderPrivacy: true)
+        #expect(!canvas.accessibilityPerformDelete())
+        #expect(canvas.privacyDisplayFrames == frames && canvas.privacyPatchComputations == computations)
+        #expect(canvas.baseLayer.contents as AnyObject? === safeContents)
+        #expect(session.revision == revision && session.tool == tool && session.zoom == zoom && session.selectedID == selectedID)
+        session.resume(); await session.waitForRendering(); canvas.isModuleActive = true
+        #expect(canvas.acceptsFirstResponder && canvas.undoManager === session.editUndoManager)
+        #expect(canvas.accessibilityPerformDelete())
+        session.stop()
+    }
+
+    @Test("Hiding cancels a pending clipboard action before its existing publication guard can write")
+    func hiddenPendingCopy() async throws {
+        let gate = EditorTestGate(), sessionActivity = EditorWorkspaceActivity()
+        var publications = 0
+        var clipboard = EditorSession.ClipboardOperations()
+        clipboard.copyPNG = { _, _, _, allowed in
+            await gate.suspend()
+            guard !Task.isCancelled, allowed() else { return false }
+            publications += 1; return true
+        }
+        let session = EditorSession(clipboard: clipboard)
+        session.open(CapturedScreenshot(id: UUID(), image: try EditorRendererTests.image(), pointSize: CGSize(width: 8, height: 6), kind: .screenshot, saveToDiskRequested: false))
+        await session.waitForRendering(); sessionActivity.update(active: true, session: session)
+        let request = try #require(sessionActivity.perform { _ = await session.copy() })
+        await gate.waitForStart(); sessionActivity.update(active: false, session: session)
+        #expect(sessionActivity.perform { publications += 100 } == nil)
+        sessionActivity.update(active: true, session: session)
+        await gate.resume(); await request.value
+        #expect(publications == 0 && !session.isExporting)
+        sessionActivity.update(active: false, session: session)
+    }
+}

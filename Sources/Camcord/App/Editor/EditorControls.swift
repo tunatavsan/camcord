@@ -5,6 +5,15 @@ import UniformTypeIdentifiers
 struct EditorStyleCapsule: View {
     @Bindable var session: EditorSession
     @State private var showsPrivacy = false
+    @Environment(\.mainWindowModuleActive) private var moduleActive
+    @Environment(\.mainWindowLifecycle) private var lifecycle
+    private var isActive: Bool { moduleActive && (lifecycle?.allowsLivePreview ?? true) }
+    private var annotationPresentation: Binding<Bool> {
+        Binding(get: { isActive && session.showsAnnotationEditor }, set: { if isActive { session.showsAnnotationEditor = $0 } })
+    }
+    private var privacyPresentation: Binding<Bool> {
+        Binding(get: { isActive && showsPrivacy }, set: { if isActive { showsPrivacy = $0 } })
+    }
     private var tool: EditorTool { session.selectedAnnotation?.kind ?? session.tool }
     private var style: EditorStyle { session.selectedAnnotation?.style ?? session.style }
     private var usesColor: Bool { [.arrow, .rectangle, .text, .highlight, .step].contains(tool) }
@@ -29,22 +38,22 @@ struct EditorStyleCapsule: View {
                 EditorPresetGroup(values: Theme.Editor.effectSizes, value: style.effectSize, title: "Effect size", set: setEffectSize)
             }
             if session.selectedAnnotation?.kind == .text || session.selectedAnnotation?.kind == .step {
-                Button("Edit annotation", systemImage: "text.cursor") { session.showsAnnotationEditor.toggle() }
-                    .popover(isPresented: $session.showsAnnotationEditor) { EditorSelectedContent(session: session).padding(Theme.Space.l) }
+                Button("Edit annotation", systemImage: "text.cursor") { guard isActive, session.isActive else { return }; session.showsAnnotationEditor.toggle() }
+                    .popover(isPresented: annotationPresentation) { EditorSelectedContent(session: session).padding(Theme.Space.l) }
             }
             if [.redact, .blur, .pixelate].contains(tool) {
-                Button("Redaction information", systemImage: "info.circle") { showsPrivacy.toggle() }
-                    .popover(isPresented: $showsPrivacy) {
+                Button("Redaction information", systemImage: "info.circle") { guard isActive else { return }; showsPrivacy.toggle() }
+                    .popover(isPresented: privacyPresentation) {
                         Text("Use solid redact for secrets. Blur and pixelate only obscure the image visually.")
                             .font(Theme.Font.body).padding(Theme.Space.l).frame(width: Theme.Editor.inspectorWidth)
                     }
             }
             if tool == .redact {
-                Button("Find sensitive text", systemImage: "text.viewfinder", action: session.findSensitiveText)
+                Button("Find sensitive text", systemImage: "text.viewfinder", action: { if isActive, session.isActive { session.findSensitiveText() } })
                     .disabled(session.isFindingText)
             }
             if session.selectedAnnotation != nil {
-                Button("Delete annotation", systemImage: "trash", action: session.deleteSelected)
+                Button("Delete annotation", systemImage: "trash", action: { if isActive, session.isActive { session.deleteSelected() } })
             }
         }
         .buttonStyle(.borderless)
@@ -58,6 +67,7 @@ struct EditorStyleCapsule: View {
         .accessibilityLabel("Annotation style")
     }
     private func change(_ edit: (inout EditorStyle) -> Void) {
+        guard isActive, session.isActive else { return }
         edit(&session.style)
         session.updateSelected { edit(&$0.style) }
         session.rememberStyle()

@@ -7,6 +7,98 @@ import SwiftUI
 
 @Suite("Studio presentation and completion actions")
 struct StudioUITests {
+    @MainActor private final class ActivityWindow: NSWindow {
+        override var isVisible: Bool { true }
+        override var isMiniaturized: Bool { false }
+        override var occlusionState: NSWindow.OcclusionState { [.visible] }
+    }
+
+    @MainActor private struct ActivityShell: View {
+        @Bindable var model: MainWindowModel
+        var body: some View {
+            RetainedModuleStack(selection: model.selection) { id in
+                if id == .studio {
+                    StudioActivityView { _ in ActivityNativeHost() }
+                } else { Color.clear }
+            }
+        }
+    }
+
+    @MainActor private struct ActivityNativeHost: View {
+        @Environment(\.studioSession) private var session
+        var body: some View {
+            if let session { StudioNativePreviewView(session: session).frame(width: 240, height: 160) }
+        }
+    }
+
+    @MainActor @Test("retained Studio activity retires its camera lease while the native host survives revisits and occlusion")
+    func retainedStudioActivity() async throws {
+        _ = NSApplication.shared
+        let suite = "Camcord.StudioActivity.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var settings = RecordingSettings()
+        settings.camera.enabled = true; settings.camera.deviceID = "fixture"; settings.save(to: defaults)
+        var starts = 0, stops = 0
+        let camera = CameraPreviewMonitor(operations: .init(authorize: { _ in true },
+            start: { _, _, _ in starts += 1 }, waitForFirstFrame: { _ in }, stop: { _ in stops += 1 }))
+        let microphone = MicrophoneMonitor(operations: .init(authorize: { false }, isAuthorized: { false }))
+        let coordinator = CaptureCoordinator()
+        let controller = RecordingController(coordinator: coordinator, defaults: defaults)
+        let session = StudioSession(defaults: defaults, controller: controller, recordingState: .init(),
+            coordinator: coordinator, microphoneMonitor: microphone, cameraMonitor: camera,
+            operations: .init(screenCaptureAuthorized: { false }, content: { _ in throw CancellationError() },
+                              cameraAuthorized: { true }))
+        let model = MainWindowModel(defaults: defaults), lifecycle = MainWindowLifecycle()
+        let fixture = ActivityWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+                                     styleMask: [.titled], backing: .buffered, defer: false)
+        lifecycle.update(window: fixture, temporarilyHidden: false)
+        let host = NSHostingView(rootView: ActivityShell(model: model)
+            .environment(\.studioSession, session).environment(\.mainWindowLifecycle, lifecycle))
+        host.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        fixture.contentView = host
+        defer { fixture.contentView = nil }
+        func previewHosts(_ view: NSView) -> [StudioNativePreviewHost] {
+            (view as? StudioNativePreviewHost).map { [$0] } ?? view.subviews.flatMap(previewHosts)
+        }
+        func settle(_ predicate: () -> Bool) async throws {
+            for _ in 0..<100 {
+                host.layoutSubtreeIfNeeded()
+                if predicate() { return }
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            try #require(predicate())
+        }
+        host.layoutSubtreeIfNeeded()
+        #expect(starts == 0 && previewHosts(host).isEmpty)
+        model.select(.studio)
+        try await settle { camera.isRunning && !previewHosts(host).isEmpty }
+        let originalHost = try #require(previewHosts(host).first)
+        let originalLayer = originalHost.displayLayer
+        #expect(starts == 1)
+        model.select(.library)
+        try await settle { !camera.isRunning && stops == 1 }
+        #expect(previewHosts(host).first === originalHost)
+        model.select(.studio)
+        try await settle { camera.isRunning && starts == 2 }
+        #expect(previewHosts(host).first === originalHost)
+        #expect(originalHost.displayLayer === originalLayer)
+        lifecycle.update(window: nil, temporarilyHidden: false)
+        try await settle { !camera.isRunning && stops == 2 }
+        #expect(previewHosts(host).first === originalHost)
+        camera.setVisible(true, owner: "foreign")
+        await camera.start(deviceID: "foreign", format: .auto)
+        model.select(.settings)
+        try await settle { !session.cameraPreviewRequested }
+        #expect(camera.isRunning && starts == 3 && stops == 2)
+        fixture.contentView = nil
+        await session.releaseVisibleResources()
+        #expect(camera.isRunning && stops == 2)
+        camera.setVisible(false, owner: "foreign")
+        await camera.stopIfUnobserved()
+        #expect(stops == 3)
+    }
+
     @Test("recording clock drops fractional seconds and preserves hours")
     func displayedClock() {
         #expect(StudioDisplayTime.clock("04:26.87") == "00:04:26")

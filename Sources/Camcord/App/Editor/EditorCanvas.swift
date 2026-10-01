@@ -4,16 +4,21 @@ import SwiftUI
 struct EditorCanvas: NSViewRepresentable {
     let session: EditorSession
     var fitTopClearance: CGFloat = 0
+    @Environment(\.mainWindowModuleActive) private var moduleActive
+    @Environment(\.mainWindowLifecycle) private var lifecycle
+    private var isActive: Bool { moduleActive && (lifecycle?.allowsLivePreview ?? true) }
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = EditorScrollNSView(); scroll.hasHorizontalScroller = true; scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
         scroll.drawsBackground = false
         scroll.allowsMagnification = true; scroll.minMagnification = 0.02; scroll.maxMagnification = 16
-        let canvas = EditorCanvasNSView(); canvas.session = session; scroll.documentView = canvas
+        let canvas = EditorCanvasNSView(); canvas.session = session; canvas.isModuleActive = isActive; scroll.documentView = canvas
         return scroll
     }
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let canvas = scroll.documentView as? EditorCanvasNSView else { return }
         canvas.session = session
+        canvas.isModuleActive = isActive
+        guard isActive else { return }
         (scroll as? EditorScrollNSView)?.fitTopClearance = fitTopClearance
         canvas.updateSize(viewport: scroll.contentSize)
         canvas.refreshLayers()
@@ -36,6 +41,20 @@ struct EditorCanvas: NSViewRepresentable {
             }
         }
     }
+    var isModuleActive = true {
+        didSet {
+            guard isModuleActive != oldValue else { return }
+            if !isModuleActive {
+                privacyDisplayLink?.invalidate(); privacyDisplayLink = nil
+                inputTask?.cancel(); inputTask = nil
+                start = nil; original = nil; handleIndex = nil; candidateAnnotation = nil; cropCandidate = nil
+                lastPointerLocation = nil; hex = ""; session?.inspectPixel(at: nil)
+                if let tracking { removeTrackingArea(tracking); self.tracking = nil }
+            } else { updateTrackingAreas(); refreshLayers(); needsDisplay = true }
+        }
+    }
+    private var acceptsInput: Bool { isModuleActive && (session?.isActive ?? true) }
+    var hasPrivacyDisplayLink: Bool { privacyDisplayLink != nil }
     private(set) var cursorKind = CursorKind.arrow
     var cursorPublisher: (@MainActor (NSCursor) -> Void)?
     var isPixelInspectionEnabled = false {
@@ -66,6 +85,7 @@ struct EditorCanvas: NSViewRepresentable {
     private let privacyLayer = CALayer()
     private var privacyRegion: CGRect?
     private var privacyDisplayLink: CADisplayLink?
+    private var inputTask: Task<Void, Never>?
     private lazy var privacyDisplayProxy = EditorPrivacyDisplayProxy(view:self)
     private var privacyNeedsRefresh = false
     private var lastPrivacyAnnotations: [EditorAnnotation] = []
@@ -92,8 +112,8 @@ struct EditorCanvas: NSViewRepresentable {
     private var hex = ""
     private var tracking: NSTrackingArea?
     override var isFlipped: Bool { true }
-    override var acceptsFirstResponder: Bool { true }
-    override var undoManager: UndoManager? { session?.editUndoManager }
+    override var acceptsFirstResponder: Bool { acceptsInput }
+    override var undoManager: UndoManager? { acceptsInput ? session?.editUndoManager : nil }
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect); wantsLayer = true
         layer?.addSublayer(canvasShadowLayer); layer?.addSublayer(baseLayer); layer?.addSublayer(patchesLayer)
@@ -105,7 +125,7 @@ struct EditorCanvas: NSViewRepresentable {
         selectionLayer.fillColor = nil; handlesLayer.fillColor = CGColor(gray: 1, alpha: 1)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    isolated deinit { privacyDisplayLink?.invalidate() }
+    isolated deinit { privacyDisplayLink?.invalidate(); inputTask?.cancel() }
     var imageSize: CGSize {
         if let base = session?.displayBase { return CGSize(width: base.image.width, height: base.image.height) }
         return session?.document?.edits.crop.size ?? .zero
@@ -128,6 +148,7 @@ struct EditorCanvas: NSViewRepresentable {
         return CGRect(x: imageOrigin.x + (rect.minX - crop.minX + padding), y: imageOrigin.y + (rect.minY - crop.minY + padding), width: rect.width, height: rect.height)
     }
     func updateSize(viewport: CGSize) {
+        guard isModuleActive else { return }
         session?.reportBackingScale(window?.backingScaleFactor ?? 1)
         (enclosingScrollView as? EditorScrollNSView)?.synchronize(viewport: viewport)
     }
@@ -153,7 +174,7 @@ struct EditorCanvas: NSViewRepresentable {
         return values
     }
     func refreshLayers(renderPrivacy: Bool = false) {
-        guard let session, let document = session.document, let base = session.displayBase else { return }
+        guard isModuleActive, let session, let document = session.document, let base = session.displayBase else { return }
         if canvasDocumentID != document.id {
             canvasDocumentID = document.id; start = nil; original = nil; handleIndex = nil; candidateAnnotation = nil; cropCandidate = nil
         }
@@ -265,14 +286,14 @@ struct EditorCanvas: NSViewRepresentable {
         refreshCursorRouting()
     }
     private func startPrivacyDisplayLink() {
-        guard privacyDisplayLink == nil, window?.isVisible == true, !isHiddenOrHasHiddenAncestor else { return }
+        guard acceptsInput, privacyDisplayLink == nil, window?.isVisible == true, !isHiddenOrHasHiddenAncestor else { return }
         let link = displayLink(target:privacyDisplayProxy,selector:#selector(EditorPrivacyDisplayProxy.tick(_:)))
         let fps = Float(window?.screen?.maximumFramesPerSecond ?? 60)
         link.preferredFrameRateRange = CAFrameRateRange(minimum:fps,maximum:fps,preferred:fps)
         link.add(to:.main,forMode:.common); privacyDisplayLink = link
     }
     func renderPrivacyDisplayFrame() {
-        guard privacyNeedsRefresh else { return }
+        guard acceptsInput, privacyNeedsRefresh else { return }
         privacyDisplayFrames += 1; refreshLayers(renderPrivacy:true)
     }
     func handlePoints(for annotation: EditorAnnotation) -> [CGPoint] {
@@ -324,6 +345,7 @@ struct EditorCanvas: NSViewRepresentable {
         return annotation
     }
     override func mouseDown(with event: NSEvent) {
+        guard acceptsInput else { return }
         lastPointerLocation = convert(event.locationInWindow,from:nil)
         defer { refreshCursorRouting(force:true) }
         window?.makeFirstResponder(self)
@@ -345,6 +367,7 @@ struct EditorCanvas: NSViewRepresentable {
         refreshLayers()
     }
     override func mouseDragged(with event: NSEvent) {
+        guard acceptsInput else { return }
         lastPointerLocation = convert(event.locationInWindow,from:nil)
         guard let session, let document = session.document, let start, let point = sourcePoint(convert(event.locationInWindow, from: nil)) else { return }
         if var original {
@@ -377,6 +400,7 @@ struct EditorCanvas: NSViewRepresentable {
         refreshLayers(); needsDisplay = true
     }
     override func mouseUp(with event: NSEvent) {
+        guard acceptsInput else { return }
         guard let session, let start else { return }
         mouseDragged(with: event)
         if let original, let candidateAnnotation, candidateAnnotation.valid, original != candidateAnnotation {
@@ -394,6 +418,7 @@ struct EditorCanvas: NSViewRepresentable {
     func cancelGesture() { start = nil; original = nil; handleIndex = nil; candidateAnnotation = nil; cropCandidate = nil; refreshLayers(); needsDisplay = true }
     override func updateTrackingAreas() {
         super.updateTrackingAreas(); if let tracking { removeTrackingArea(tracking) }
+        guard acceptsInput else { tracking = nil; return }
         let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .activeAlways, .inVisibleRect], owner: self); addTrackingArea(area); tracking = area
     }
     private var toolCursor: CursorKind {
@@ -424,6 +449,7 @@ struct EditorCanvas: NSViewRepresentable {
         return hitAnnotation(point) == nil ? toolCursor : .openHand
     }
     private func refreshCursorRouting(force:Bool = false) {
+        guard acceptsInput else { return }
         let value = CursorConfiguration(tool:session?.tool ?? .select,selectedID:session?.selectedID,annotations:liveAnnotations,zoom:effectiveZoom,origin:imageOrigin,visible:visibleRect,dragging:start != nil,moving:original != nil,handle:handleIndex)
         guard force || value != cursorConfiguration else { return }
         cursorConfiguration = value; window?.invalidateCursorRects(for:self)
@@ -431,17 +457,20 @@ struct EditorCanvas: NSViewRepresentable {
     }
     override func resetCursorRects() {
         super.resetCursorRects()
+        guard acceptsInput else { return }
         addCursorRect(visibleRect,cursor:.arrow)
         let image = CGRect(origin:imageOrigin,size:imageSize).intersection(visibleRect)
         if !image.isNull && !image.isEmpty { addCursorRect(image,cursor:(lastPointerLocation.map { cursor(at:$0) } ?? toolCursor).native) }
     }
     override func cursorUpdate(with event:NSEvent) {
+        guard acceptsInput else { return }
         let location = convert(event.locationInWindow,from:nil); lastPointerLocation = location
         refreshCursorRouting()
         publishCursor(cursor(at:location))
     }
     override func mouseEntered(with event:NSEvent) { mouseMoved(with:event) }
     override func mouseMoved(with event: NSEvent) {
+        guard acceptsInput else { return }
         let location = convert(event.locationInWindow, from: nil); lastPointerLocation = location
         refreshCursorRouting()
         publishCursor(cursor(at:location))
@@ -450,20 +479,26 @@ struct EditorCanvas: NSViewRepresentable {
         needsDisplay = true
     }
     override func mouseExited(with event: NSEvent) { lastPointerLocation = nil; hex = ""; session?.inspectPixel(at:nil); publishCursor(.arrow); needsDisplay = true }
-    @objc func undo(_ sender: Any?) { cancelGesture(); session?.undo(); refreshLayers() }
-    @objc func redo(_ sender: Any?) { cancelGesture(); session?.redo(); refreshLayers() }
+    @objc func undo(_ sender: Any?) { guard acceptsInput else { return }; cancelGesture(); session?.undo(); refreshLayers() }
+    @objc func redo(_ sender: Any?) { guard acceptsInput else { return }; cancelGesture(); session?.redo(); refreshLayers() }
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard acceptsInput else { return false }
         if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "z" {
             event.modifierFlags.contains(.shift) ? redo(nil) : undo(nil); return true
         }
         return super.performKeyEquivalent(with: event)
     }
     override func keyDown(with event: NSEvent) {
+        guard acceptsInput else { return }
         guard let session else { return }
         let key = event.charactersIgnoringModifiers?.lowercased() ?? "", command = event.modifierFlags.contains(.command), shift = event.modifierFlags.contains(.shift)
         if command && key == "z" { shift ? redo(nil) : undo(nil); return }
         if command && shift && key == "c", let hex = session.pixelHex { session.copyHex(hex); return }
-        if command && key == "c" { Task { await session.copy() }; return }
+        if command && key == "c" {
+            inputTask?.cancel()
+            inputTask = Task { guard acceptsInput, !Task.isCancelled else { return }; _ = await session.copy() }
+            return
+        }
         if command && key == "s" { session.chooseExport(); return }
         if event.keyCode == 53 { cancelGesture(); session.selectedID = nil; session.tool = .select; refreshLayers(); return }
         if event.keyCode == 51 || event.keyCode == 117 { session.deleteSelected(); refreshLayers(); return }
@@ -500,12 +535,12 @@ struct EditorCanvas: NSViewRepresentable {
          NSAccessibilityCustomAction(name: String(localized: "Increase annotation height"), handler: { [weak self] in self?.resizeSelection(dx: 0, dy: 1) ?? false }),
          NSAccessibilityCustomAction(name: String(localized: "Decrease annotation height"), handler: { [weak self] in self?.resizeSelection(dx: 0, dy: -1) ?? false }),
          NSAccessibilityCustomAction(name: String(localized: "Select next annotation"), handler: { [weak self] in
-             guard let session = self?.session, let values = session.document?.edits.annotations, !values.isEmpty else { return false }
+             guard let session = self?.session, self?.acceptsInput == true, let values = session.document?.edits.annotations, !values.isEmpty else { return false }
              let current = values.firstIndex { $0.id == session.selectedID } ?? -1; session.selectedID = values[(current + 1) % values.count].id; self?.refreshLayers(); return true
          })]
     }
     private func selectionEdit(_ action: (EditorSession) -> Void) -> Bool {
-        guard let session, session.selectedAnnotation != nil else { return false }; let before = session.revision; action(session); refreshLayers(); return session.revision != before
+        guard acceptsInput, let session, session.selectedAnnotation != nil else { return false }; let before = session.revision; action(session); refreshLayers(); return session.revision != before
     }
     private func resizeSelection(dx: CGFloat, dy: CGFloat) -> Bool {
         selectionEdit { session in guard let item = session.selectedAnnotation else { return }; var rect = item.rect; rect.size.width = max(1, rect.width + dx); rect.size.height = max(1, rect.height + dy); session.setSelectionRect(rect) }
@@ -528,7 +563,7 @@ struct EditorCanvas: NSViewRepresentable {
         synchronize(viewport: contentSize)
     }
     func synchronize(viewport: CGSize) {
-        guard !synchronizing, let canvas = documentView as? EditorCanvasNSView,
+        guard !synchronizing, let canvas = documentView as? EditorCanvasNSView, canvas.isModuleActive,
               let session = canvas.session, canvas.imageSize.width > 0 else { return }
         synchronizing = true
         defer { synchronizing = false }
@@ -558,6 +593,7 @@ struct EditorCanvas: NSViewRepresentable {
         reportZoom(session)
     }
     override func magnify(with event: NSEvent) {
+        guard (documentView as? EditorCanvasNSView)?.isModuleActive == true else { return }
         super.magnify(with: event)
         guard let session = (documentView as? EditorCanvasNSView)?.session else { return }
         session.fitZoom = false
@@ -569,7 +605,7 @@ struct EditorCanvas: NSViewRepresentable {
         let generation = reportGeneration, value = magnification
         Task { @MainActor [weak self, weak session] in
             await Task.yield()
-            guard self?.reportGeneration == generation else { return }
+            guard self?.reportGeneration == generation, (self?.documentView as? EditorCanvasNSView)?.isModuleActive == true else { return }
             session?.reportCanvasZoom(value)
         }
     }

@@ -11,6 +11,7 @@ final class EditorSession {
             await EditorClipboardPublisher.copyPNG(image, pointSize: size, to: board, shouldPublish: guardPublication)
         }
     }
+    private(set) var isActive = true
     private(set) var document: EditorDocument?
     private(set) var revision = 0
     private(set) var preview: EditorRendered?
@@ -73,6 +74,7 @@ final class EditorSession {
     private var cleanEdits: EditorEdits?
     private var loadGeneration = 0
     private var nextStepNumber = 1
+    private var filePanel: NSSavePanel?
     private var renderTask: Task<Void, Never>?
     private var ocrTask: Task<Void, Never>?
     private let worker: EditorWorker
@@ -197,7 +199,7 @@ final class EditorSession {
         schedulePreview()
     }
     private func schedulePreview() {
-        guard let document else { return }
+        guard isActive, let document else { return }
         let key = displayKey(document.edits)
         if acceptedDisplayKey == key { renderTask?.cancel(); requestedDisplayKey = key; isRendering = false; return }
         guard requestedDisplayKey != key || !isRendering else { return }
@@ -388,13 +390,36 @@ final class EditorSession {
         do { try pins.pin(try await flattened()) } catch { self.error = error.localizedDescription }
     }
     func chooseImage() {
+        guard isActive else { return }
+        closeFilePanel()
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.png, .jpeg, .tiff]; panel.allowsMultipleSelection = false; panel.canChooseDirectories = false
-        panel.begin { [weak self] response in guard response == .OK, let url = panel.url else { return }; Task { @MainActor in await self?.open(url: url) } }
+        filePanel = panel
+        panel.begin { [weak self, weak panel] response in
+            Task { @MainActor in
+                guard let self, let panel, self.filePanel === panel else { return }
+                self.filePanel = nil
+                guard self.isActive, response == .OK, let url = panel.url else { return }
+                await self.open(url: url)
+            }
+        }
     }
     func chooseExport() {
-        guard document != nil else { return }
+        guard isActive, document != nil else { return }
+        closeFilePanel()
         let panel = NSSavePanel(); panel.allowedContentTypes = [.png]; panel.nameFieldStringValue = String(localized: "Edited screenshot.png")
-        panel.begin { [weak self] response in guard response == .OK, let url = panel.url else { return }; Task { @MainActor in do { try await self?.export(to: url) } catch { self?.error = error.localizedDescription } } }
+        filePanel = panel
+        panel.begin { [weak self, weak panel] response in
+            Task { @MainActor in
+                guard let self, let panel, self.filePanel === panel else { return }
+                self.filePanel = nil
+                guard self.isActive, response == .OK, let url = panel.url else { return }
+                do { try await self.export(to: url) } catch { self.error = error.localizedDescription }
+            }
+        }
+    }
+    private func closeFilePanel() {
+        let panel = filePanel; filePanel = nil
+        panel?.cancel(nil); panel?.orderOut(nil)
     }
     func inspectPixel(at sourcePoint: CGPoint?) {
         guard let sourcePoint, let document, let base = displayBase, document.edits.crop.contains(sourcePoint) else { pixelHex = nil; pixelLocation = nil; return }
@@ -415,9 +440,10 @@ final class EditorSession {
         let canPublish = claimPublication()
         guard !Task.isCancelled, canPublish() else { return }
         pasteboard.clearContents(); if !pasteboard.setString(hex, forType: .string) { error = String(localized: "The pixel color could not be copied.") } }
-    func resume() { if !isRendering { schedulePreview() } }
+    func resume() { isActive = true; if !isRendering { schedulePreview() } }
     func shutdown() { stop(); pins.closeAll(); temporaryExports.cleanup() }
     func stop() {
+        isActive = false; closeFilePanel()
         loadGeneration += 1; renderTask?.cancel(); ocrTask?.cancel(); isLoading = false; isRendering = false; isFindingText = false
         displayBase?.privacySource = nil; acceptedDisplayKey = nil; requestedDisplayKey = nil
     }

@@ -1,6 +1,25 @@
 import AVFoundation
 import SwiftUI
 
+/// Settings fixtures have no window lifecycle; their resources follow module activity alone.
+struct SettingsActivity: DynamicProperty {
+    @Environment(\.mainWindowModuleActive) private var moduleActive
+    @Environment(\.mainWindowLifecycle) private var lifecycle
+
+    @MainActor var isActive: Bool { Self.allows(moduleActive: moduleActive, windowVisible: lifecycle?.allowsLivePreview) }
+
+    static func allows(moduleActive: Bool, windowVisible: Bool?) -> Bool {
+        moduleActive && (windowVisible ?? true)
+    }
+
+    @MainActor static func poll(interval: Duration = .seconds(2), refresh: () -> Void) async {
+        while !Task.isCancelled {
+            refresh()
+            do { try await Task.sleep(for: interval) } catch { return }
+        }
+    }
+}
+
 // The Settings module's pages (K7, SPEC S5): the prototype's page — a display title and cards
 // of rows — in place of the old Settings window, with the same keys (settings-parity.md).
 
@@ -8,6 +27,7 @@ import SwiftUI
 struct SettingsModuleView: View {
     @Environment(\.appServices) private var services
     @Environment(\.mainWindowModel) private var windowModel
+    private var activity = SettingsActivity()
     @State private var store: SettingsStore?
 
     var body: some View {
@@ -21,7 +41,8 @@ struct SettingsModuleView: View {
                 Color.clear
             }
         }
-        .onAppear {
+        .onChange(of: activity.isActive, initial: true) { _, active in
+            guard active else { return }
             if store == nil, let services {
                 store = SettingsStore(defaults: services.defaults, eventTapEngine: services.eventTapEngine)
             } else {
@@ -29,18 +50,23 @@ struct SettingsModuleView: View {
             }
         }
         .onChange(of: services.map(ObjectIdentifier.init)) { _, _ in
-            store = services.map { SettingsStore(defaults: $0.defaults, eventTapEngine: $0.eventTapEngine) }
+            store = activity.isActive ? services.map { SettingsStore(defaults: $0.defaults, eventTapEngine: $0.eventTapEngine) } : nil
         }
     }
 }
 
 struct SettingsPageView: View {
+    @Environment(\.mainWindowModel) private var windowModel
+    private var activity = SettingsActivity()
     let group: SettingsGroup
     let store: SettingsStore
 
+    init(group: SettingsGroup, store: SettingsStore) { self.group = group; self.store = store }
+
     var body: some View {
         let _ = SettingsKeyRecorder.active?.recordStore(store)
-        switch group {
+        Group {
+            switch group {
         case .general: GeneralSettingsPage(store: store)
         case .screenshot: ScreenshotSettingsPage(store: store)
         case .recording: RecordingSettingsPage(store: store)
@@ -48,7 +74,10 @@ struct SettingsPageView: View {
         case .input: InputSettingsPage(store: store)
         case .library: LibrarySettingsPage(store: store)
         case .permissions: PermissionsSettingsPage(store: store)
+            }
         }
+        .background(PerformanceLayoutCompletionBridge(target: .settings(group),
+            active: activity.isActive, diagnostics: windowModel?.performanceDiagnostics))
     }
 }
 
@@ -146,10 +175,13 @@ struct ResolutionPicker: View {
 
 struct LibrarySettingsPage: View {
     @Bindable var store: SettingsStore
+    private var activity = SettingsActivity()
     @State private var confirmingClear = false
     @State private var cacheBytes: Int64?
     @State private var cacheError = false
     @State private var clearing = false
+
+    init(store: SettingsStore) { self.store = store }
 
     var body: some View {
         FormPage(title: SettingsGroup.library.title) {
@@ -196,7 +228,13 @@ struct LibrarySettingsPage: View {
                 }
             }
         }
-        .task { await refreshCacheSize() }
+        .task(id: activity.isActive) {
+            guard activity.isActive else { return }
+            await refreshCacheSize()
+        }
+        .onChange(of: activity.isActive) { _, active in
+            if !active { confirmingClear = false; cacheError = false }
+        }
         .alert(Text("Couldn't update copied captures", comment: "Cache error title"), isPresented: $cacheError) {
             Button { Task { await refreshCacheSize() } } label: { Text("Try again", comment: "Button: retry an operation") }
             Button(role: .cancel) { } label: { Text("Cancel", comment: "Button") }
@@ -207,9 +245,10 @@ struct LibrarySettingsPage: View {
         .confirmationDialog(Text("Move all copied captures to the Trash?", comment: "Confirm clearing the Library cache"),
                             isPresented: $confirmingClear) {
             Button(role: .destructive) {
+                guard activity.isActive else { return }
                 clearing = true
                 Task {
-                    do { try await LibraryCache.clear() } catch { cacheError = true }
+                    do { try await LibraryCache.clear() } catch { if activity.isActive { cacheError = true } }
                     await refreshCacheSize()
                     clearing = false
                 }
@@ -220,12 +259,13 @@ struct LibrarySettingsPage: View {
     }
 
     private func refreshCacheSize() async {
+        guard activity.isActive else { return }
         do {
             let bytes = try await LibraryCache.usedBytes()
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, activity.isActive else { return }
             cacheBytes = bytes
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, activity.isActive else { return }
             cacheBytes = nil
             cacheError = true
         }
@@ -294,10 +334,13 @@ enum LibraryCache {
 
 struct PermissionsSettingsPage: View {
     let store: SettingsStore
+    private var activity = SettingsActivity()
     @State private var screen = CGPreflightScreenCaptureAccess()
     @State private var accessibility = AccessibilityPermission.isTrusted()
     @State private var microphone = AVCaptureDevice.authorizationStatus(for: .audio)
     @State private var camera = AVCaptureDevice.authorizationStatus(for: .video)
+
+    init(store: SettingsStore) { self.store = store }
 
     static let cameraPaneURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")!
 
@@ -327,12 +370,12 @@ struct PermissionsSettingsPage: View {
                 }
             }
         }
-        .task {
+        .task(id: activity.isActive) {
+            guard activity.isActive else { return }
             // The grants change in System Settings, which sends nothing: look again every 2 s
             // while this page is on screen.
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(2))
-                guard !Task.isCancelled else { return }
+            await SettingsActivity.poll {
+                guard activity.isActive else { return }
                 screen = CGPreflightScreenCaptureAccess()
                 let trusted = AccessibilityPermission.isTrusted()
                 if trusted, !accessibility { store.reapplyTapBindings() }

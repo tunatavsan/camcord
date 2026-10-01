@@ -5,10 +5,13 @@ import SwiftUI
 
 struct InputSettingsPage: View {
     @Bindable var store: SettingsStore
+    private var activity = SettingsActivity()
     @State private var accessibilityTrusted = AccessibilityPermission.isTrusted()
     @State private var conflict: ShortcutConflict?
     /// The last accepted assignment per action, so a rejected duplicate can be put back.
     @State private var accepted: [KeyboardShortcuts.Name: KeyboardShortcuts.Shortcut] = [:]
+
+    init(store: SettingsStore) { self.store = store }
 
     /// A shortcut just recorded onto an action another one holds. It is reverted at once —
     /// nothing is taken over silently — and the sheet offers the swap.
@@ -68,17 +71,18 @@ struct InputSettingsPage: View {
                 }
             }
         }
-        .onAppear {
+        .onChange(of: activity.isActive, initial: true) { _, active in
+            guard active else { conflict = nil; return }
             accepted = ShortcutCatalogue.assignments()
             accessibilityTrusted = AccessibilityPermission.isTrusted()
         }
         .sheet(item: $conflict) { ConflictSheet(conflict: $0, dismiss: { conflict = nil }, takeOver: takeOver) }
-        .task {
+        .task(id: activity.isActive) {
+            guard activity.isActive else { return }
             // Follow grants and revocations while the page is visible. A new grant re-applies
             // the configured bindings; disappearing cancels the poll.
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(2))
-                guard !Task.isCancelled else { return }
+            await SettingsActivity.poll {
+                guard activity.isActive else { return }
                 let trusted = AccessibilityPermission.isTrusted()
                 if trusted, !accessibilityTrusted { store.reapplyTapBindings() }
                 accessibilityTrusted = trusted
@@ -108,6 +112,7 @@ struct InputSettingsPage: View {
     /// A duplicate is never taken silently: it is put back the moment it is seen, and the sheet
     /// asks whether the owner meant to move it off the other action.
     private func shortcutChanged(_ name: KeyboardShortcuts.Name, to shortcut: KeyboardShortcuts.Shortcut?) {
+        guard activity.isActive else { return }
         guard let shortcut else {
             accepted[name] = nil
             return
@@ -122,6 +127,7 @@ struct InputSettingsPage: View {
     }
 
     private func takeOver(_ conflict: ShortcutConflict) {
+        guard activity.isActive else { return }
         KeyboardShortcuts.setShortcut(nil, for: conflict.other)
         KeyboardShortcuts.setShortcut(conflict.shortcut, for: conflict.name)
         accepted[conflict.other] = nil

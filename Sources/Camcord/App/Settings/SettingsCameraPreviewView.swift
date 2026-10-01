@@ -1,12 +1,67 @@
 import SwiftUI
 
+/// A display claim belongs to one Settings surface, independently of capture ownership.
+@MainActor @Observable
+final class SettingsCameraPreviewResources {
+    private let monitor: CameraPreviewMonitor
+    private let owner = CameraPreviewMonitor.makeOwnerID("settings")
+    private(set) var isActive = false
+    @ObservationIgnored private var request: Task<Void, Never>?
+
+    init(monitor: CameraPreviewMonitor = .shared) { self.monitor = monitor }
+
+    func updateActivity(_ active: Bool) {
+        guard active != isActive else { return }
+        isActive = active
+        monitor.setVisible(active, owner: owner)
+        if !active {
+            request?.cancel()
+            request = nil
+            Task { await monitor.stopIfUnobserved() }
+        }
+    }
+
+    func togglePreview(options: CameraOptions) {
+        guard isActive, !monitor.recordingLocked else { return }
+        request?.cancel()
+        request = Task {
+            guard isActive, !Task.isCancelled else { return }
+            if monitor.isRunning { await monitor.stop() }
+            else {
+                await monitor.start(deviceID: options.resolved().deviceID, format: options.resolved().format,
+                                    requestPermission: true)
+            }
+            if !isActive || Task.isCancelled { await monitor.stopIfUnobserved() }
+        }
+    }
+
+    func settingsChanged(_ options: CameraOptions) {
+        guard isActive else { return }
+        request?.cancel()
+        request = Task {
+            guard isActive, !Task.isCancelled else { return }
+            await monitor.cameraSettingsChanged(options)
+            if !isActive || Task.isCancelled { await monitor.stopIfUnobserved() }
+        }
+    }
+
+    isolated deinit {
+        request?.cancel()
+        monitor.setVisible(false, owner: owner)
+        let monitor = monitor
+        Task { await monitor.stopIfUnobserved() }
+    }
+}
+
 /// A Settings-owned display subscription. Capture starts only on the Preview button;
 /// recording-owned capture is observed through the monitor and never stopped here.
 struct SettingsCameraPreviewView: View {
     let options: CameraOptions
     @ObservedObject private var monitor = CameraPreviewMonitor.shared
-    @State private var owner = CameraPreviewMonitor.makeOwnerID("settings")
-    @State private var visible = false
+    private var activity = SettingsActivity()
+    @State private var resources = SettingsCameraPreviewResources()
+
+    init(options: CameraOptions) { self.options = options }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
@@ -41,14 +96,8 @@ struct SettingsCameraPreviewView: View {
                     .font(Theme.Font.caption)
                 } else {
                     Button {
-                        Task {
-                            guard visible else { return }
-                            if monitor.isRunning { await monitor.stop() }
-                            else {
-                                await monitor.start(deviceID: options.resolved().deviceID, format: options.resolved().format,
-                                                    requestPermission: true)
-                            }
-                        }
+                        guard activity.isActive else { return }
+                        resources.togglePreview(options: options)
                     } label: {
                         if monitor.isRunning { Text("Stop preview", comment: "Button: stop the camera preview") }
                         else { Text("Preview", comment: "Button: start the camera preview") }
@@ -57,17 +106,13 @@ struct SettingsCameraPreviewView: View {
                 }
             }
         }
-        .onAppear { visible = true; monitor.setVisible(true, owner: owner) }
-        .onDisappear {
-            visible = false
-            monitor.setVisible(false, owner: owner)
-            Task { await monitor.stopIfUnobserved() }
-        }
+        .onChange(of: activity.isActive, initial: true) { _, active in resources.updateActivity(active) }
+        .onDisappear { resources.updateActivity(false) }
         .onChange(of: options.resolved().deviceID) { _, _ in
-            Task { if visible { await monitor.cameraSettingsChanged(options) } }
+            if activity.isActive { resources.settingsChanged(options) }
         }
         .onChange(of: options.resolved().format) { _, _ in
-            Task { if visible { await monitor.cameraSettingsChanged(options) } }
+            if activity.isActive { resources.settingsChanged(options) }
         }
     }
 

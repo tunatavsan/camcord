@@ -1,20 +1,73 @@
 import AVFoundation
 import SwiftUI
 
+/// The page's metadata subscription and explicit microphone rehearsal have one lifetime.
+@MainActor @Observable
+final class SettingsRecordingResources {
+    let inputs: SettingsDeviceInventory
+    private let monitor: MicrophoneMonitor
+    private(set) var owner = UUID()
+    private(set) var isActive = false
+    @ObservationIgnored private var request: Task<Void, Never>?
+
+    init(inputs: SettingsDeviceInventory = SettingsDeviceInventory(kind: .microphone),
+         monitor: MicrophoneMonitor = .shared) {
+        self.inputs = inputs
+        self.monitor = monitor
+    }
+
+    func updateActivity(_ active: Bool) {
+        guard active != isActive else { return }
+        isActive = active
+        if active { inputs.start() }
+        else { inputs.stop(); stopTest() }
+    }
+
+    func startTest(deviceID: String?, gainDB: Double) {
+        guard isActive else { return }
+        if request != nil { stopTest() }
+        let token = owner
+        request = Task {
+            guard isActive, owner == token, !Task.isCancelled else { return }
+            await monitor.start(owner: token, deviceID: deviceID, gainDB: gainDB)
+            if !isActive || owner != token || Task.isCancelled { await monitor.release(owner: token) }
+        }
+    }
+
+    func stopTest() {
+        request?.cancel()
+        request = nil
+        let retiringOwner = owner
+        owner = UUID()
+        Task { await monitor.release(owner: retiringOwner) }
+    }
+
+    isolated deinit {
+        request?.cancel()
+        inputs.stop()
+        let retiringOwner = owner
+        let monitor = monitor
+        Task { await monitor.release(owner: retiringOwner) }
+    }
+}
+
 // MARK: - Recording
 
 struct RecordingSettingsPage: View {
     @Bindable var store: SettingsStore
     @ObservedObject private var microphoneMonitor = MicrophoneMonitor.shared
-    @State private var inputs = SettingsDeviceInventory(kind: .microphone)
-    @State private var microphoneOwner = UUID()
-    @State private var microphoneTestVisible = false
+    private var activity = SettingsActivity()
+    @State private var resources = SettingsRecordingResources()
+    private var inputs: SettingsDeviceInventory { resources.inputs }
+    private var microphoneOwner: UUID { resources.owner }
     private var ownsMicrophoneTest: Bool { microphoneMonitor.owns(microphoneOwner) }
     private var microphoneTestRunning: Bool { ownsMicrophoneTest && microphoneMonitor.isRunning }
 
     private var settings: RecordingSettings { store.recording }
     private var locked: Bool { microphoneMonitor.recordingLocked }
     private var folder: String { settings.outputDirectoryPath ?? RecordingSettings.defaultDirectoryPath() }
+
+    init(store: SettingsStore) { self.store = store }
 
     var body: some View {
         FormPage(title: SettingsGroup.recording.title) {
@@ -34,20 +87,20 @@ struct RecordingSettingsPage: View {
             focus
             files
         }
-        .onAppear { microphoneTestVisible = true; inputs.start() }
-        .onDisappear { microphoneTestVisible = false; inputs.stop(); stopOwnedTest() }
+        .onChange(of: activity.isActive, initial: true) { _, active in resources.updateActivity(active) }
+        .onDisappear { resources.updateActivity(false) }
         .onChange(of: settings.microphoneDeviceID) { _, _ in stopOwnedTest() }
         .onChange(of: settings.microphone) { _, on in if !on { stopOwnedTest() } }
         .onChange(of: inputs.snapshot) { _, _ in
             if inputs.missing(settings.microphoneDeviceID) { stopOwnedTest() }
         }
-        .onChange(of: settings.microphoneGainDB) { _, gain in microphoneMonitor.updateGain(gain, owner: microphoneOwner) }
+        .onChange(of: settings.microphoneGainDB) { _, gain in
+            if activity.isActive { microphoneMonitor.updateGain(gain, owner: microphoneOwner) }
+        }
     }
 
     private func stopOwnedTest() {
-        let retiringOwner = microphoneOwner
-        microphoneOwner = UUID()
-        Task { await microphoneMonitor.release(owner: retiringOwner) }
+        resources.stopTest()
     }
 
     // MARK: Quality
@@ -199,15 +252,11 @@ struct RecordingSettingsPage: View {
                             AudioLevelMeter(levels: microphoneMonitor.levels).frame(width: 120)
                         }
                         Button {
+                            guard activity.isActive else { return }
                             if ownsMicrophoneTest {
                                 stopOwnedTest()
                             } else {
-                                let owner = microphoneOwner
-                                Task {
-                                    guard microphoneTestVisible, microphoneOwner == owner else { return }
-                                    await microphoneMonitor.start(owner: owner, deviceID: settings.microphoneDeviceID,
-                                                                  gainDB: settings.microphoneGainDB)
-                                }
+                                resources.startTest(deviceID: settings.microphoneDeviceID, gainDB: settings.microphoneGainDB)
                             }
                         } label: {
                             ownsMicrophoneTest
@@ -344,6 +393,7 @@ struct RecordingSettingsPage: View {
 
 struct CameraSettingsPage: View {
     @Bindable var store: SettingsStore
+    private var activity = SettingsActivity()
     @ObservedObject private var cameraMonitor = CameraPreviewMonitor.shared
     @State private var inputs = SettingsDeviceInventory(kind: .camera)
 
@@ -351,6 +401,8 @@ struct CameraSettingsPage: View {
 
     private var camera: CameraOptions { store.recording.camera }
     private var locked: Bool { cameraMonitor.recordingLocked }
+
+    init(store: SettingsStore) { self.store = store }
 
     var body: some View {
         FormPage(title: SettingsGroup.camera.title) {
@@ -425,7 +477,9 @@ struct CameraSettingsPage: View {
                 }
             }
         }
-        .onAppear { inputs.start() }
+        .onChange(of: activity.isActive, initial: true) { _, active in
+            if active { inputs.start() } else { inputs.stop() }
+        }
         .onDisappear { inputs.stop() }
     }
 

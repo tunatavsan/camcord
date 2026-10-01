@@ -13,7 +13,8 @@ struct LibraryModuleView: View {
 struct LibraryView: View {
     @Bindable var store: LibraryStore
     @Environment(\.mainWindowLifecycle) private var lifecycle
-    @State private var visibilityToken: UUID?
+    @Environment(\.mainWindowModuleActive) private var moduleActive
+    @State private var visibility = LibraryVisibilityLease()
     @State private var quickLookURL: URL?
     @State private var renameID: String?
     @State private var renameName = ""
@@ -22,10 +23,12 @@ struct LibraryView: View {
     @State private var navigationID: String?
     @FocusState private var hasFocus: Bool
 
+    private var isActive: Bool { moduleActive && (lifecycle?.allowsLivePreview ?? true) }
+
     private var inspectorPresentation: Binding<Bool> {
-        Binding(get: { !store.items.isEmpty && store.showsInspector }, set: { presented in
+        Binding(get: { isActive && !store.items.isEmpty && store.showsInspector }, set: { presented in
             // An automatic empty-state dismissal must preserve the user's inspector intent.
-            guard !store.items.isEmpty else { return }
+            guard isActive, !store.items.isEmpty else { return }
             store.showsInspector = presented
         })
     }
@@ -49,16 +52,19 @@ struct LibraryView: View {
         .dragContainer(for: URL.self, itemID: \.self) { (urls: [URL]) in urls }
         .dragContainerSelection(store.selectedItems.map(\.url))
         .dragConfiguration(DragConfiguration(allowMove: false, allowDelete: false))
-        .onChange(of: lifecycle?.allowsLivePreview, initial: true) { _, visible in
-            if visible == true, visibilityToken == nil { visibilityToken = store.acquireVisibility() }
-            if visible != true, let token = visibilityToken { store.releaseVisibility(token); visibilityToken = nil }
+        .onChange(of: isActive, initial: true) { _, active in
+            if active { visibility.acquire(store) }
+            else { suspend() }
         }
-        .onDisappear { if let token = visibilityToken { store.releaseVisibility(token); visibilityToken = nil } }
+        .onDisappear { suspend() }
+        .disabled(!isActive)
+        .allowsHitTesting(isActive)
+        .accessibilityHidden(!isActive)
         .focusable().focused($hasFocus)
-        .onKeyPress(.space) { preview(); return .handled }
-        .onKeyPress(.return) { beginRename(); return .handled }
+        .onKeyPress(.space) { guard isActive else { return .ignored }; preview(); return .handled }
+        .onKeyPress(.return) { guard isActive else { return .ignored }; beginRename(); return .handled }
         .onDeleteCommand { requestTrash() }
-        .onExitCommand { quickLookURL = nil; store.selection.removeAll() }
+        .onExitCommand { guard isActive else { return }; quickLookURL = nil; store.selection.removeAll() }
         .onMoveCommand { direction in moveSelection(direction) }
         .quickLookPreview($quickLookURL, in: store.selectedItems.map(\.url))
         .inspector(isPresented: inspectorPresentation) {
@@ -66,35 +72,36 @@ struct LibraryView: View {
                                  copy: copySelection, reveal: revealSelection, rename: beginRename, trash: requestTrash)
                 .inspectorColumnWidth(Theme.Library.inspectorWidth)
         }
-        .sheet(isPresented: Binding(get: { renameID != nil }, set: { if !$0 { renameID = nil } })) { renameSheet }
-        .confirmationDialog("Move selected captures to Trash?", isPresented: $confirmsTrash, titleVisibility: .visible) {
+        .sheet(isPresented: Binding(get: { isActive && renameID != nil }, set: { if isActive && !$0 { renameID = nil } })) { renameSheet }
+        .confirmationDialog("Move selected captures to Trash?", isPresented: Binding(get: { isActive && confirmsTrash }, set: { if isActive { confirmsTrash = $0 } }), titleVisibility: .visible) {
             Button("Move to Trash", role: .destructive) {
+                guard isActive else { return }
                 let ids = store.selection
                 Task { do { try await store.delete(ids) } catch { store.issue = error.localizedDescription } }
             }
             Button("Cancel", role: .cancel) { }
         } message: { Text("You can restore these files from the Trash.") }
-        .alert("Library action failed", isPresented: Binding(get: { store.issue != nil }, set: { if !$0 { store.issue = nil } })) {
+        .alert("Library action failed", isPresented: Binding(get: { isActive && store.issue != nil }, set: { if isActive && !$0 { store.issue = nil } })) {
             Button("OK") { store.issue = nil }
         } message: { Text(verbatim: store.issue ?? "") }
         .dropDestination(for: URL.self) { urls, _ in
-            guard let url = urls.first else { return false }
+            guard isActive, let url = urls.first else { return false }
             guard store.onOpenScreenshot != nil else {
                 store.issue = String(localized: "The screenshot editor is not available yet. Use Quick Look to preview this capture.")
                 return false
             }
-            Task { await store.openDroppedImage(url) }
+            visibility.perform { await store.openDroppedImage(url) }
             return true
         }
         .background {
-            VStack {
-                Button("Copy") { Task { await store.copySelection() } }.keyboardShortcut("c", modifiers: .command)
-                Button("Select all") { store.selection = Set(store.filteredItems.map(\.id)) }.keyboardShortcut("a", modifiers: .command)
-                Button("Open capture") { if let item = store.selectedItems.first { Task { await store.open(item) } } }
+            if isActive { VStack {
+                Button("Copy", action: copySelection).keyboardShortcut("c", modifiers: .command)
+                Button("Select all") { guard isActive else { return }; store.selection = Set(store.filteredItems.map(\.id)) }.keyboardShortcut("a", modifiers: .command)
+                Button("Open capture") { guard isActive else { return }; if let item = store.selectedItems.first { visibility.perform { await store.open(item) } } }
                     .keyboardShortcut("o", modifiers: .command)
-            }.hidden()
+            }.hidden() }
         }
-        .task { await store.enforceRetention() }
+        .task(id: isActive) { guard isActive else { return }; await store.enforceRetention() }
     }
     private var heading: some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) {
@@ -111,15 +118,15 @@ struct LibraryView: View {
 
     private var headingControls: some View {
         HStack(spacing: Theme.Space.m) {
-            Button { store.usesGrid.toggle() } label: {
+            Button { guard isActive else { return }; store.usesGrid.toggle() } label: {
                 Image(systemName: store.usesGrid ? "list.bullet" : "square.grid.2x2")
             }.help(Text(store.usesGrid ? "List view" : "Grid view"))
                 .accessibilityLabel(Text(store.usesGrid ? "List view" : "Grid view"))
-            Button { store.showsInspector.toggle() } label: { Image(systemName: "sidebar.right") }
+            Button { guard isActive else { return }; store.showsInspector.toggle() } label: { Image(systemName: "sidebar.right") }
                 .disabled(store.items.isEmpty)
                 .help(Text(store.items.isEmpty ? "Select a capture to see its details." : "Show inspector"))
                 .accessibilityLabel(Text("Show inspector"))
-            Button { Task { await store.refresh() } } label: { Image(systemName: "arrow.clockwise") }
+            Button { guard isActive else { return }; visibility.perform { await store.refresh() } } label: { Image(systemName: "arrow.clockwise") }
                 .help(Text("Refresh Library")).accessibilityLabel(Text("Refresh Library"))
         }.buttonStyle(.borderless)
     }
@@ -129,14 +136,14 @@ struct LibraryView: View {
         } else if store.items.isEmpty && store.loadingIssue != nil {
             ContentUnavailableView {
                 Label("Couldn't load captures", systemImage: "exclamationmark.triangle")
-            } actions: { Button("Try again") { Task { await store.refresh() } } }
+            } actions: { Button("Try again") { visibility.perform { await store.refresh() } } }
         } else if store.items.isEmpty {
             LibraryEmptyView()
         } else if store.filteredItems.isEmpty {
             ContentUnavailableView {
                 Label("No matching captures", systemImage: "magnifyingglass")
             } description: { Text("Try another search or filter.") }
-            actions: { Button("Clear filters") { store.search = ""; store.filter = nil } }
+            actions: { Button("Clear filters") { guard isActive else { return }; store.search = ""; store.filter = nil } }
         } else {
             if store.usesGrid { grid } else { list }
 
@@ -175,7 +182,7 @@ struct LibraryView: View {
                             Text(item.createdAt, style: .time).font(Theme.Font.dataSmall)
                             Text(verbatim: ByteCountFormatter.string(fromByteCount: item.byteSize, countStyle: .file)).font(Theme.Font.dataSmall).frame(width: 75, alignment: .trailing)
                         }.tag(item.id).contextMenu { actions(item) }
-                            .onTapGesture(count: 2) { Task { await store.open(item) } }
+                            .onTapGesture(count: 2) { guard isActive else { return }; visibility.perform { await store.open(item) } }
                             .draggable(containerItemID: item.url)
                     }
                 } header: { Text(verbatim: groupTitle(group.date)) }
@@ -187,12 +194,13 @@ struct LibraryView: View {
         return LibraryCaptureTile(item: item, thumbnails: store.thumbnails,
                                   isSelected: store.selection.contains(item.id),
                                   isFresh: item.id == store.items.first?.id && age >= 0 && age < Theme.Library.freshSeconds,
-                                  select: { select(item.id); hasFocus = true },
-                                  open: { Task { await store.open(item) } },
-                                  preview: { store.selection = [item.id]; preview() },
+                                  select: { guard isActive else { return }; select(item.id); hasFocus = true },
+                                  open: { guard isActive else { return }; visibility.perform { await store.open(item) } },
+                                  preview: { guard isActive else { return }; store.selection = [item.id]; preview() },
                                   actions: { actions(item) })
     }
     private func select(_ id: String) {
+        guard isActive else { return }
         let modifiers = NSApp.currentEvent?.modifierFlags ?? []
         if modifiers.contains(.shift), let anchor,
            let start = store.filteredItems.firstIndex(where: { $0.id == anchor }),
@@ -206,6 +214,7 @@ struct LibraryView: View {
         navigationID = id
     }
     private func moveSelection(_ direction: MoveCommandDirection) {
+        guard isActive else { return }
         let items = store.filteredItems
         guard !items.isEmpty else { return }
         let index = items.firstIndex { $0.id == navigationID } ?? items.firstIndex { store.selection.contains($0.id) }
@@ -214,22 +223,22 @@ struct LibraryView: View {
         select(items[next].id)
     }
     @ViewBuilder private func actions(_ item: CaptureItem) -> some View {
-        Button("Open capture") { store.selection = [item.id]; Task { await store.open(item) } }
-        Button("Quick Look") { if !store.selection.contains(item.id) { store.selection = [item.id] }; preview() }
+        Button("Open capture") { guard isActive else { return }; store.selection = [item.id]; visibility.perform { await store.open(item) } }
+        Button("Quick Look") { guard isActive else { return }; if !store.selection.contains(item.id) { store.selection = [item.id] }; preview() }
         Divider()
-        Button("Copy") { if !store.selection.contains(item.id) { store.selection = [item.id] }; Task { await store.copySelection() } }
-        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(store.selection.contains(item.id) ? store.selectedItems.map(\.url) : [item.url]) }
-        Button("Rename…") { store.selection = [item.id]; beginRename() }
+        Button("Copy") { guard isActive else { return }; if !store.selection.contains(item.id) { store.selection = [item.id] }; visibility.perform { await store.copySelection() } }
+        Button("Show in Finder") { guard isActive else { return }; NSWorkspace.shared.activateFileViewerSelecting(store.selection.contains(item.id) ? store.selectedItems.map(\.url) : [item.url]) }
+        Button("Rename…") { guard isActive else { return }; store.selection = [item.id]; beginRename() }
         ShareLink(items: store.selection.contains(item.id) ? store.selectedItems.map(\.url) : [item.url]) { Text("Share") }
         Divider()
-        Button("Move to Trash", role: .destructive) { if !store.selection.contains(item.id) { store.selection = [item.id] }; requestTrash() }
+        Button("Move to Trash", role: .destructive) { guard isActive else { return }; if !store.selection.contains(item.id) { store.selection = [item.id] }; requestTrash() }
     }
-    private func copySelection() { Task { await store.copySelection() } }
-    private func revealSelection() { NSWorkspace.shared.activateFileViewerSelecting(store.selectedItems.map(\.url)) }
-    private func preview() { quickLookURL = store.selectedItems.first?.url }
-    private func requestTrash() { if !store.selection.isEmpty { confirmsTrash = true } }
+    private func copySelection() { guard isActive else { return }; visibility.perform { await store.copySelection() } }
+    private func revealSelection() { guard isActive else { return }; NSWorkspace.shared.activateFileViewerSelecting(store.selectedItems.map(\.url)) }
+    private func preview() { guard isActive else { return }; quickLookURL = store.selectedItems.first?.url }
+    private func requestTrash() { guard isActive else { return }; if !store.selection.isEmpty { confirmsTrash = true } }
     private func beginRename() {
-        guard store.selection.count == 1, let item = store.selectedItems.first else { return }
+        guard isActive, store.selection.count == 1, let item = store.selectedItems.first else { return }
         renameName = item.title; renameID = item.id
     }
     private var renameSheet: some View {
@@ -240,8 +249,11 @@ struct LibraryView: View {
                 Button("Rename") { finishRename() }.keyboardShortcut(.defaultAction).disabled(!LibraryFiles.validName(renameName)) }
         }.padding(Theme.Space.xl).frame(width: 360)
     }
+    private func suspend() {
+        visibility.release(); quickLookURL = nil; hasFocus = false
+    }
     private func finishRename() {
-        guard let id = renameID else { return }
+        guard isActive, let id = renameID else { return }
         let name = renameName; renameID = nil
         Task { do { try await store.rename(id, to: name) } catch { store.issue = error.localizedDescription } }
     }
@@ -251,4 +263,37 @@ extension CaptureItem.Kind {
     var label: LocalizedStringKey {
         switch self { case .screenshot: "Screenshot"; case .scrollCapture: "Scroll capture"; case .recording: "Recording" }
     }
+}
+
+/// One retained surface owns one subscription. An older cancelled task can only release
+/// its own token, even when that surface was reactivated before its task finished.
+@MainActor final class LibraryVisibilityLease {
+    private weak var store: LibraryStore?
+    private(set) var token: UUID?
+    private var actionTasks: [UUID: Task<Void, Never>] = [:]
+    @discardableResult func perform(_ action: @escaping @MainActor () async -> Void) -> Task<Void, Never>? {
+        guard let token else { return nil }
+        let id = UUID()
+        actionTasks[id] = Task { [weak self] in
+            defer { self?.actionTasks.removeValue(forKey: id) }
+            guard !Task.isCancelled, self?.token == token else { return }
+            await action()
+        }
+        return actionTasks[id]
+    }
+    @discardableResult func acquire(_ store: LibraryStore) -> UUID {
+        if self.store === store, let token { return token }
+        release()
+        self.store = store
+        let token = store.acquireVisibility(); self.token = token
+        return token
+    }
+    func release(ifCurrent expected: UUID? = nil) {
+        if let expected, token != expected { return }
+        guard let token else { return }
+        for task in actionTasks.values { task.cancel() }; actionTasks.removeAll()
+        self.token = nil
+        store?.releaseVisibility(token); store = nil
+    }
+    isolated deinit { for task in actionTasks.values { task.cancel() }; if let token { store?.releaseVisibility(token) } }
 }

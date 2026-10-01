@@ -381,6 +381,57 @@ struct LibraryStoreTests {
         #expect(await thumbnails.cachedCount == 0)
         #expect(await thumbnails.cachedBytes == 0)
     }
+    @Test("Retained visibility is idempotent and cancelled older work cannot release the resumed subscription")
+    func retainedVisibilityLease() async throws {
+        let f = try LibraryFixture(); defer { f.cleanup() }
+        _ = try f.png("retained.png")
+        let store = f.store(); await store.refresh()
+        let item = try #require(store.items.first)
+        store.selection = [item.id]; store.search = "retained"; store.usesGrid = false; store.showsInspector = true
+        let lease = LibraryVisibilityLease(), gate = ScanGate(first: [], second: [])
+        let first = lease.acquire(store)
+        #expect(lease.acquire(store) == first && store.watcherCount == 2)
+        var published = false
+        let request = try #require(lease.perform {
+            _ = await gate.scan()
+            if !Task.isCancelled { published = true }
+            lease.release(ifCurrent: first)
+        })
+        await gate.waitForFirst()
+        lease.release(); lease.release()
+        #expect(store.watcherCount == 0 && lease.token == nil)
+        #expect(lease.perform { published = true } == nil)
+        let second = lease.acquire(store)
+        #expect(second != first && store.watcherCount == 2)
+        await gate.release(); await request.value
+        #expect(!published && lease.token == second && store.watcherCount == 2)
+        #expect(store.selection == [item.id] && store.search == "retained" && !store.usesGrid && store.showsInspector)
+        lease.release(); #expect(store.watcherCount == 0)
+    }
+
+    @Test("Empty retained Editor cancels its old latest-open and releases only its owned Library lease")
+    func retainedEditorAutoOpen() async throws {
+        let f = try LibraryFixture(); defer { f.cleanup() }
+        let foreignLease = LibraryVisibilityLease(), activity = EditorWorkspaceActivity(), session = EditorSession()
+        let gate = ScanGate(first: [], second: [])
+        let store = LibraryStore(defaults: f.defaults, roots: [.init(url: f.saved, origin: .savedFile)],
+                                 cacheDirectory: f.cache, scanner: { _ in await gate.scan() })
+        foreignLease.acquire(store)
+        var opened = 0
+        activity.update(active: true, session: session, library: store) { opened += 1 }
+        await gate.waitForFirst()
+        activity.update(active: false, session: session)
+        #expect(store.watcherCount == 2 && !session.isActive)
+        activity.update(active: true, session: session, library: store) { opened += 1 }
+        await activity.waitForAutoOpen()
+        #expect(opened == 1)
+        await gate.release()
+        activity.update(active: false, session: session)
+        #expect(store.watcherCount == 2)
+        foreignLease.release(); #expect(store.watcherCount == 0)
+        #expect(session.document == nil)
+    }
+
     @Test("retention checked arithmetic rejects overflow and handles negative input")
     func retentionArithmetic() {
         let now = Date()

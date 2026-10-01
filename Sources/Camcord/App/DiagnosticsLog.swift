@@ -32,6 +32,12 @@ enum DiagnosticsLog {
         }
     }
 
+    /// Performance diagnostics accepts only fixed outcomes, numeric timing and static stack
+    /// symbols. The ordinary sink already rotates at 512 KiB, including during a long run.
+    static func appendPerformanceStall(generation: UInt64, elapsedNanoseconds: UInt64, outcome: String) {
+        append("performance runloop-stall generation=\(generation) elapsed_ms=\(Double(elapsedNanoseconds) / 1_000_000) outcome=\(outcome)")
+    }
+
     /// Serial-queue only. Opens once per process; a file over the bound starts empty.
     private static func open() -> FileHandle? {
         if opened { return handle }

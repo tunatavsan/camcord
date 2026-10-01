@@ -13,6 +13,51 @@ private actor MainWindowEditorDecodeGate {
     func resume() { work?.resume(); work = nil }
 }
 
+@MainActor private struct RetainedModuleTestShell: View {
+    @Bindable var model: MainWindowModel
+    var body: some View {
+        RetainedModuleStack(selection: model.selection, model: model) { RetainedModuleTestPage(id: $0) }
+    }
+}
+
+@MainActor private struct RetainedModuleTestPage: View {
+    let id: ModuleID
+    @State private var identity = UUID()
+    @State private var edits = 0
+    @Environment(\.mainWindowModuleActive) private var active
+    var body: some View {
+        RetainedModuleProbe(id: id, identity: identity, edits: edits, active: active) { edits += 1 }
+    }
+}
+
+@MainActor private struct RetainedModuleProbe: NSViewRepresentable {
+    let id: ModuleID
+    let identity: UUID
+    let edits: Int
+    let active: Bool
+    let edit: () -> Void
+    final class ProbeView: NSButton {
+        var module = ModuleID.library
+        var identity = UUID()
+        var edits = 0
+        var active = false
+        var resigns = 0
+        override var acceptsFirstResponder: Bool { true }
+        override func resignFirstResponder() -> Bool { resigns += 1; return super.resignFirstResponder() }
+        var edit: (() -> Void)?
+        @objc func changeValue() { edit?() }
+    }
+    func makeNSView(context: Context) -> ProbeView {
+        let view = ProbeView()
+        view.target = view; view.action = #selector(ProbeView.changeValue)
+        return view
+    }
+    func updateNSView(_ view: ProbeView, context: Context) {
+        view.module = id; view.identity = identity; view.edits = edits; view.active = active
+        view.edit = edit; view.isEnabled = context.environment.isEnabled
+    }
+}
+
 /// The main window's seam (K9) and its Dock behaviour (K10): the module registry, the
 /// persisted selection, and every Dock policy transition — pure or with an injected setter,
 /// so nothing here touches the real Dock.
@@ -25,6 +70,145 @@ struct MainWindowTests {
         let defaults = try #require(UserDefaults(suiteName: Self.suiteName))
         defaults.removePersistentDomain(forName: Self.suiteName)
         return defaults
+    }
+
+    private func moduleProbes(in view: NSView) -> [RetainedModuleProbe.ProbeView] {
+        (view as? RetainedModuleProbe.ProbeView).map { [$0] } ?? view.subviews.flatMap(moduleProbes)
+    }
+
+    private func settle(_ host: NSView, until predicate: () -> Bool) async throws {
+        for _ in 0..<100 {
+            host.layoutSubtreeIfNeeded()
+            if predicate() { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(predicate(), "The retained module tree did not reach the expected state")
+    }
+
+    @Test("visited modules retain view identity and local edits, inactive controls stop immediately")
+    func retainedModuleIdentity() async throws {
+        _ = NSApplication.shared
+        let defaults = try freshDefaults()
+        defer { defaults.removePersistentDomain(forName: Self.suiteName) }
+        let model = MainWindowModel(defaults: defaults)
+        let host = NSHostingView(rootView: RetainedModuleTestShell(model: model))
+        host.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        let window = offscreenWindow()
+        window.contentView = host
+        defer { window.contentView = nil }
+        try await settle(host) { moduleProbes(in: host).count == 1 }
+        let first = try #require(moduleProbes(in: host).first)
+        let identity = first.identity
+        first.changeValue()
+        try await settle(host) { first.edits == 1 }
+        for id in [ModuleID.studio, .edit, .settings, .studio, .library] {
+            model.select(id)
+            try await settle(host) {
+                let probes = moduleProbes(in: host)
+                return probes.filter(\.active).map(\.module) == [id]
+                    && probes.allSatisfy { $0.isEnabled == $0.active }
+            }
+        }
+        let probes = moduleProbes(in: host)
+        #expect(probes.count == 4)
+        #expect(Set(probes.map(\.module)) == Set(ModuleID.allCases))
+        let revisited = try #require(probes.first { $0.module == .library })
+        #expect(revisited === first)
+        #expect(revisited.identity == identity && revisited.edits == 1)
+        #expect(!window.isVisible && !window.isKeyWindow)
+        window.contentView = nil
+        let reopened = NSHostingView(rootView: RetainedModuleTestShell(model: model))
+        reopened.frame = host.frame
+        window.contentView = reopened
+        try await settle(reopened) { moduleProbes(in: reopened).count == 1 }
+        let fresh = try #require(moduleProbes(in: reopened).first)
+        #expect(fresh.identity != identity && fresh.edits == 0)
+    }
+
+    @Test("module selection clears the retained window responder without activating or touching another window")
+    func moduleSelectionFocus() async throws {
+        _ = NSApplication.shared
+        let defaults = try freshDefaults()
+        defer { defaults.removePersistentDomain(forName: Self.suiteName) }
+        let model = MainWindowModel(defaults: defaults), lifecycle = MainWindowLifecycle()
+        let host = NSHostingView(rootView: RetainedModuleTestShell(model: model)
+            .environment(\.mainWindowLifecycle, lifecycle))
+        host.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        let window = offscreenWindow(), other = offscreenWindow()
+        let otherField = NSTextField(frame: NSRect(x: 0, y: 0, width: 100, height: 30))
+        other.contentView = otherField
+        other.makeFirstResponder(otherField)
+        let otherResponder = other.firstResponder
+        window.fixtureVisible = true
+        lifecycle.update(window: window, temporarilyHidden: false)
+        window.contentView = host
+        defer { window.contentView = nil; other.contentView = nil }
+        try await settle(host) { moduleProbes(in: host).count == 1 }
+        let probe = try #require(moduleProbes(in: host).first)
+        #expect(window.makeFirstResponder(probe))
+        #expect(window.firstResponder === probe)
+        let active = NSApp.isActive
+        let priorResigns = probe.resigns
+        model.select(.settings)
+        try await settle(host) { window.firstResponder !== probe }
+        #expect(probe.resigns == priorResigns + 1)
+        #expect(NSApp.isActive == active)
+        #expect(other.firstResponder === otherResponder)
+        let settings = try #require(moduleProbes(in: host).first { $0.module == .settings })
+        #expect(window.makeFirstResponder(settings))
+        let settingsResigns = settings.resigns
+        window.fixtureVisible = false
+        lifecycle.update(window: nil, temporarilyHidden: false)
+        try await settle(host) { window.firstResponder !== settings }
+        #expect(settings.resigns == settingsResigns + 1)
+        #expect(other.firstResponder === otherResponder)
+        #expect(NSApp.isActive == active)
+        #expect(!window.isVisible && !window.isKeyWindow)
+    }
+
+    @Test("inactive windows retire detail recorders and preserve unrelated controls, including field editors")
+    func detailResponderVisibility() throws {
+        _ = NSApplication.shared
+        let window = offscreenWindow()
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        let marker = ModuleSelectionResponderBridge.SelectionView(selection: .settings, windowActive: true)
+        marker.frame = NSRect(x: 200, y: 0, width: 400, height: 400)
+        let recorder = RetainedModuleProbe.ProbeView(frame: NSRect(x: 240, y: 100, width: 100, height: 30))
+        final class EditingControl: NSTextField, NSTextViewDelegate {}
+        let sidebar = EditingControl(frame: NSRect(x: 20, y: 100, width: 100, height: 30))
+        root.addSubview(marker); root.addSubview(recorder); root.addSubview(sidebar)
+        window.contentView = root
+        defer { window.contentView = nil }
+        #expect(window.makeFirstResponder(recorder))
+        let resigns = recorder.resigns
+        ModuleSelectionResponderBridge.clearResponder(within: marker)
+        #expect(window.firstResponder !== recorder && recorder.resigns == resigns + 1)
+        #expect(window.makeFirstResponder(sidebar))
+        let fieldEditor = NSTextView(frame: marker.frame)
+        fieldEditor.isFieldEditor = true
+        fieldEditor.delegate = sidebar
+        root.addSubview(fieldEditor)
+        #expect(window.makeFirstResponder(fieldEditor))
+        ModuleSelectionResponderBridge.clearResponder(within: marker)
+        #expect(window.firstResponder === fieldEditor)
+        let detailField = EditingControl(frame: recorder.frame)
+        root.addSubview(detailField)
+        fieldEditor.delegate = detailField
+        ModuleSelectionResponderBridge.clearResponder(within: marker)
+        #expect(window.firstResponder !== fieldEditor)
+        #expect(!window.isVisible && !window.isKeyWindow)
+    }
+
+    @Test("Reduce Motion keeps the module fade and removes translation")
+    func moduleMotion() {
+        #expect(Theme.Motion.Duration.moduleSwitch == 0.20)
+        #expect(Theme.Motion.moduleOffset(active: true, reduceMotion: false) == 0)
+        #expect(Theme.Motion.moduleOffset(active: false, reduceMotion: false) == 8)
+        #expect(Theme.Motion.moduleOffset(active: false, reduceMotion: true) == 0)
+        let spring = Theme.Motion.interactionSpring(keyPath: "opacity", from: 0, to: 1)
+        #expect(Theme.Motion.interactionResponse == 0.35)
+        #expect(Theme.Motion.interactionDampingRatio == 0.85)
+        #expect(abs(spring.damping / (2 * sqrt(spring.mass * spring.stiffness)) - 0.85) < 0.000001)
     }
 
     @Test("the Dock policy for every mode, window open or closed")

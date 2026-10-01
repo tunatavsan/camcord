@@ -7,7 +7,16 @@ import SwiftUI
 @MainActor @Observable
 final class MainWindowModel {
     @ObservationIgnored let defaults: UserDefaults
+    @ObservationIgnored let performanceDiagnostics = NavigationPerformanceDiagnostics()
+    @ObservationIgnored var selectionWillChange: (() -> Void)?
     var selection: ModuleID {
+        willSet {
+            if newValue != selection {
+                performanceDiagnostics.request(.module(newValue))
+                if newValue == .settings { performanceDiagnostics.request(.settings(settingsGroup)) }
+                selectionWillChange?()
+            }
+        }
         didSet {
             guard selection != oldValue else { return }
             ModuleSelection.save(selection, to: defaults)
@@ -30,6 +39,11 @@ final class MainWindowModel {
 
     /// The Settings group on screen; while Settings is open the sidebar lists the groups (SPEC N3).
     var settingsGroup: SettingsGroup {
+        willSet {
+            if selection == .settings, newValue != settingsGroup {
+                performanceDiagnostics.request(.settings(newValue))
+            }
+        }
         didSet { defaults.set(settingsGroup.rawValue, forKey: SettingsGroup.defaultsKey) }
     }
 
@@ -53,7 +67,10 @@ final class MainWindowModel {
 /// resources only while `allowsLivePreview` is true; active recording has a separate owner.
 @MainActor @Observable
 final class MainWindowLifecycle {
-    private(set) var allowsLivePreview = false
+    @ObservationIgnored var willBecomeInactive: (() -> Void)?
+    private(set) var allowsLivePreview = false {
+        willSet { if allowsLivePreview && !newValue { willBecomeInactive?() } }
+    }
 
     func update(window: NSWindow?, temporarilyHidden: Bool) {
         allowsLivePreview = window?.isVisible == true && !temporarilyHidden
@@ -103,12 +120,9 @@ struct MainWindowView: View {
             }
             .navigationSplitViewColumnWidth(Theme.Navigation.sidebarWidth)
         } detail: {
-            ZStack {
-                module.makeView()
-                    .id(model.selection)
-                    .transition(.opacity)
+            RetainedModuleStack(selection: model.selection, model: model) { id in
+                if let module = ModuleRegistry.module(id) { module.makeView() }
             }
-            .animation(Theme.Motion.resolve(Theme.Motion.moduleSwitch, reduceMotion: reduceMotion), value: model.selection)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .windowBackdrop(.content)
             .navigationTitle(Text(module.title))
@@ -151,6 +165,135 @@ extension EnvironmentValues {
     /// The window's model, for modules that drive the window (Settings takes over the sidebar).
     @Entry var mainWindowModel: MainWindowModel?
     @Entry var mainWindowLifecycle: MainWindowLifecycle?
+    /// Mounted modules own visible UI work only while selected. Standalone views remain active.
+    @Entry var mainWindowModuleActive = true
+}
+
+/// Each visited module keeps its identity and local state until the window content is removed.
+struct RetainedModuleStack<Content: View>: View {
+    let selection: ModuleID
+    let model: MainWindowModel?
+    private let content: (ModuleID) -> Content
+    @State private var visited: Set<ModuleID>
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.mainWindowLifecycle) private var lifecycle
+
+    init(selection: ModuleID, model: MainWindowModel? = nil, @ViewBuilder content: @escaping (ModuleID) -> Content) {
+        self.selection = selection
+        self.model = model
+        self.content = content
+        _visited = State(initialValue: [selection])
+    }
+
+    private var mountedModules: [ModuleID] {
+        ModuleRegistry.all.map(\.id).filter { visited.contains($0) || $0 == selection }
+    }
+
+    var body: some View {
+        ZStack {
+            ForEach(mountedModules, id: \.self) { id in
+                let active = id == selection
+                content(id)
+                    .background(PerformanceLayoutCompletionBridge(target: .module(id),
+                        active: active && id != .settings, diagnostics: model?.performanceDiagnostics))
+                    .environment(\.mainWindowModuleActive, active)
+                    .disabled(!active)
+                    .allowsHitTesting(active)
+                    .accessibilityHidden(!active)
+                    .opacity(active ? 1 : 0)
+                    .offset(y: Theme.Motion.moduleOffset(active: active, reduceMotion: reduceMotion))
+                    .animation(Theme.Motion.moduleSwitch, value: active)
+                    .transition(.opacity.combined(with: .offset(y: Theme.Motion.moduleOffset(active: false, reduceMotion: reduceMotion))))
+            }
+        }
+        .animation(Theme.Motion.moduleSwitch, value: selection)
+        .onChange(of: selection) { _, id in visited.insert(id) }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(ModuleSelectionResponderBridge(selection: selection,
+            windowActive: lifecycle?.allowsLivePreview ?? true, model: model, lifecycle: lifecycle))
+    }
+}
+
+/// Clearing a responder belongs to this window alone and never activates the application.
+struct ModuleSelectionResponderBridge: NSViewRepresentable {
+    let selection: ModuleID
+    let windowActive: Bool
+    var model: MainWindowModel? = nil
+    var lifecycle: MainWindowLifecycle? = nil
+    func makeNSView(context: Context) -> SelectionView {
+        let view = SelectionView(selection: selection, windowActive: windowActive)
+        view.model = model; view.lifecycle = lifecycle
+        return view
+    }
+    func updateNSView(_ view: SelectionView, context: Context) {
+        let oldSelection = view.selection
+        let changed = oldSelection != selection || view.windowActive != windowActive
+        let retireFocus = oldSelection != selection || (view.windowActive && !windowActive)
+        view.selection = selection
+        view.windowActive = windowActive
+        if changed { view.focusGeneration &+= 1 }
+        if retireFocus { Self.scheduleRetirement(within: view, previousModule: oldSelection) }
+    }
+    private static func scheduleRetirement(within detail: SelectionView, previousModule: ModuleID) {
+        guard let window = detail.window, let responder = ownedResponder(within: detail) else { return }
+        if detail.pendingResponder !== responder {
+            detail.pendingResponder = responder
+            detail.pendingModule = previousModule
+        }
+        let generation = detail.focusGeneration
+        let owner = detail.pendingModule
+        // Resigning during a representable update reenters SwiftUI's focus graph.
+        Task { @MainActor [weak detail, weak window, weak responder] in
+            guard let detail, let window, let responder, detail.focusGeneration == generation else { return }
+            defer { detail.pendingResponder = nil; detail.pendingModule = nil }
+            guard window.firstResponder === responder,
+                  !detail.windowActive || detail.selection != owner else { return }
+            window.makeFirstResponder(nil)
+        }
+    }
+    static func clearResponder(within detail: NSView) {
+        guard let window = detail.window, ownedResponder(within: detail) != nil else { return }
+        window.makeFirstResponder(nil)
+    }
+    private static func ownedResponder(within detail: NSView) -> NSView? {
+        guard let window = detail.window, let responder = window.firstResponder as? NSView else { return nil }
+        // A field editor belongs to the control it edits, even if AppKit hosts it elsewhere.
+        let control: NSView
+        if let editor = responder as? NSTextView, editor.isFieldEditor, let delegate = editor.delegate as? NSView {
+            control = delegate
+        } else { control = responder }
+        guard control.window === window else { return nil }
+        let bounds = detail.convert(detail.bounds, to: nil)
+        let controlBounds = control.convert(control.bounds, to: nil)
+        guard !bounds.isEmpty, bounds.contains(NSPoint(x: controlBounds.midX, y: controlBounds.midY)) else { return nil }
+        return responder
+    }
+    final class SelectionView: NSView {
+        var selection: ModuleID
+        var windowActive: Bool
+        var focusGeneration: UInt64 = 0
+        weak var pendingResponder: NSView?
+        var pendingModule: ModuleID?
+        weak var model: MainWindowModel?
+        weak var lifecycle: MainWindowLifecycle?
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil else { return }
+            model?.selectionWillChange = { [weak self] in
+                if let self { ModuleSelectionResponderBridge.clearResponder(within: self) }
+            }
+            lifecycle?.willBecomeInactive = { [weak self] in
+                if let self { ModuleSelectionResponderBridge.clearResponder(within: self) }
+            }
+        }
+        init(selection: ModuleID, windowActive: Bool) {
+            self.selection = selection; self.windowActive = windowActive
+            super.init(frame: .zero)
+            setAccessibilityElement(false)
+        }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        required init?(coder: NSCoder) { nil }
+    }
 }
 
 enum MainWindowLayout {

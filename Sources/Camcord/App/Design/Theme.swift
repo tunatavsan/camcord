@@ -242,9 +242,9 @@ extension Theme {
         static let glassTintHUD = ThemeColor("glassTintHUD", dark: C(0x0E0F11, alpha: 0.72),
                                              light: C(0x0E0F11, alpha: 0.72))
         /// The frost dials of the window backdrops (Glass.swift `WindowBackdrop`): a tint over a
-        /// behind-window system material. Lower alpha = more desktop through (NOTE-2).
-        static let backdropContent = ThemeColor("backdropContent", dark: C(0x16181B, alpha: 0.994),
-                                                light: C(0xE3E6EA, alpha: 0.78),
+        /// behind-window system material. Lower alpha lets more of the blurred desktop colour through.
+        static let backdropContent = ThemeColor("backdropContent", dark: C(0x16181B, alpha: 0.52),
+                                                light: C(0xE3E6EA, alpha: 0.40),
                                                 highContrastDark: C(0x0E0F11, alpha: 0.92),
                                                 highContrastLight: C(0xEEF0F2, alpha: 0.92))
         static let backdropSidebar = ThemeColor("backdropSidebar", dark: C(0x2E333A, alpha: 0.62),
@@ -470,7 +470,7 @@ extension Theme {
             static let panel: Double = 0.26
             static let morph: Double = 0.26
             static let exit: Double = 0.12
-            static let moduleSwitch: Double = 0.22
+            static let moduleSwitch: Double = 0.20
             static let reduced: Double = 0.15
             static let breath: Double = 0.52
             static let dwell: Double = 6
@@ -497,6 +497,10 @@ extension Theme {
         /// window or anything showing video (NATIVE-GAPS #7).
         static let condenseBlur: CGFloat = 8
         static let condenseScale: CGFloat = 0.96
+        static let moduleTranslation: CGFloat = 8
+        static func moduleOffset(active: Bool, reduceMotion: Bool) -> CGFloat {
+            active || reduceMotion ? 0 : moduleTranslation
+        }
         /// The module switch's blur bridge, on the outgoing view only.
         static let switchBlur: CGFloat = 3
     }

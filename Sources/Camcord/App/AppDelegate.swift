@@ -24,6 +24,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var firstRun: FirstRunWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        MainRunLoopHangMonitor.shared.start()
+        #endif
         // Warm the feedback-sound cache so the first cue has zero setup latency.
         FeedbackSound.preloadAll()
 

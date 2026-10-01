@@ -2,51 +2,62 @@ import AppKit
 import SwiftUI
 
 struct StudioView: View {
-    @Environment(\.studioPresentationProvider) private var presentationProvider
     @Environment(\.studioSession) private var session
     @Environment(\.studioSelectRegionAction) private var environmentRegionAction
     @Environment(\.studioClipboardClaim) private var environmentClipboardClaim
-    @Environment(\.mainWindowModel) private var mainWindowModel
-    @Environment(\.mainWindowLifecycle) private var lifecycle
     @Environment(\.appServices) private var services
     private let selectRegion: (@MainActor () async -> Void)?
     private let claimClipboard: StudioFileActions.Claim?
-    @State private var mounted = false
 
     init(selectRegion: (@MainActor () async -> Void)? = nil, claimClipboard: StudioFileActions.Claim? = nil) {
         self.selectRegion = selectRegion
         self.claimClipboard = claimClipboard
     }
+    var body: some View {
+        StudioActivityView { gate in
+            Group {
+                if let session {
+                    StudioControlRoom(session: session, state: session.recordingState, allowsPreview: gate.allowsPreview,
+                                      selectRegion: selectRegion ?? environmentRegionAction,
+                                      claimClipboard: claimClipboard ?? environmentClipboardClaim)
+                } else {
+                    ContentUnavailableView {
+                        Label("Studio unavailable", systemImage: "video.slash")
+                    } description: {
+                        Text("Recording services are unavailable. Reopen Camcord to try again.")
+                    }
+                }
+            }
+            .alert("Source selection failed", isPresented: Binding(get: { services?.studioPicker.issue != nil }, set: { if !$0 { services?.studioPicker.dismissIssue() } })) {
+                Button("OK") { services?.studioPicker.dismissIssue() }
+            } message: {
+                if let issue = services?.studioPicker.issue { Text(issue.studioMessage) }
+            }
+        }
+    }
+}
+
+/// A mounted preview host survives module switches; UI-owned resources follow activity.
+struct StudioActivityView<Content: View>: View {
+    @Environment(\.studioPresentationProvider) private var presentationProvider
+    @Environment(\.studioSession) private var session
+    @Environment(\.mainWindowModuleActive) private var moduleActive
+    @Environment(\.mainWindowLifecycle) private var lifecycle
+    @Environment(\.appServices) private var services
+    @State private var mounted = false
+    private let content: (StudioViewGate) -> Content
+
+    init(@ViewBuilder content: @escaping (StudioViewGate) -> Content) { self.content = content }
     private var gate: StudioViewGate {
-        StudioViewGate(moduleVisible: mounted && mainWindowModel?.selection == .studio,
+        StudioViewGate(moduleVisible: mounted && moduleActive,
                        windowAllowsPreview: lifecycle?.allowsLivePreview == true,
                        captureTransition: services?.coordinator.captureTransition.isActive == true)
     }
     var body: some View {
-        Group {
-            if let session {
-                StudioControlRoom(session: session, state: session.recordingState, allowsPreview: gate.allowsPreview,
-                                  selectRegion: selectRegion ?? environmentRegionAction,
-                                  claimClipboard: claimClipboard ?? environmentClipboardClaim)
-            } else {
-                ContentUnavailableView {
-                    Label("Studio unavailable", systemImage: "video.slash")
-                } description: {
-                    Text("Recording services are unavailable. Reopen Camcord to try again.")
-                }
-            }
-        }
-        .alert("Source selection failed", isPresented: Binding(get: { services?.studioPicker.issue != nil }, set: { if !$0 { services?.studioPicker.dismissIssue() } })) {
-            Button("OK") { services?.studioPicker.dismissIssue() }
-        } message: {
-            if let issue = services?.studioPicker.issue { Text(issue.studioMessage) }
-        }
-        .onAppear { mounted = true; applyGate() }
-        .onChange(of: gate) { _, _ in applyGate() }
-        .onDisappear {
-            mounted = false
-            session?.setVisibility(moduleVisible: false, windowAllowsPreview: false, captureTransition: false)
-        }
+        content(gate)
+            .onAppear { mounted = true; applyGate() }
+            .onChange(of: gate) { _, _ in applyGate() }
+            .onDisappear { mounted = false; applyGate() }
     }
     private func applyGate() {
         // A read-only supplied presentation never owns live resource intent.
@@ -95,7 +106,7 @@ private struct StudioControlRoom: View {
                 if presentation == nil, let issue = session.issue { StudioIssueBanner(session: session, issue: issue) }
                 if let url = finishedURL {
                     ScrollView(.vertical) {
-                        StudioCompletedCard(url: url, fileActions: fileActions, claimClipboard: claimClipboard)
+                        StudioCompletedCard(url: url, fileActions: fileActions, claimClipboard: claimClipboard, allowsPreview: allowsPreview)
                             .padding(.bottom, Theme.Space.xs)
                     }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .scrollBounceBehavior(.basedOnSize)
@@ -275,6 +286,7 @@ private struct StudioCompletedCard: View {
     let url: URL
     let fileActions: StudioFileActions
     let claimClipboard: StudioFileActions.Claim?
+    let allowsPreview: Bool
     @State private var media = StudioFinishedFileState()
     private var file: StudioFinishedFilePresentation? { presentation == nil ? media.file : presentation?.finishedFile }
     var body: some View {
@@ -291,7 +303,8 @@ private struct StudioCompletedCard: View {
         .padding(Theme.Space.l).frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.Palette.surface.color, in: .rect(cornerRadius: Theme.Radius.box))
         .overlay { RoundedRectangle(cornerRadius: Theme.Radius.box).strokeBorder(Theme.Palette.hairline.color) }
-        .task(id: url) { if presentation == nil { await media.load(url) } }
+        .task(id: allowsPreview ? url : nil) { if allowsPreview && presentation == nil { await media.load(url) } }
+        .onChange(of: allowsPreview) { _, active in if !active { media.hide() } }
         .onDisappear { media.hide() }
     }
     private var thumbnail: some View {
