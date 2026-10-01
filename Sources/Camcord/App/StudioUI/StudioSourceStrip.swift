@@ -4,6 +4,10 @@ struct StudioSourceStrip: View {
     let session: StudioSession
     let locked: Bool
     let selectRegion: (@MainActor () async -> Void)?
+    @Environment(\.studioPresentationProvider) private var provider
+    private var presentation: StudioPresentationSnapshot? { provider?.snapshot }
+    private var choices: [StudioSourceChoice] { presentation?.sources ?? session.thumbnailChoices }
+    private var selected: StudioSourceChoice? { presentation == nil ? session.selectedSource : presentation?.selectedSource }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -11,32 +15,32 @@ struct StudioSourceStrip: View {
                 let viewportSize = viewport.size
                 ScrollView(.horizontal) {
                     LazyHStack(alignment: .top, spacing: Theme.Studio.sourceGap) {
-                        ForEach(session.thumbnailChoices) { source in
-                            StudioSourceTile(source: source, image: session.sourceThumbnails.images[source.id],
-                                             selected: source.id == session.selectedSource?.id) {
-                                session.selectSource(source)
+                        ForEach(choices) { source in
+                            StudioSourceTile(source: source, image: presentation == nil ? session.sourceThumbnails.images[source.id] : presentation?.thumbnails[source.id],
+                                             selected: source.id == selected?.id) {
+                                if presentation == nil { session.selectSource(source) }
                             }
                             .onGeometryChange(for: Bool.self) { proxy in
                                 proxy.frame(in: .named("studio-sources"))
                                     .intersects(CGRect(origin: .zero, size: viewportSize))
-                            } action: { visible in session.sourceThumbnails.setTileVisible(source.id, visible) }
-                            .onDisappear { session.sourceThumbnails.setTileVisible(source.id, false) }
+                            } action: { visible in if presentation == nil { session.sourceThumbnails.setTileVisible(source.id, visible) } }
+                            .onDisappear { if presentation == nil { session.sourceThumbnails.setTileVisible(source.id, false) } }
                         }
-                        StudioRegionTile(enabled: selectRegion != nil, action: chooseRegion)
+                        StudioRegionTile(enabled: presentation != nil || selectRegion != nil, action: chooseRegion)
                     }.padding(.vertical, Theme.Space.xs)
                 }.coordinateSpace(.named("studio-sources")).scrollIndicators(.hidden)
             }
             .frame(height: Theme.Studio.sourceHeight + Theme.Studio.sourceCaptionGap + Theme.Studio.channelIcon)
         }
         .contextMenu {
-            Button("Clear source", action: session.clearSource).disabled(locked || session.selectedSource == nil)
+            Button("Clear source") { if presentation == nil { session.clearSource() } }.disabled(locked || selected == nil)
         }
-        .accessibilityAction(named: Text("Clear source")) { if !locked { session.clearSource() } }
+        .accessibilityAction(named: Text("Clear source")) { if !locked && presentation == nil { session.clearSource() } }
         .disabled(locked)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text("Recording source"))
     }
-    private func chooseRegion() { if let selectRegion { Task { await selectRegion() } } }
+    private func chooseRegion() { if presentation == nil, let selectRegion { Task { await selectRegion() } } }
 }
 
 private struct StudioSourceTile: View {
@@ -57,9 +61,9 @@ private struct StudioSourceTile: View {
                 .overlay {
                     RoundedRectangle(cornerRadius: Theme.Radius.control)
                         .strokeBorder(selected ? Theme.Palette.ink.color : Theme.Palette.hairline.color,
-                                      lineWidth: selected ? 2 : 0.5)
+                                      lineWidth: selected ? 3 : 0.5)
                 }
-                Text(verbatim: source.title).font(Theme.Font.caption).lineLimit(1)
+                Text(verbatim: source.title).font(Theme.Font.caption).lineLimit(2).truncationMode(.middle)
                     .foregroundStyle(selected ? Theme.Palette.ink.color : Theme.Palette.ink2.color)
             }.frame(width: Theme.Studio.sourceWidth, alignment: .leading)
         }.buttonStyle(.plain).help(Text(verbatim: source.title))

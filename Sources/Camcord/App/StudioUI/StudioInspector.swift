@@ -3,6 +3,9 @@ import KeyboardShortcuts
 import SwiftUI
 
 struct StudioInspector: View {
+    @Environment(\.studioPresentationProvider) private var provider
+    private var presentation: StudioPresentationSnapshot? { provider?.snapshot }
+    private var settings: RecordingSettings { presentation?.settings ?? session.settings }
     let session: StudioSession
     @ObservedObject var state: RecordingStateModel
     let allowsPreview: Bool
@@ -21,11 +24,11 @@ struct StudioInspector: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Studio.sectionSpacing) {
                     StudioAudioSection(session: session, state: state, microphones: microphones,
-                                       locked: policy.bindingsLocked, liveLocked: policy.liveEditsLocked,
+                                       locked: presentation == nil && policy.bindingsLocked, liveLocked: presentation == nil && policy.liveEditsLocked,
                                        allowsPreview: allowsPreview)
-                    StudioCameraSection(session: session, cameras: cameras, locked: policy.bindingsLocked,
-                                        liveLocked: policy.liveEditsLocked)
-                    StudioFormatSection(session: session, locked: policy.bindingsLocked)
+                    StudioCameraSection(session: session, cameras: cameras, locked: presentation == nil && policy.bindingsLocked,
+                                        liveLocked: presentation == nil && policy.liveEditsLocked)
+                    StudioFormatSection(session: session, locked: presentation == nil && policy.bindingsLocked)
                     DisclosureGroup(isExpanded: $showsLayers) {
                         StudioLayersInspector(document: session.layers, locked: policy.liveEditsLocked)
                             .padding(.top, Theme.Space.s)
@@ -34,17 +37,17 @@ struct StudioInspector: View {
                 .padding(.horizontal, Theme.Studio.sideInset)
                 .padding(.vertical, Theme.Studio.sideInset)
             }
-            if state.state == .idle {
-                StudioPrimaryRecord(state: state, canStart: session.canStart && allowsPreview,
-                                    completed: completed, record: record)
+            if (presentation?.recordingState ?? state.state) == .idle {
+                StudioPrimaryRecord(state: state, canStart: presentation?.canRecord ?? (session.canStart && allowsPreview),
+                                    completed: completed, disabledReason: allowsPreview ? "Choose an available source and allow Screen Recording to record." : "The preview runs while Studio is visible.", record: record)
                     .padding(Theme.Studio.sideInset)
             }
         }
         .background(Theme.Palette.surface.color)
         .tint(Theme.Palette.ink.color)
         .overlay(alignment: .leading) { Rectangle().fill(Theme.Palette.hairline.color).frame(width: 0.5) }
-        .task(id: allowsPreview) { if allowsPreview { refreshDevices() } }
-        .onReceive(StudioDeviceNotifications.publisher()) { _ in if allowsPreview { refreshDevices() } }
+        .task(id: allowsPreview) { if allowsPreview && presentation == nil { refreshDevices() } }
+        .onReceive(StudioDeviceNotifications.publisher()) { _ in if allowsPreview && presentation == nil { refreshDevices() } }
     }
     private func refreshDevices() {
         cameras = AVCaptureDevice.DiscoverySession(deviceTypes: [.builtInWideAngleCamera, .external, .continuityCamera],
@@ -66,6 +69,7 @@ private struct StudioPrimaryRecord: View {
     @ObservedObject var state: RecordingStateModel
     let canStart: Bool
     let completed: Bool
+    let disabledReason: LocalizedStringResource
     let record: () -> Void
     private var shortcut: String? { KeyboardShortcuts.getShortcut(for: .toggleRecording)?.description }
     var body: some View {
@@ -83,11 +87,14 @@ private struct StudioPrimaryRecord: View {
         }
         .buttonStyle(.plain)
         .disabled(!canStart || state.isStarting || state.isFinishing || state.isArmed)
-        .help(Text(canStart ? LocalizedStringResource("Start recording") : LocalizedStringResource("Choose an available source and allow Screen Recording to record.")))
+        .help(Text(canStart ? LocalizedStringResource("Start recording") : disabledReason))
     }
 }
 
 private struct StudioAudioSection: View {
+    @Environment(\.studioPresentationProvider) private var provider
+    private var presentation: StudioPresentationSnapshot? { provider?.snapshot }
+    private var settings: RecordingSettings { presentation?.settings ?? session.settings }
     let session: StudioSession
     @ObservedObject var state: RecordingStateModel
     @ObservedObject private var microphone: MicrophoneMonitor
@@ -106,17 +113,17 @@ private struct StudioAudioSection: View {
             StudioSectionHeading(title: "Audio")
             StudioAudioChannel(title: "System audio", symbol: "speaker.wave.2", enabled: setting(\.systemAudio),
                                gain: setting(\.systemAudioGainDB), range: -60...12,
-                               levels: state.state == .idle ? session.systemAudioLevels : state.health?.systemAudio.levels,
-                               measures: allowsPreview && state.state != .paused, locked: locked, liveLocked: liveLocked,
+                               levels: presentation == nil ? (state.state == .idle ? session.systemAudioLevels : state.health?.systemAudio.levels) : presentation?.systemAudioLevels,
+                               usesSnapshot: presentation != nil, measures: presentation != nil || (allowsPreview && state.state != .paused), locked: locked, liveLocked: liveLocked,
                                unavailable: session.selectedSource == nil ? "Choose a source to monitor system audio." : "Waiting for audio…")
             StudioAudioChannel(title: "Microphone", symbol: "mic", enabled: setting(\.microphone),
-                               gain: setting(\.microphoneGainDB), range: -24...24, levels: session.microphoneLevels,
-                               measures: allowsPreview && state.state != .paused, locked: locked, liveLocked: liveLocked,
+                               gain: setting(\.microphoneGainDB), range: -24...24, levels: presentation == nil ? session.microphoneLevels : presentation?.microphoneLevels,
+                               usesSnapshot: presentation != nil, measures: presentation != nil || (allowsPreview && state.state != .paused), locked: locked, liveLocked: liveLocked,
                                unavailable: session.ownsMicrophoneTest ? "Waiting for audio…" : "Microphone permission or input is unavailable.")
             StudioPopupRow(title: "Input", selection: setting(\.microphoneDeviceID),
-                           options: deviceOptions(microphones, selected: session.settings.microphoneDeviceID, mediaType: .audio))
+                           options: presentation.map { [.init(value: $0.settings.microphoneDeviceID, title: $0.microphoneName)] } ?? deviceOptions(microphones, selected: settings.microphoneDeviceID, mediaType: .audio))
                 .disabled(locked)
-            if let message = microphone.message {
+            if presentation == nil, let message = microphone.message {
                 Text(verbatim: message).font(Theme.Font.caption).foregroundStyle(Theme.Palette.warn.color)
             }
             Toggle("Mix into one audio track", isOn: setting(\.mixAudioTracks))
@@ -124,7 +131,7 @@ private struct StudioAudioSection: View {
         }
     }
     private func setting<Value>(_ key: WritableKeyPath<RecordingSettings, Value>) -> Binding<Value> {
-        Binding(get: { session.settings[keyPath: key] }, set: { value in session.updateSettings { $0[keyPath: key] = value } })
+        Binding(get: { settings[keyPath: key] }, set: { value in if presentation == nil { session.updateSettings { $0[keyPath: key] = value } } })
     }
 }
 
@@ -135,6 +142,7 @@ private struct StudioAudioChannel: View {
     @Binding var gain: Double
     let range: ClosedRange<Double>
     let levels: AudioLevels?
+    let usesSnapshot: Bool
     let measures: Bool
     let locked: Bool
     let liveLocked: Bool
@@ -156,8 +164,12 @@ private struct StudioAudioChannel: View {
                         .toggleStyle(.switch).controlSize(.mini).tint(Theme.Palette.ink.color).disabled(locked)
                         .help(Text(enabled ? LocalizedStringResource("Mute") : LocalizedStringResource("Unmute")))
                 }
-                AudioLevelMeter(levels: levels, active: enabled && measures, height: Theme.Studio.meterHeight)
-                    .overlay { StudioMeterDivisions().allowsHitTesting(false).accessibilityHidden(true) }
+                Group {
+                    if usesSnapshot { StudioSnapshotMeter(levels: levels, active: enabled && measures) }
+                    else { AudioLevelMeter(levels: levels, active: enabled && measures, height: Theme.Studio.meterHeight) }
+                }
+                .frame(height: Theme.Studio.meterHeight)
+                .overlay { StudioMeterDivisions().allowsHitTesting(false).accessibilityHidden(true) }
                 CamcordSlider(value: roundedGain, range: range)
                     .frame(height: Theme.Studio.gainHeight)
                     .disabled(liveLocked || !enabled)
@@ -175,6 +187,9 @@ private struct StudioAudioChannel: View {
 }
 
 private struct StudioCameraSection: View {
+    @Environment(\.studioPresentationProvider) private var provider
+    private var presentation: StudioPresentationSnapshot? { provider?.snapshot }
+    private var settings: RecordingSettings { presentation?.settings ?? session.settings }
     let session: StudioSession
     @ObservedObject private var monitor: CameraPreviewMonitor
     let cameras: [AVCaptureDevice]
@@ -186,16 +201,18 @@ private struct StudioCameraSection: View {
         self.monitor = session.cameraMonitor
     }
     private var formats: [CameraFormatDescriptor] {
+        guard presentation == nil else { return [] }
         let device: AVCaptureDevice?
-        if let id = session.settings.camera.deviceID { device = cameras.first { $0.uniqueID == id } }
+        if let id = settings.camera.deviceID { device = cameras.first { $0.uniqueID == id } }
         else { device = cameras.first { $0.uniqueID == AVCaptureDevice.default(for: .video)?.uniqueID } }
         return device?.formats.map(CameraFormatDescriptor.init) ?? []
     }
     private var formatOptions: [StudioOption<CameraFormatChoice>] {
+        if let presentation { return [.init(value: presentation.settings.camera.format, title: presentation.cameraFormat)] }
         let auto = CameraFormatSelection.auto(formats).map { "Auto (\($0.label))" } ?? CameraFormatSelection.label(.auto)
         var options = [StudioOption(value: CameraFormatChoice.auto, title: auto)]
         options += CameraFormatSelection.manualOptions(formats).map { StudioOption(value: $0, title: CameraFormatSelection.label($0)) }
-        let selected = session.settings.camera.format
+        let selected = settings.camera.format
         if !options.contains(where: { $0.value == selected }) {
             options.append(.init(value: selected, title: String(localized: "Selected device unavailable")))
         }
@@ -211,11 +228,11 @@ private struct StudioCameraSection: View {
                     .toggleStyle(.switch).controlSize(.mini).tint(Theme.Palette.ink.color).disabled(locked)
             }
             StudioPopupRow(title: "Camera", selection: cameraSetting(\.deviceID),
-                           options: deviceOptions(cameras, selected: session.settings.camera.deviceID, mediaType: .video)).disabled(locked)
+                           options: presentation.map { [.init(value: $0.settings.camera.deviceID, title: $0.cameraName)] } ?? deviceOptions(cameras, selected: settings.camera.deviceID, mediaType: .video)).disabled(locked)
             StudioPopupRow(title: "Format", selection: cameraSetting(\.format), options: formatOptions).disabled(locked)
-            if session.settings.camera.enabled, let message = monitor.message {
+            if presentation == nil, settings.camera.enabled, let message = monitor.message {
                 Text(verbatim: message).font(Theme.Font.caption).foregroundStyle(Theme.Palette.warn.color)
-            } else if session.settings.camera.enabled && !session.cameraPreviewRequested {
+            } else if presentation == nil && settings.camera.enabled && !session.cameraPreviewRequested {
                 Text("Camera permission or input is unavailable.").font(Theme.Font.caption).foregroundStyle(Theme.Palette.ink3.color)
             }
             DisclosureGroup("Placement", isExpanded: $showsPlacement) {
@@ -234,13 +251,14 @@ private struct StudioCameraSection: View {
         }
     }
     private var cameraCorner: Binding<CameraCorner> {
-        Binding(get: { session.settings.camera.corner }, set: { value in session.updateSettings { $0.camera.corner = value; $0.camera.position = nil } })
+        Binding(get: { settings.camera.corner }, set: { value in if presentation == nil { session.updateSettings { $0.camera.corner = value; $0.camera.position = nil } } })
     }
     private func cameraSetting<Value>(_ key: WritableKeyPath<CameraOptions, Value>) -> Binding<Value> {
-        Binding(get: { session.settings.camera[keyPath: key] }, set: { value in session.updateSettings { $0.camera[keyPath: key] = value } })
+        Binding(get: { settings.camera[keyPath: key] }, set: { value in if presentation == nil { session.updateSettings { $0.camera[keyPath: key] = value } } })
     }
     private func cameraPosition(_ key: WritableKeyPath<CameraPosition, Double>) -> Binding<Double> {
-        Binding(get: { (session.settings.camera.position ?? CameraPosition(corner: session.settings.camera.corner))[keyPath: key] }, set: { value in
+        Binding(get: { (settings.camera.position ?? CameraPosition(corner: settings.camera.corner))[keyPath: key] }, set: { value in
+            guard presentation == nil else { return }
             session.updateSettings { settings in
                 var position = settings.camera.position ?? CameraPosition(corner: settings.camera.corner)
                 position[keyPath: key] = value; settings.camera.position = position.resolved()
@@ -263,6 +281,9 @@ private struct StudioPercentageSlider: View {
 }
 
 private struct StudioFormatSection: View {
+    @Environment(\.studioPresentationProvider) private var provider
+    private var presentation: StudioPresentationSnapshot? { provider?.snapshot }
+    private var settings: RecordingSettings { presentation?.settings ?? session.settings }
     let session: StudioSession
     let locked: Bool
     @State private var advanced = false
@@ -290,15 +311,15 @@ private struct StudioFormatSection: View {
                         .init(value: .highQuality, title: String(localized: "High quality")), .init(value: .maximum, title: String(localized: "Maximum")),
                         .init(value: .proRes, title: String(localized: "ProRes master")), .init(value: .custom, title: String(localized: "Custom"))])
                     StudioPopupRow(title: "Container", selection: setting(\.container), options: [
-                        .init(value: .mp4, title: "MP4"), .init(value: .mov, title: "MOV")]).disabled(session.settings.resolvedCodec.isProRes)
+                        .init(value: .mp4, title: "MP4"), .init(value: .mov, title: "MOV")]).disabled(settings.resolvedCodec.isProRes)
                     StudioPopupRow(title: "Dynamic range", selection: setting(\.dynamicRange), options: [
                         .init(value: .sdr, title: "SDR"), .init(value: .hdr, title: "HDR")])
-                    if session.settings.profile == .custom && !session.settings.resolvedCodec.isProRes {
-                        Stepper(value: setting(\.bitrateMbps), in: 0...200) { Text(verbatim: "\(session.settings.bitrateMbps) Mbps") }
+                    if settings.profile == .custom && !settings.resolvedCodec.isProRes {
+                        Stepper(value: setting(\.bitrateMbps), in: 0...200) { Text(verbatim: "\(settings.bitrateMbps) Mbps") }
                     }
-                    Stepper(value: setting(\.maxDurationMinutes), in: 0...240) { Text(verbatim: "\(session.settings.maxDurationMinutes) min") }
+                    Stepper(value: setting(\.maxDurationMinutes), in: 0...240) { Text(verbatim: "\(settings.maxDurationMinutes) min") }
                     Toggle("Show pointer", isOn: setting(\.showsCursor)).toggleStyle(.checkbox)
-                    if session.settings.dynamicRange == .hdr && session.settings.resolvedCodec == .h264 {
+                    if settings.dynamicRange == .hdr && settings.resolvedCodec == .h264 {
                         Text("HDR needs HEVC or ProRes; H.264 records SDR.").font(Theme.Font.caption).foregroundStyle(Theme.Palette.warn.color)
                     }
                 }.padding(.top, Theme.Space.s)
@@ -306,7 +327,7 @@ private struct StudioFormatSection: View {
         }.disabled(locked)
     }
     private var frameRates: [StudioOption<Int>] {
-        Array(Set([24, 30, 60, 120, session.settings.fps])).sorted().map { .init(value: $0, title: "\($0) fps") }
+        Array(Set([24, 30, 60, 120, settings.fps])).sorted().map { .init(value: $0, title: "\($0) fps") }
     }
     private var codecOptions: [StudioOption<VideoCodecChoice>] {
         VideoCodecChoice.allCases.map {
@@ -314,15 +335,15 @@ private struct StudioFormatSection: View {
         }
     }
     private var codec: Binding<VideoCodecChoice> {
-        Binding(get: { session.settings.resolvedCodec }, set: { value in session.updateSettings { $0.codec = value; $0.profile = .custom } })
+        Binding(get: { settings.resolvedCodec }, set: { value in if presentation == nil { session.updateSettings { $0.codec = value; $0.profile = .custom } } })
     }
-    private var countdown: Binding<Int> { Binding(get: { session.countdownSeconds }, set: { session.countdownSeconds = $0 }) }
+    private var countdown: Binding<Int> { Binding(get: { session.countdownSeconds }, set: { if presentation == nil { session.countdownSeconds = $0 } }) }
     private var timeLimits: [StudioOption<Int>] {
-        Array(Set([0, 5, 10, 30, 60, session.settings.maxDurationMinutes])).sorted().map {
+        Array(Set([0, 5, 10, 30, 60, settings.maxDurationMinutes])).sorted().map {
             .init(value: $0, title: $0 == 0 ? String(localized: "None") : "\($0) min") }
     }
     private func setting<Value>(_ key: WritableKeyPath<RecordingSettings, Value>) -> Binding<Value> {
-        Binding(get: { session.settings[keyPath: key] }, set: { value in session.updateSettings { $0[keyPath: key] = value } })
+        Binding(get: { settings[keyPath: key] }, set: { value in if presentation == nil { session.updateSettings { $0[keyPath: key] = value } } })
     }
 }
 
@@ -419,4 +440,29 @@ private struct StudioMeterDivisions: View {
         options.append(.init(value: selected, title: String(localized: "Selected device unavailable")))
     }
     return options
+}
+
+
+/// Read-only supplied levels use the existing scale without driving an occluded display link.
+private struct StudioSnapshotMeter: View {
+    let levels: AudioLevels?
+    let active: Bool
+    var body: some View {
+        Canvas { context, size in
+            context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Theme.Palette.meterOff.color))
+            guard active, let levels else { return }
+            let fill = MeterScale.fraction(levels.rmsDBFS)
+            let zones: [(Double, Double, Color)] = [
+                (0, MeterScale.warnFraction, Theme.Palette.meterLow.color),
+                (MeterScale.warnFraction, MeterScale.hotFraction, Theme.Palette.meterMid.color),
+                (MeterScale.hotFraction, 1, Theme.Palette.meterHigh.color)]
+            for (lower, upper, color) in zones where fill > lower {
+                context.fill(Path(CGRect(x: size.width * lower, y: 0, width: size.width * (min(fill, upper) - lower), height: size.height)), with: .color(color))
+            }
+            let peak = MeterScale.fraction(levels.peakDBFS)
+            if peak > 0 { context.fill(Path(CGRect(x: max(0, (size.width - Theme.Studio.gainTrack) * peak), y: 0, width: Theme.Studio.gainTrack, height: size.height)), with: .color(Theme.Palette.ink.color)) }
+        }
+        .accessibilityElement(children: .ignore).accessibilityLabel(Text("Level"))
+        .accessibilityValue(Text(verbatim: active ? levels.map { String(format: "%.0f dB", $0.rmsDBFS) } ?? "—" : String(localized: "Off")))
+    }
 }

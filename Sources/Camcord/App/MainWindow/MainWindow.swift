@@ -67,12 +67,15 @@ struct MainWindowView: View {
     @Bindable var model: MainWindowModel
     let services: AppServices?
     let lifecycle: MainWindowLifecycle?
+    let studioPresentationProvider: (any StudioPresentationProvider)?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(model: MainWindowModel, services: AppServices? = nil, lifecycle: MainWindowLifecycle? = nil) {
+    init(model: MainWindowModel, services: AppServices? = nil, lifecycle: MainWindowLifecycle? = nil,
+         studioPresentationProvider: (any StudioPresentationProvider)? = nil) {
         self.model = model
         self.services = services
         self.lifecycle = lifecycle
+        self.studioPresentationProvider = studioPresentationProvider
     }
 
     /// A window of its own for offscreen renders and tests.
@@ -117,6 +120,7 @@ struct MainWindowView: View {
         .environment(\.appServices, services)
         .environment(\.screenshotEditorSession, services?.editor)
         .environment(\.studioSession, services?.studioSession)
+        .environment(\.studioPresentationProvider, studioPresentationProvider)
         .environment(\.studioSelectRegionAction, StudioRuntimeCallbacks.regionAction(services))
         .environment(\.studioClipboardClaim, StudioRuntimeCallbacks.clipboardClaim(services))
         .modifier(EditorOpeningConfirmationModifier(session: services?.editor))

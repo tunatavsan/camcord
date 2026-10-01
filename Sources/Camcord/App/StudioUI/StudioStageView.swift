@@ -3,6 +3,12 @@ import SwiftUI
 struct StudioStageView: View {
     let session: StudioSession
     let canEdit: Bool
+    @Environment(\.studioPresentationProvider) private var provider
+    private var presentation: StudioPresentationSnapshot? { provider?.snapshot }
+    private var image: NSImage? { presentation == nil ? session.stageImage : presentation?.stageImage }
+    private var canvasSize: CGSize { presentation?.canvasSize ?? session.canvasSize }
+    private var previewState: StudioPreviewState { presentation?.previewState ?? session.previewState }
+    private var permitsEditing: Bool { presentation == nil && canEdit }
     @State private var layerDragStart: CGRect?
     @State private var cameraDragStart: CameraOptions?
     @State private var cameraResizeCorner: CameraCorner?
@@ -10,27 +16,34 @@ struct StudioStageView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let fitted = StudioStageGeometry.fittedCanvas(session.canvasSize, in: CGRect(origin: .zero, size: proxy.size))
+            let fitted = StudioStageGeometry.fittedCanvas(canvasSize, in: CGRect(origin: .zero, size: proxy.size))
             ZStack(alignment: .topLeading) {
                 Theme.Palette.well.color
-                if let image = session.stageImage {
+                if let image {
                     Image(nsImage: image).resizable().interpolation(.high)
                         .frame(width: fitted.width, height: fitted.height)
                         .position(x: fitted.midX, y: fitted.midY)
                         .accessibilityLabel(Text("Recording preview"))
-                    if canEdit, let layer = selectedLayer, layer.isVisible {
+                    if permitsEditing, let layer = selectedLayer, layer.isVisible {
                         layerOutline(layer, fitted: fitted)
                     }
-                    if canEdit, editCamera, session.settings.camera.enabled, session.cameraMonitor.currentPreviewFrame() != nil {
+                    if permitsEditing, editCamera, session.settings.camera.enabled, session.cameraMonitor.currentPreviewFrame() != nil {
                         cameraOutline(fitted: fitted)
                     }
                 } else {
                     placeholder.frame(width: proxy.size.width, height: proxy.size.height)
                 }
+                if presentation == nil, image != nil, previewState == .live || previewState == .recording || previewState == .paused {
+                    HStack(spacing: Theme.Space.s) {
+                        Circle().fill(previewState == .live ? Theme.Palette.ok.color : Theme.Palette.record.color).frame(width: Theme.Studio.meterHeight, height: Theme.Studio.meterHeight)
+                        Text(verbatim: previewState == .live ? "LIVE" : previewState == .paused ? "PAUSED" : "REC")
+                        Text(verbatim: "12 fps preview")
+                    }.font(Theme.Font.dataSmall).foregroundStyle(Theme.Palette.onRecord.color).padding(Theme.Space.m)
+                }
                 VStack {
                     Spacer()
                     HStack {
-                        if session.settings.camera.enabled, canEdit {
+                        if session.settings.camera.enabled, permitsEditing {
                             Button { editCamera.toggle(); session.layers.selectedID = nil } label: {
                                 Label("Place camera", systemImage: "viewfinder")
                             }
@@ -103,19 +116,23 @@ struct StudioStageView: View {
     }
     private var placeholder: some View {
         VStack(spacing: Theme.Space.m) {
-            if session.previewState == .starting { ProgressView().controlSize(.regular) }
-            else { Image(systemName: session.previewState == .permissionRequired ? "lock.shield" : "viewfinder").font(Theme.Studio.placeholderSymbol) }
+            if previewState == .starting { ProgressView().controlSize(.regular) }
+            else { Image(systemName: previewState == .permissionRequired ? "lock.shield" : "viewfinder").font(Theme.Studio.placeholderSymbol) }
             Text(placeholderTitle).font(Theme.Font.bodyStrong)
             Text(placeholderDetail).font(Theme.Font.caption).multilineTextAlignment(.center).frame(maxWidth: 280)
-            if session.previewState == .permissionRequired || session.previewState == .unavailable {
-                Button("Retry preview") { Task { await session.retryPreview() } }.buttonStyle(.bordered)
+            if previewState == .permissionRequired {
+                Button("Open System Settings…") {
+                    if presentation == nil { NSWorkspace.shared.open(PermissionRecovery.screenRecordingPaneURL) }
+                }.buttonStyle(.borderedProminent).tint(Theme.Palette.record.color)
+            } else if previewState == .unavailable {
+                Button("Retry preview") { if presentation == nil { Task { await session.retryPreview() } } }.buttonStyle(.bordered)
             }
         }
         .foregroundStyle(Theme.Palette.onRecord.color)
         .padding(Theme.Space.xl)
     }
     private var placeholderTitle: LocalizedStringResource {
-        switch session.previewState {
+        switch previewState {
         case .inactive: "Preview paused"
         case .noSource: "Choose a source"
         case .starting: "Starting preview…"
@@ -125,10 +142,10 @@ struct StudioStageView: View {
         }
     }
     private var placeholderDetail: LocalizedStringResource {
-        switch session.previewState {
+        switch previewState {
         case .inactive: "The preview runs while Studio is visible."
         case .noSource: "Select a screen, window or region to set up your recording."
-        case .permissionRequired: "Allow Screen Recording in System Settings, then retry."
+        case .permissionRequired: "Camcord needs Screen Recording permission to show a live preview."
         case .unavailable: "Refresh your sources or choose another source."
         default: "Your source, camera and layers appear here as they will be recorded."
         }

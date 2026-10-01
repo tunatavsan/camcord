@@ -45,6 +45,7 @@ private struct ShellConfiguration {
     let emptyLibrary: Bool
     let editorState: String
     let editorSampleSheet: Bool
+    let studioState: String
     var finish: URL { output.appendingPathComponent("finish") }
     var isAuthorized: Bool { FileManager.default.fileExists(atPath: sentinel.path) }
 
@@ -66,6 +67,8 @@ private struct ShellConfiguration {
         module = environment["CAMCORD_SHELL_MODULE"] == "edit" ? .edit
             : environment["CAMCORD_SHELL_MODULE"] == "settings" ? .settings
             : environment["CAMCORD_SHELL_MODULE"] == "studio" ? .studio : .library
+        let requestedStudioState = environment["CAMCORD_STUDIO_STATE"] ?? "permission"
+        studioState = ["setup", "recording", "done", "permission"].contains(requestedStudioState) ? requestedStudioState : "permission"
         editorState = environment["CAMCORD_EDITOR_STATE"] ?? "loaded"
         editorSampleSheet = environment["CAMCORD_EDITOR_SAMPLE_SHEET"] == "1"
         emptyLibrary = environment["CAMCORD_SHELL_LIBRARY"] == "empty" || module == .edit && editorState == "empty"
@@ -77,6 +80,7 @@ private final class ShellFixture {
     let configuration: ShellConfiguration
     let services: AppServices
     let controller: MainWindowController
+    let studioPresentation: StudioPresentationFixture?
     private let suite: String
     private let defaults: UserDefaults
     private let captures: URL
@@ -87,6 +91,8 @@ private final class ShellFixture {
 
     init(configuration: ShellConfiguration) async throws {
         self.configuration = configuration
+        studioPresentation = configuration.module == .studio && configuration.studioState != "permission"
+            ? try await StudioPresentationFixture(state: configuration.studioState, directory: configuration.output) : nil
         suite = "camcord.window-shell." + UUID().uuidString
         defaults = try #require(UserDefaults(suiteName: suite))
         captures = configuration.output.appendingPathComponent("captures", isDirectory: true)
@@ -211,6 +217,11 @@ private final class ShellFixture {
         window.setFrame(NSRect(origin: window.frame.origin, size: configuration.size), display: true)
         #expect(window.frameAutosaveName.isEmpty)
         #expect(window.contentViewController is NSHostingController<MainWindowView>)
+        if let studioPresentation {
+            let host = try #require(window.contentViewController as? NSHostingController<MainWindowView>)
+            host.rootView = MainWindowView(model: controller.model, services: services, lifecycle: controller.lifecycle,
+                                          studioPresentationProvider: studioPresentation)
+        }
         #expect(window.toolbarStyle == .unified)
         #expect(window.styleMask.contains(.fullSizeContentView))
         let underlay = NSWindow(contentRect: window.frame.insetBy(dx: -40, dy: -40), styleMask: .borderless,
@@ -289,6 +300,18 @@ private final class ShellFixture {
             "studioSourceCount": services.studioSession.sources.count,
             "studioThumbnailCount": services.studioSession.sourceThumbnails.images.count,
             "studioHasStageFrame": services.studioSession.stageImage != nil,
+            "studioActualAllowsLivePreview": controller.lifecycle.allowsLivePreview,
+            "studioPresentationProvider": studioPresentation?.snapshot.provenance as Any? ?? NSNull(),
+            "studioPresentationState": studioPresentation?.state as Any? ?? NSNull(),
+            "studioPresentationSourceCount": studioPresentation?.snapshot.sources.count ?? 0,
+            "studioPresentationThumbnailCount": studioPresentation?.snapshot.thumbnails.count ?? 0,
+            "studioPresentationCardCount": studioPresentation.map { $0.snapshot.sources.count + 1 } ?? 0,
+            "studioPresentationHasStageFrame": studioPresentation?.snapshot.stageImage != nil,
+            "studioPresentationRecordingState": studioPresentation.map { String(describing: $0.snapshot.recordingState) } as Any? ?? NSNull(),
+            "studioPresentationLevels": studioPresentation.map { [$0.snapshot.systemAudioLevels?.rmsDBFS ?? 0, $0.snapshot.microphoneLevels?.rmsDBFS ?? 0] } ?? [],
+            "studioPresentationPeaks": studioPresentation.map { [$0.snapshot.systemAudioLevels?.peakDBFS ?? 0, $0.snapshot.microphoneLevels?.peakDBFS ?? 0] } ?? [],
+            "studioPresentationMeter": studioPresentation == nil ? "actual native meter lifecycle" : "static readonly MeterScale snapshot; no timer or live signal",
+            "studioPresentationAssets": studioPresentation?.assetURLs.map(\.lastPathComponent) ?? [],
             "settingsGroup": controller.model.settingsGroup.rawValue,
             "captureCount": services.library.items.count,
             "knownBytes": MainWindowLayout.totalKnownBytes(services.library.items.map(\.byteSize)),

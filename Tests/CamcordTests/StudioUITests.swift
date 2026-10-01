@@ -6,6 +6,30 @@ import SwiftUI
 
 @Suite("Studio presentation and completion actions")
 struct StudioUITests {
+    @Test("recording clock drops fractional seconds and preserves hours")
+    func displayedClock() {
+        #expect(StudioDisplayTime.clock("04:26.87") == "00:04:26")
+        #expect(StudioDisplayTime.clock("01:02:03.50") == "01:02:03")
+        #expect(StudioDisplayTime.clock("100:02") == "01:40:02")
+    }
+
+    @MainActor @Test("hidden and superseded noncooperative file readers cannot publish stale facts")
+    func fileFactsEpoch() async {
+        let loader = HeldStudioMediaLoader()
+        let state = StudioFinishedFileState(loader: loader)
+        let older = URL(fileURLWithPath: "/isolated/older.mov"), newer = URL(fileURLWithPath: "/isolated/newer.mov")
+        let first = Task { await state.load(older) }
+        await loader.wait(older)
+        state.hide()
+        let second = Task { await state.load(newer) }
+        await loader.wait(newer)
+        loader.release(newer); await second.value
+        #expect(state.file?.url == newer)
+        loader.release(older); await first.value
+        #expect(state.file?.url == newer)
+        state.hide(); #expect(state.file == nil)
+    }
+
     @MainActor @Test("the slim slider keeps native continuous input, rounded binding and disabled state")
     func continuousSlider() throws {
         var gain = 0.0
@@ -233,4 +257,16 @@ private actor HeldStudioFileValidation {
         await withCheckedContinuation { waiting[url] = $0 }
     }
     func release(_ url: URL, result: URL?) { held.removeValue(forKey: url)?.resume(returning: result) }
+}
+
+
+@MainActor private final class HeldStudioMediaLoader: StudioFinishedFileLoading {
+    var pending: [URL: CheckedContinuation<StudioFinishedFilePresentation, Never>] = [:]
+    func load(_ url: URL) async throws -> StudioFinishedFilePresentation {
+        await withCheckedContinuation { pending[url] = $0 }
+    }
+    func wait(_ url: URL) async { while pending[url] == nil { await Task.yield() } }
+    func release(_ url: URL) {
+        pending.removeValue(forKey: url)?.resume(returning: .init(url: url, thumbnail: nil, dimensions: nil, duration: nil, byteCount: nil))
+    }
 }

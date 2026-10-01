@@ -1,3 +1,7 @@
+import AVFoundation
+import ImageIO
+import UniformTypeIdentifiers
+import Observation
 import CoreGraphics
 import SwiftUI
 
@@ -113,5 +117,144 @@ extension StudioIssue {
         case .invalidImage: "This file could not be opened as an image."
         case .textTooLong: "This text is too long. Shorten it and try again."
         }
+    }
+}
+
+
+/// Read-only display data can be supplied independently of the actual resource lifecycle.
+/// Nil uses the live session. Implementations own their media and provenance; controls never
+/// mutate a supplied snapshot or send its displayed state to a recording engine.
+@MainActor protocol StudioPresentationProvider: AnyObject {
+    var snapshot: StudioPresentationSnapshot { get }
+}
+
+@MainActor struct StudioPresentationSnapshot {
+    let provenance: String
+    let sources: [StudioSourceChoice]
+    let thumbnails: [StudioSourceChoice.ID: NSImage]
+    let selectedSource: StudioSourceChoice?
+    let stageImage: NSImage?
+    let canvasSize: CGSize
+    let previewState: StudioPreviewState
+    let settings: RecordingSettings
+    let systemAudioLevels: AudioLevels?
+    let microphoneLevels: AudioLevels?
+    let recordingState: RecordingController.UIState
+    let elapsed: String?
+    let canRecord: Bool
+    let cameraName: String
+    let cameraFormat: String
+    let microphoneName: String
+    let finishedFile: StudioFinishedFilePresentation?
+}
+
+@MainActor struct StudioFinishedFilePresentation {
+    let url: URL
+    let thumbnail: NSImage?
+    let dimensions: CGSize?
+    let duration: Double?
+    let byteCount: Int64?
+}
+
+extension EnvironmentValues {
+    @Entry var studioPresentationProvider: (any StudioPresentationProvider)?
+}
+
+
+@MainActor protocol StudioFinishedFileLoading {
+    func load(_ url: URL) async throws -> StudioFinishedFilePresentation
+}
+
+/// Real metadata and a bounded thumbnail; setup settings are never substituted for facts.
+@MainActor struct StudioMediaFileLoader: StudioFinishedFileLoading {
+    func load(_ url: URL) async throws -> StudioFinishedFilePresentation {
+        let raw = try await StudioMediaFileReader.read(url)
+        return .init(url: url, thumbnail: raw.png.flatMap(NSImage.init(data:)), dimensions: raw.size,
+                     duration: raw.duration, byteCount: raw.bytes)
+    }
+}
+
+private struct StudioRawFileFacts: Sendable {
+    let png: Data?
+    let size: CGSize?
+    let duration: Double?
+    let bytes: Int64?
+}
+
+private enum StudioMediaFileReader {
+    static func read(_ url: URL) async throws -> StudioRawFileFacts {
+        try await withThrowingTaskGroup(of: StudioRawFileFacts.self) { group in
+            group.addTask { try await readAsset(url) }
+            group.addTask { try await Task.sleep(for: .seconds(5)); throw CocoaError(.userCancelled) }
+            defer { group.cancelAll() }
+            return try await group.next() ?? { throw CocoaError(.fileReadUnknown) }()
+        }
+    }
+    private static func readAsset(_ url: URL) async throws -> StudioRawFileFacts {
+        guard url.isFileURL else { throw CocoaError(.fileReadUnsupportedScheme) }
+        let file = try url.resourceValues(forKeys: [.isRegularFileKey, .isReadableKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard file.isRegularFile == true, file.isReadable == true, file.isSymbolicLink != true else { throw CocoaError(.fileReadUnknown) }
+        let asset = AVURLAsset(url: url)
+        let duration = try await asset.load(.duration).seconds
+        let track = try await asset.loadTracks(withMediaType: .video).first
+        let size = try await track?.load(.naturalSize)
+        try Task.checkCancellation()
+        let decoder = StudioThumbnailDecode(url: url)
+        let data = try await withTaskCancellationHandler { try await decoder.png() }
+            onCancel: { Task { await decoder.cancel() } }
+        try Task.checkCancellation()
+        return .init(png: data, size: size, duration: duration.isFinite && duration >= 0 ? duration : nil,
+                     bytes: file.fileSize.map(Int64.init))
+    }
+}
+
+@MainActor @Observable final class StudioFinishedFileState {
+    private(set) var file: StudioFinishedFilePresentation?
+    private(set) var isLoading = false
+    private var epoch = UUID()
+    let loader: any StudioFinishedFileLoading
+    init(loader: any StudioFinishedFileLoading = StudioMediaFileLoader()) { self.loader = loader }
+    func load(_ url: URL) async {
+        let token = UUID(); epoch = token; file = nil; isLoading = true
+        let value = try? await loader.load(url)
+        guard epoch == token, !Task.isCancelled else { return }
+        isLoading = false
+        file = value?.url == url ? value : nil
+    }
+    func hide() { epoch = UUID(); file = nil; isLoading = false }
+}
+
+enum StudioDisplayTime {
+    static func clock(_ elapsed: String) -> String {
+        let fields = elapsed.split(separator: ":").compactMap { Int($0.split(separator: ".").first ?? "") }
+        guard !fields.isEmpty else { return elapsed }
+        let seconds = fields.reversed().enumerated().reduce(0) { $0 + $1.element * Int(pow(60.0, Double($1.offset))) }
+        return String(format: "%02d:%02d:%02d", seconds / 3600, (seconds / 60) % 60, seconds % 60)
+    }
+    static func length(_ seconds: Double) -> String { clock(String(format: "%.0f", seconds.rounded(.down))) }
+}
+
+
+private actor StudioThumbnailDecode {
+    private let generator: AVAssetImageGenerator
+    init(url: URL) {
+        generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 600, height: 400)
+    }
+    func cancel() { generator.cancelAllCGImageGeneration() }
+    func png() async throws -> Data {
+        let image: CGImage = try await withCheckedThrowingContinuation { continuation in
+            generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: .zero)]) { _, image, _, _, error in
+                if let image { continuation.resume(returning: image) }
+                else { continuation.resume(throwing: error ?? CocoaError(.fileReadCorruptFile)) }
+            }
+        }
+        try Task.checkCancellation()
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else { throw CocoaError(.fileReadCorruptFile) }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { throw CocoaError(.fileReadCorruptFile) }
+        return data as Data
     }
 }

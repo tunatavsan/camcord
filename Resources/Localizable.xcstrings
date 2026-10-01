@@ -9899,6 +9899,102 @@
           }
         }
       }
+    },
+    "Camcord needs Screen Recording permission to show a live preview.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camcord needs Screen Recording permission to show a live preview."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Canlı önizleme göstermek için Camcord'un Ekran Kaydı iznine ihtiyacı var."
+          }
+        }
+      }
+    },
+    "Open System Settings…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open System Settings…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistem Ayarları'nı aç…"
+          }
+        }
+      }
+    },
+    "Saved to file": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved to file"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dosyaya kaydedildi"
+          }
+        }
+      }
+    },
+    "Length": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Length"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Süre"
+          }
+        }
+      }
+    },
+    "Reading recording…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reading recording…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt okunuyor…"
+          }
+        }
+      }
+    },
+    "Recording file unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording file unavailable"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt dosyası kullanılamıyor"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
