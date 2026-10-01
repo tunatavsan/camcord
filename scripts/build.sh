@@ -147,7 +147,23 @@ cp .build/release/Camcord "$APP/Contents/MacOS/Camcord"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 build_number="$(git rev-list --count HEAD)"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build_number" "$APP/Contents/Info.plist"
-cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+if [[ -e Resources/AppIcon.icon || -L Resources/AppIcon.icon ]]; then
+    ICON_OUTPUT="$BUILD_STAGE/icons"
+    scripts/build-icons.sh "$PROJECT_ROOT/Resources/AppIcon.icon" "$ICON_OUTPUT"
+    cp "$ICON_OUTPUT/Assets.car" "$APP/Contents/Resources/Assets.car"
+    cp "$ICON_OUTPUT/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+    # Merge only the compiler's icon keys, preserving the app's other metadata.
+    for icon_key in CFBundleIconName CFBundleIconFile; do
+        icon_value="$(plutil -extract "$icon_key" raw -expect string "$ICON_OUTPUT/partial.plist")"
+        [[ "$icon_value" == AppIcon ]] || fail "Unexpected compiled icon basename: $icon_value"
+        plutil -replace "$icon_key" -string "$icon_value" "$APP/Contents/Info.plist"
+    done
+else
+    cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+fi
+if [[ -f Resources/MenuBarTemplate.pdf ]]; then
+    cp Resources/MenuBarTemplate.pdf "$APP/Contents/Resources/MenuBarTemplate.pdf"
+fi
 
 # Bundle.module resolves resources outside Contents/Resources. Copy localized
 # resources explicitly so the app remains portable after leaving the build machine.
