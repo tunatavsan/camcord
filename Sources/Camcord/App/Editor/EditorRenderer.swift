@@ -7,6 +7,25 @@ import UniformTypeIdentifiers
 import Foundation
 import Darwin
 
+struct EditorDisplayBase: Sendable {
+    let image: CGImage
+    let pointSize: CGSize
+    /// Sanitized, cropped source before background/frame clipping, used by the
+    /// same text/highlight statistics as export.
+    let underlay: CGImage
+    var backdrop: CGImage? = nil
+    var sourceClip: CGImage? = nil
+    /// Display-only memory: sanitized and cropped before visual effects. Export
+    /// and copy render their own document and never consume this raster.
+    var privacySource: CGImage? = nil
+}
+private struct EditorRenderComposition {
+    let rendered: EditorRendered
+    let underlay: CGImage
+    let backdrop: CGImage?
+    let sourceClip: CGImage?
+    let privacySource: CGImage?
+}
 struct EditorRendered: Sendable {
     let image: CGImage
     let pointSize: CGSize
@@ -126,6 +145,13 @@ enum EditorRenderer {
     }
 
     static func render(_ document: EditorDocument) throws -> EditorRendered {
+        try render(document, includesVectors: true).rendered
+    }
+    static func displayBase(_ document: EditorDocument) throws -> EditorDisplayBase {
+        let value = try render(document, includesVectors: false)
+        return EditorDisplayBase(image: value.rendered.image, pointSize: value.rendered.pointSize, underlay: value.underlay, backdrop: value.backdrop, sourceClip: value.sourceClip, privacySource:value.privacySource)
+    }
+    private static func render(_ document: EditorDocument, includesVectors: Bool) throws -> EditorRenderComposition {
         try Task.checkCancellation()
         guard document.edits.valid else { throw EditorError.invalidEdits }
         try EditorGeometry.validateDimensions(width: document.source.width, height: document.source.height, pixels: 50_000_000)
@@ -160,21 +186,16 @@ enum EditorRenderer {
             guard !sourceRect.isNull, !sourceRect.isEmpty else { continue }
             let rect = CGRect(x: sourceRect.minX - crop.minX, y: crop.maxY - sourceRect.maxY, width: sourceRect.width, height: sourceRect.height)
             let input = CIImage(cgImage: cropped)
-            let name = annotation.kind == .blur ? "CIGaussianBlur" : "CIPixellate"
-            let key = annotation.kind == .blur ? kCIInputRadiusKey : kCIInputScaleKey
-            var parameters: [String: Any] = [key: annotation.style.effectSize * effectScale]
-            if annotation.kind == .pixelate, let center = CIFilter(name: name)?.value(forKey: kCIInputCenterKey) as? CIVector {
-                parameters[kCIInputCenterKey] = CIVector(x: center.x * pixelScale.width, y: center.y * pixelScale.height)
-            }
-            let filtered = input.clampedToExtent().applyingFilter(name, parameters: parameters).cropped(to: input.extent)
+            let filtered = privacyFilter(annotation, input:input, pixelScale:pixelScale, effectScale:effectScale)
             let effectBounds = rect.integral.intersection(input.extent)
             guard let image = ciContext.createCGImage(filtered, from: effectBounds) else { throw EditorError.render }
             imageContext.saveGState(); imageContext.clip(to: rect)
             imageContext.draw(image, in: effectBounds); imageContext.restoreGState()
         }
+        guard let shadowSource = imageContext.makeImage() else { throw EditorError.render }
         // Top-left coordinates for vectors; crop clips every edit.
         imageContext.saveGState(); imageContext.translateBy(x: -crop.minX, y: crop.height + crop.minY); imageContext.scaleBy(x: 1, y: -1)
-        for annotation in document.edits.annotations where ![.redact, .blur, .pixelate].contains(annotation.kind) {
+        for annotation in document.edits.annotations where includesVectors && ![.redact, .blur, .pixelate].contains(annotation.kind) {
             try Task.checkCancellation()
             var luminance = 1.0
             var highlight = HighlightTreatment(blendMode: .multiply, opacity: 0.6)
@@ -191,29 +212,92 @@ enum EditorRenderer {
         guard let image = imageContext.makeImage() else { throw EditorError.render }
         try Task.checkCancellation()
         let output = try context(width: width, height: height)
-        let outBounds = CGRect(x: 0, y: 0, width: width, height: height)
-        if background.preset != .none {
-            let first = background.preset == .graphite ? EditorColor(red: 0.10, green: 0.11, blue: 0.13) : background.color
-            output.setFillColor(first.cgColor); output.fill(outBounds)
-            if background.preset == .gradient, let gradient = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: [first.cgColor, EditorColor(red: 0.60, green: 0.67, blue: 0.79).cgColor] as CFArray, locations: [0, 1]) {
-                output.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: width, y: height), options: [])
-            }
+        let destination = try prepareBackground(document, context: output, clipSource: false, shadowSource: shadowSource, ciContext: ciContext)
+        let backdrop = !includesVectors && background.preset != .none ? output.makeImage() : nil
+        var sourceClip: CGImage?
+        if !includesVectors && (background.preset != .none || background.imageCorners == .rounded) {
+            guard let mask = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.alphaOnly.rawValue) else { throw EditorError.render }
+            clipSource(document, context: mask, destination: destination)
+            mask.setFillColor(CGColor(gray: 1, alpha: 1)); mask.fill(CGRect(x: 0, y: 0, width: width, height: height))
+            sourceClip = mask.makeImage()
         }
-        let destination = CGRect(x: CGFloat(padding), y: CGFloat(padding), width: crop.width, height: crop.height)
-        if background.preset != .none {
-            let path = CGPath(roundedRect: destination.insetBy(dx: -background.frameWidth, dy: -background.frameWidth), cornerWidth: background.cornerRadius, cornerHeight: background.cornerRadius, transform: nil)
-            if background.shadow { output.setShadow(offset: CGSize(width: 0, height: -4), blur: 12, color: CGColor(gray: 0, alpha: 0.25)) }
-            output.addPath(path); output.setFillColor(EditorColor.black.cgColor); output.fillPath(); output.setShadow(offset: .zero, blur: 0)
-            output.addPath(CGPath(roundedRect: destination, cornerWidth: background.cornerRadius, cornerHeight: background.cornerRadius, transform: nil)); output.clip()
-        }
+        clipSource(document, context: output, destination: destination)
         output.draw(image, in: destination)
         guard let result = output.makeImage() else { throw EditorError.render }
         let scaleX = document.pointSize.width / CGFloat(document.source.width), scaleY = document.pointSize.height / CGFloat(document.source.height)
-        return EditorRendered(image: result, pointSize: CGSize(width: CGFloat(width) * scaleX, height: CGFloat(height) * scaleY))
+        return EditorRenderComposition(rendered: EditorRendered(image: result, pointSize: CGSize(width: CGFloat(width) * scaleX, height: CGFloat(height) * scaleY)), underlay: image, backdrop: backdrop, sourceClip: sourceClip, privacySource:includesVectors ? nil : cropped)
+    }
+
+    static func privacyFilter(_ annotation:EditorAnnotation, input:CIImage, pixelScale:CGSize, effectScale:CGFloat) -> CIImage {
+        let name = annotation.kind == .blur ? "CIGaussianBlur" : "CIPixellate"
+        let key = annotation.kind == .blur ? kCIInputRadiusKey : kCIInputScaleKey
+        var parameters:[String:Any] = [key:annotation.style.effectSize * effectScale]
+        if annotation.kind == .pixelate, let center = CIFilter(name:name)?.value(forKey:kCIInputCenterKey) as? CIVector {
+            parameters[kCIInputCenterKey] = CIVector(x:center.x * pixelScale.width,y:center.y * pixelScale.height)
+        }
+        return input.clampedToExtent().applyingFilter(name,parameters:parameters).cropped(to:input.extent)
+    }
+
+    /// The card and the source have independent corner policies. Auto and Square
+    /// preserve the original alpha; missing corner pixels cannot be reconstructed.
+    @discardableResult static func prepareBackground(_ document: EditorDocument, context output: CGContext, presentationScale: CGFloat = 1, clipSource: Bool = true, shadowSource: CGImage? = nil, ciContext: CIContext? = nil) throws -> CGRect {
+        let crop = document.edits.crop.integral, background = document.edits.background
+        let padding = background.preset == .none ? 0 : ceil(background.padding + background.frameWidth)
+        let bounds = CGRect(x: 0, y: 0, width: crop.width + padding * 2, height: crop.height + padding * 2)
+        output.saveGState()
+        if background.preset != .none {
+            output.addPath(CGPath(roundedRect: bounds, cornerWidth: background.cornerRadius, cornerHeight: background.cornerRadius, transform: nil)); output.clip()
+            let first = background.preset == .graphite ? EditorColor(red: 0.10, green: 0.11, blue: 0.13) : background.color
+            output.setFillColor(first.cgColor); output.fill(bounds)
+            if background.preset == .gradient, let gradient = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: [first.cgColor, EditorColor(red: 0.60, green: 0.67, blue: 0.79).cgColor] as CFArray, locations: [0, 1]) {
+                output.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: bounds.width, y: bounds.height), options: [])
+            }
+        }
+        let destination = CGRect(x: padding, y: padding, width: crop.width, height: crop.height)
+        if background.preset != .none {
+            if background.shadow, let shadowSource {
+                var silhouette = shadowSource
+                if background.imageCorners == .rounded {
+                    let sourceContext = try context(width: shadowSource.width, height: shadowSource.height)
+                    Self.clipSource(document, context: sourceContext, destination: CGRect(origin: .zero, size: crop.size))
+                    sourceContext.draw(shadowSource, in: CGRect(origin: .zero, size: crop.size))
+                    guard let masked = sourceContext.makeImage() else { throw EditorError.render }
+                    silhouette = masked
+                }
+                // Only the sanitized source alpha contributes to the shadow;
+                // source color is never painted into the backdrop or duplicated.
+                let shadow = CIImage(cgImage: silhouette).applyingFilter("CIColorMatrix", parameters: [
+                    "inputRVector": CIVector(x:0,y:0,z:0,w:0), "inputGVector": CIVector(x:0,y:0,z:0,w:0),
+                    "inputBVector": CIVector(x:0,y:0,z:0,w:0), "inputAVector": CIVector(x:0,y:0,z:0,w:0.25)])
+                    .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey:12])
+                    .transformed(by: CGAffineTransform(translationX:padding,y:padding-4))
+                let renderer = ciContext ?? CIContext(options: [.cacheIntermediates:false])
+                guard let shadowImage = renderer.createCGImage(shadow, from:bounds) else { throw EditorError.render }
+                output.draw(shadowImage, in:bounds)
+            }
+            if background.frameWidth > 0 {
+                let radius = sourceRadius(document)
+                output.addPath(CGPath(roundedRect: destination.insetBy(dx: -background.frameWidth, dy: -background.frameWidth), cornerWidth: radius.width + background.frameWidth, cornerHeight: radius.height + background.frameWidth, transform: nil))
+                output.addPath(CGPath(roundedRect: destination, cornerWidth: radius.width, cornerHeight: radius.height, transform: nil))
+                output.setFillColor(EditorColor.black.cgColor); output.drawPath(using: .eoFill)
+            }
+        }
+        output.restoreGState()
+        if clipSource { Self.clipSource(document, context: output, destination: destination) }
+        return destination
+    }
+    static func clipSource(_ document: EditorDocument, context: CGContext, destination: CGRect) {
+        guard document.edits.background.imageCorners == .rounded else { return }
+        let radius = sourceRadius(document)
+        context.addPath(CGPath(roundedRect: destination, cornerWidth: radius.width, cornerHeight: radius.height, transform: nil)); context.clip()
+    }
+    private static func sourceRadius(_ document: EditorDocument) -> CGSize {
+        guard document.edits.background.imageCorners == .rounded else { return .zero }
+        return CGSize(width: 12 * CGFloat(document.source.width) / document.pointSize.width, height: 12 * CGFloat(document.source.height) / document.pointSize.height)
     }
 
     /// All presentation widths/fonts/shadows are points; persistent rectangles remain source pixels.
-    static func draw(_ annotation: EditorAnnotation, context: CGContext, pixelScale: CGSize = CGSize(width: 1, height: 1), underlyingLuminance: Double = 1, highlightTreatment: HighlightTreatment = HighlightTreatment(blendMode: .multiply, opacity: 0.6)) {
+    static func draw(_ annotation: EditorAnnotation, context: CGContext, pixelScale: CGSize = CGSize(width: 1, height: 1), underlyingLuminance: Double = 1, highlightTreatment: HighlightTreatment = HighlightTreatment(blendMode: .multiply, opacity: 0.6), presentationScale: CGFloat = 1) {
         context.saveGState(); defer { context.restoreGState() }
         context.scaleBy(x: pixelScale.width, y: pixelScale.height)
         let source = annotation.rect
@@ -223,7 +307,7 @@ enum EditorRenderer {
         context.setStrokeColor(style.color.cgColor); context.setFillColor(style.color.cgColor)
         context.setLineWidth(width); context.setLineCap(.round); context.setLineJoin(.round)
         // Quartz shadows use base-space distances, independent of the drawing CTM.
-        context.setShadow(offset: CGSize(width: 0, height: pixelScale.height), blur: 3 * sqrt(pixelScale.width * pixelScale.height),
+        context.setShadow(offset: CGSize(width: 0, height: pixelScale.height * presentationScale), blur: 3 * sqrt(pixelScale.width * pixelScale.height) * presentationScale,
                           color: CGColor(gray: 0, alpha: 0.28))
         switch annotation.kind {
         case .rectangle:
@@ -239,12 +323,13 @@ enum EditorRenderer {
             context.addPath(CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil))
             context.fillPath()
         case .arrow:
-            let start = CGPoint(x: annotation.verticalArrow ? rect.midX : (annotation.reversedX ? rect.maxX : rect.minX), y: annotation.horizontalArrow ? rect.midY : (annotation.reversedY ? rect.maxY : rect.minY))
-            let end = CGPoint(x: annotation.verticalArrow ? rect.midX : (annotation.reversedX ? rect.minX : rect.maxX), y: annotation.horizontalArrow ? rect.midY : (annotation.reversedY ? rect.minY : rect.maxY))
+            let endpoints = annotation.resolvedArrowEndpoints
+            let start = CGPoint(x: endpoints.start.x / pixelScale.width, y: endpoints.start.y / pixelScale.height)
+            let end = CGPoint(x: endpoints.end.x / pixelScale.width, y: endpoints.end.y / pixelScale.height)
             context.addPath(arrowPath(from: start, to: end, width: width))
             context.fillPath()
         case .text:
-            context.setShadow(offset: CGSize(width: 0, height: pixelScale.height), blur: 2 * sqrt(pixelScale.width * pixelScale.height), color: CGColor(gray: 0, alpha: 0.35))
+            context.setShadow(offset: CGSize(width: 0, height: pixelScale.height * presentationScale), blur: 2 * sqrt(pixelScale.width * pixelScale.height) * presentationScale, color: CGColor(gray: 0, alpha: 0.35))
             if style.textBackground {
                 context.addPath(CGPath(roundedRect: rect, cornerWidth: 6, cornerHeight: 6, transform: nil)); context.fillPath()
                 context.setShadow(offset: .zero, blur: 0, color: nil)
@@ -338,7 +423,7 @@ enum EditorRenderer {
         func linear(_ value: Double) -> Double { value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4) }
         return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
     }
-    private static func meanLuminance(_ image: CGImage) throws -> Double {
+    static func meanLuminance(_ image: CGImage) throws -> Double {
         let sample = try context(width: min(image.width, 64), height: min(image.height, 64))
         sample.draw(image, in: CGRect(x: 0, y: 0, width: sample.width, height: sample.height))
         guard let data = sample.data?.assumingMemoryBound(to: UInt8.self) else { throw EditorError.render }

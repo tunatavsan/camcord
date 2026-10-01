@@ -4,7 +4,6 @@ import UniformTypeIdentifiers
 
 struct EditorStyleCapsule: View {
     @Bindable var session: EditorSession
-    @State private var showsText = false
     @State private var showsPrivacy = false
     private var tool: EditorTool { session.selectedAnnotation?.kind ?? session.tool }
     private var style: EditorStyle { session.selectedAnnotation?.style ?? session.style }
@@ -13,7 +12,7 @@ struct EditorStyleCapsule: View {
     var body: some View {
         HStack(spacing: Theme.Space.s) {
             if usesColor {
-                EditorColorSwatches(color: style.color, set: setColor)
+                EditorColorSwatches(color: style.color, set: setColor, session: session)
                 Divider().frame(height: Theme.Space.l)
             }
             if [.arrow, .rectangle].contains(tool) {
@@ -30,8 +29,8 @@ struct EditorStyleCapsule: View {
                 EditorPresetGroup(values: Theme.Editor.effectSizes, value: style.effectSize, title: "Effect size", set: setEffectSize)
             }
             if session.selectedAnnotation?.kind == .text || session.selectedAnnotation?.kind == .step {
-                Button("Edit annotation", systemImage: "text.cursor") { showsText.toggle() }
-                    .popover(isPresented: $showsText) { EditorSelectedContent(session: session).padding(Theme.Space.l) }
+                Button("Edit annotation", systemImage: "text.cursor") { session.showsAnnotationEditor.toggle() }
+                    .popover(isPresented: $session.showsAnnotationEditor) { EditorSelectedContent(session: session).padding(Theme.Space.l) }
             }
             if [.redact, .blur, .pixelate].contains(tool) {
                 Button("Redaction information", systemImage: "info.circle") { showsPrivacy.toggle() }
@@ -79,6 +78,7 @@ struct EditorStyleCapsule: View {
 private struct EditorColorSwatches: View {
     let color: EditorColor
     let set: (EditorColor) -> Void
+    let session: EditorSession
     private let labels: [LocalizedStringResource] = ["Red", "Black", "White", "Yellow", "Green", "Blue", "Purple"]
     var body: some View {
         HStack(spacing: 0) {
@@ -95,7 +95,7 @@ private struct EditorColorSwatches: View {
                 .accessibilityLabel(Text(labels[index]))
                 .accessibilityValue(color == value ? Text("Selected") : Text("Not selected"))
             }
-            EditorNativeColorWell(color: color, set: set)
+            EditorNativeColorWell(color: color, set: set, session: session)
                 .frame(width: Theme.Editor.hitSize, height: Theme.Editor.hitSize)
         }
     }
@@ -104,9 +104,11 @@ private struct EditorColorSwatches: View {
 private struct EditorNativeColorWell: NSViewRepresentable {
     let color: EditorColor
     let set: (EditorColor) -> Void
-    func makeCoordinator() -> Coordinator { Coordinator(set: set) }
+    let session: EditorSession?
+    func makeCoordinator() -> Coordinator { Coordinator(set: set, session: session) }
     func makeNSView(context: Context) -> NSColorWell {
-        let well = NSColorWell(frame: CGRect(x: 0, y: 0, width: Theme.Editor.hitSize, height: Theme.Editor.hitSize))
+        let well = EditorContinuousColorWell(frame: CGRect(x: 0, y: 0, width: Theme.Editor.hitSize, height: Theme.Editor.hitSize))
+        well.session = context.coordinator.session
         well.colorWellStyle = .minimal
         well.supportsAlpha = true
         well.target = context.coordinator
@@ -116,6 +118,7 @@ private struct EditorNativeColorWell: NSViewRepresentable {
     }
     func updateNSView(_ well: NSColorWell, context: Context) {
         context.coordinator.set = set
+        (well as? EditorContinuousColorWell)?.session = session
         well.color = NSColor(cgColor: color.cgColor) ?? .clear
     }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSColorWell, context: Context) -> CGSize? {
@@ -123,7 +126,8 @@ private struct EditorNativeColorWell: NSViewRepresentable {
     }
     @MainActor final class Coordinator: NSObject {
         var set: (EditorColor) -> Void
-        init(set: @escaping (EditorColor) -> Void) { self.set = set }
+        weak var session: EditorSession?
+        init(set: @escaping (EditorColor) -> Void, session: EditorSession?) { self.set = set; self.session = session }
         @objc func changed(_ well: NSColorWell) {
             guard let rgb = well.color.usingColorSpace(.sRGB) else { return }
             set(EditorColor(red: rgb.redComponent, green: rgb.greenComponent, blue: rgb.blueComponent, alpha: rgb.alphaComponent))
@@ -157,10 +161,7 @@ private struct EditorSelectedContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             if session.selectedAnnotation?.kind == .text {
-                TextField("Annotation text", text: Binding(get: { session.selectedAnnotation?.text ?? "" }, set: { value in
-                    session.updateSelected { $0.text = value }
-                }))
-                .textFieldStyle(.roundedBorder)
+                EditorAnnotationText(session: session).frame(height: 72)
             } else if session.selectedAnnotation?.kind == .step {
                 Stepper("Step number", value: Binding(get: { session.selectedAnnotation?.stepNumber ?? 1 }, set: { value in
                     session.updateSelected { $0.stepNumber = value }
@@ -204,12 +205,12 @@ struct EditorZoomCapsule: View {
             Divider().frame(height: Theme.Space.l)
             Menu {
                 Button("Fit") { session.fitZoom = true }
-                Button("Actual pixels") { session.fitZoom = false; session.zoom = 1 }
+                Button("Actual pixels") { session.fitZoom = false; session.zoom = session.actualPixelZoom }
                 Divider()
                 Button("Zoom in") { session.changeZoom(by: 1.25) }
                 Button("Zoom out") { session.changeZoom(by: 0.8) }
             } label: {
-                Text(verbatim: "\(Int((session.canvasZoom * 100).rounded()))%").font(Theme.Font.data)
+                Text(verbatim: "\(session.displayedZoomPercent)%").font(Theme.Font.data)
             }.menuStyle(.borderlessButton).fixedSize()
         }
         .padding(.horizontal, Theme.Space.m).padding(.vertical, Theme.Space.s)
@@ -279,4 +280,10 @@ private struct EditorRecentThumbnail: View {
         }.buttonStyle(.plain).help(item.title).accessibilityLabel(Text(verbatim: item.title))
         .task(id: item.id) { image = await library.thumbnails.image(for: item, edge: 240) }
     }
+}
+
+@MainActor private final class EditorContinuousColorWell: NSColorWell {
+    weak var session: EditorSession?
+    override func activate(_ exclusive: Bool) { if !isActive { session?.beginContinuousEdit() }; super.activate(exclusive) }
+    override func deactivate() { if isActive { session?.endContinuousEdit() }; super.deactivate() }
 }

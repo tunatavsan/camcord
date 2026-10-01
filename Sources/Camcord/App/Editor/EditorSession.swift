@@ -23,9 +23,11 @@ final class EditorSession {
     var selectedSuggestions: Set<UUID> = []
     private(set) var pixelHex: String?
     private(set) var pixelLocation: CGPoint?
-    var selectedID: UUID?
+    var selectedID: UUID? { didSet { if selectedID != oldValue { showsAnnotationEditor = false } } }
+    var showsAnnotationEditor = false
     var tool = EditorTool.select {
         didSet {
+            if tool != oldValue { showsAnnotationEditor = false }
             if !hasChosenLineWidth && (tool == .arrow || tool == .rectangle) {
                 style.lineWidth = tool == .arrow ? 6 : 4
             }
@@ -44,8 +46,28 @@ final class EditorSession {
     var error: String?
     var pendingCapture: CapturedScreenshot?
     private(set) var pendingURL: URL?
-    private var undoEntries: [EditorEdits] = []
-    private var redoEntries: [EditorEdits] = []
+    let editUndoManager = UndoManager()
+    private var snapshotCosts: [Int] = []
+    private var continuousDepth = 0
+    private var continuousRecorded = false
+    func beginContinuousEdit() { if continuousDepth == 0 { continuousRecorded = false }; continuousDepth += 1 }
+    func endContinuousEdit() { continuousDepth = max(0, continuousDepth - 1) }
+    private(set) var displayBase: EditorDisplayBase?
+    private(set) var displayBaseEdits: EditorEdits?
+    @ObservationIgnored private let pixelRenderer = EditorLiveRenderer()
+    private(set) var displayBaseGeneration = 0
+    private var requestedDisplayKey: EditorEdits?
+    private var acceptedDisplayKey: EditorEdits?
+    private(set) var displayRasterRequests = 0
+    private(set) var backingScale: CGFloat = 1
+    var actualPixelZoom: CGFloat { 1 / backingScale }
+    var displayedZoomPercent: Int { Int((canvasZoom * backingScale * 100).rounded()) }
+    func reportBackingScale(_ value: CGFloat) {
+        guard value > 0, value.isFinite else { return }
+        let wasActual = abs(zoom - actualPixelZoom) < 0.0001
+        backingScale = value
+        if !fitZoom && wasActual { zoom = actualPixelZoom }
+    }
     private var cleanEdits: EditorEdits?
     private var loadGeneration = 0
     private var nextStepNumber = 1
@@ -60,12 +82,13 @@ final class EditorSession {
     private let defaults: UserDefaults?
     private var rememberedBackground = EditorBackground()
     @ObservationIgnored var onDocumentAccepted: (@MainActor () -> Void)?
-    var canUndo: Bool { !undoEntries.isEmpty }
-    var canRedo: Bool { !redoEntries.isEmpty }
+    var canUndo: Bool { _ = revision; return editUndoManager.canUndo }
+    var canRedo: Bool { _ = revision; return editUndoManager.canRedo }
     var hasUnsavedEdits: Bool { document.map { $0.edits != cleanEdits } ?? false }
     var selectedAnnotation: EditorAnnotation? { document?.edits.annotations.first { $0.id == selectedID } }
     var nextStep: Int { nextStepNumber }
     init(defaults: UserDefaults? = nil, worker: EditorWorker = EditorWorker(), temporaryExports: EditorTemporaryExports = EditorTemporaryExports(), pins: PinnedScreenshotController = PinnedScreenshotController(), clipboard: ClipboardOperations = ClipboardOperations()) {
+        editUndoManager.groupsByEvent = false; editUndoManager.levelsOfUndo = 60
         self.defaults = defaults; self.worker = worker; self.temporaryExports = temporaryExports; self.pins = pins; self.clipboard = clipboard
         pins.claimClipboardPublication = { [weak self] in self?.claimPublication() ?? { false } }
         if let data = defaults?.data(forKey: "editor.backgroundStyle"), let value = try? JSONDecoder().decode(EditorBackground.self, from: data), value.valid { rememberedBackground = value }
@@ -119,62 +142,97 @@ final class EditorSession {
     private func accept(_ original: EditorDocument) {
         var value = original; value.edits.background = rememberedBackground
         loadGeneration += 1; isLoading = false; document = value; cleanEdits = value.edits; nextStepNumber = 1
-        undoEntries = []; redoEntries = []; selectedID = nil; pendingCapture = nil; pendingURL = nil; fitZoom = true; error = nil
+        editUndoManager.removeAllActions(withTarget: self); snapshotCosts = []; selectedID = nil; pendingCapture = nil; pendingURL = nil; fitZoom = true; error = nil
+        preview = nil; previewRevision = -1
+        displayBase = EditorDisplayBase(image: value.source, pointSize: value.pointSize, underlay: value.source)
+        displayBaseEdits = EditorEdits(crop: value.bounds)
+        displayBaseGeneration += 1; requestedDisplayKey = nil; acceptedDisplayKey = nil
         changed(); onDocumentAccepted?()
     }
     func edit(_ mutation: (inout EditorEdits) -> Void) {
         guard var value = document else { return }
         let previous = value.edits; mutation(&value.edits)
         guard value.edits.valid, value.edits != previous else { return }
-        undoEntries.append(previous)
-        // Bound text/annotation snapshot memory as well as the number of entries.
-        while undoEntries.count > 60 || undoEntries.reduce(0, { $0 + $1.annotations.reduce(0, { $0 + 256 + $1.text.utf8.count }) }) > 16_000_000 { undoEntries.removeFirst() }
+        recordSnapshot(previous)
         if value.edits.background != previous.background {
             rememberedBackground = value.edits.background
             if let data = try? JSONEncoder().encode(rememberedBackground) { defaults?.set(data, forKey: "editor.backgroundStyle") }
         }
-        redoEntries.removeAll(); document = value; nextStepNumber = min(9999, max(nextStepNumber, (value.edits.annotations.filter { $0.kind == .step }.map(\.stepNumber).max() ?? 0) + 1)); changed()
+        document = value; nextStepNumber = min(9999, max(nextStepNumber, (value.edits.annotations.filter { $0.kind == .step }.map(\.stepNumber).max() ?? 0) + 1)); changed()
     }
-    func undo() {
-        guard let edits = undoEntries.popLast(), let current = document?.edits else { return }
-        redoEntries.append(current); document?.edits = edits; selectedID = nil; changed()
+    private func recordSnapshot(_ edits: EditorEdits) {
+        if continuousDepth > 0 && !editUndoManager.isUndoing && !editUndoManager.isRedoing {
+            if continuousRecorded { return }; continuousRecorded = true
+        }
+        let cost = edits.annotations.reduce(0) { $0 + 256 + $1.text.utf8.count }
+        if !editUndoManager.isUndoing && !editUndoManager.isRedoing {
+            snapshotCosts.append(cost)
+            if snapshotCosts.count > 60 { snapshotCosts.removeFirst() }
+            let maximum = max(1, snapshotCosts.max() ?? 1)
+            editUndoManager.levelsOfUndo = min(60, max(1, 16_000_000 / maximum))
+            editUndoManager.beginUndoGrouping()
+        }
+        editUndoManager.registerUndo(withTarget: self) { target in
+            MainActor.assumeIsolated { target.restoreSnapshot(edits) }
+        }
+        if !editUndoManager.isUndoing && !editUndoManager.isRedoing { editUndoManager.endUndoGrouping() }
     }
-    func redo() {
-        guard let edits = redoEntries.popLast(), let current = document?.edits else { return }
-        undoEntries.append(current); document?.edits = edits; selectedID = nil; changed()
+    private func restoreSnapshot(_ edits: EditorEdits) {
+        guard let current = document?.edits else { return }
+        recordSnapshot(current); document?.edits = edits; continuousRecorded = false
+        if let selectedID, !edits.annotations.contains(where: { $0.id == selectedID }) { self.selectedID = nil }
+        if selectedID == nil { selectedID = edits.annotations.last?.id }
+        changed()
+    }
+    func undo() { editUndoManager.undo() }
+    func redo() { editUndoManager.redo() }
+    private func displayKey(_ edits: EditorEdits) -> EditorEdits {
+        var key = edits; key.annotations = edits.annotations.filter { [.redact, .blur, .pixelate].contains($0.kind) }; return key
     }
     private func changed() {
         revision += 1; pixelHex = nil; pixelLocation = nil; hasScannedSensitiveText = false; suggestions = []; selectedSuggestions = []; ocrTask?.cancel(); isFindingText = false
-        preview = nil; previewRevision = -1; schedulePreview()
+        schedulePreview()
     }
     private func schedulePreview() {
-        renderTask?.cancel()
         guard let document else { return }
-        let currentRevision = revision; isRendering = true
+        let key = displayKey(document.edits)
+        if acceptedDisplayKey == key { renderTask?.cancel(); requestedDisplayKey = key; isRendering = false; return }
+        guard requestedDisplayKey != key || !isRendering else { return }
+        renderTask?.cancel(); requestedDisplayKey = key; displayRasterRequests += 1
+        isRendering = true
         renderTask = Task { [weak self, worker] in
             do {
-                let result = try await worker.render(document)
-                guard let self, !Task.isCancelled, self.document?.id == document.id, self.revision == currentRevision else { return }
-                self.preview = result; self.previewRevision = currentRevision; self.isRendering = false
+                let result = try await worker.displayBase(document)
+                guard let self, !Task.isCancelled, self.document?.id == document.id,
+                      self.document.map({ self.displayKey($0.edits) }) == key else { return }
+                self.displayBase = result; self.displayBaseEdits = key; self.displayBaseGeneration += 1; self.acceptedDisplayKey = key; self.isRendering = false
+                if self.document?.edits.annotations.isEmpty == true { self.preview = EditorRendered(image: result.image, pointSize: result.pointSize); self.previewRevision = self.revision }
             } catch {
-                guard let self, !Task.isCancelled, self.revision == currentRevision else { return }
+                guard let self, !Task.isCancelled, self.requestedDisplayKey == key else { return }
                 self.error = error.localizedDescription; self.isRendering = false
             }
         }
     }
+    func candidate(tool: EditorTool, from: CGPoint, to: CGPoint) -> EditorAnnotation? {
+        guard let document, tool != .select, tool != .crop else { return nil }
+        func clamped(_ point: CGPoint) -> CGPoint { CGPoint(x: min(max(point.x, 0), document.bounds.maxX), y: min(max(point.y, 0), document.bounds.maxY)) }
+        let start = clamped(from), end = clamped(to)
+        var rect = EditorGeometry.drag(from: start, to: end, bounds: document.bounds)
+        if tool == .arrow {
+            guard hypot(start.x - end.x, start.y - end.y) > 0 else { return nil }
+        } else if rect.width < 1 || rect.height < 1 {
+            if tool == .text || tool == .step { rect = CGRect(x: start.x, y: start.y, width: tool == .text ? 220 : 48, height: 48).intersection(document.bounds) }
+            else { return nil }
+        }
+        return EditorAnnotation(kind: tool, rect: rect, style: style, text: tool == .text ? String(localized: "Text") : "", stepNumber: nextStep, arrowStart: tool == .arrow ? start : nil, arrowEnd: tool == .arrow ? end : nil)
+    }
     func add(tool: EditorTool, from: CGPoint, to: CGPoint) {
         guard let document, tool != .select else { return }
-        var rect = EditorGeometry.drag(from: from, to: to, bounds: document.bounds)
-        if tool == .arrow && !rect.isNull && max(rect.width, rect.height) >= 1 {
-            if rect.width < 1 { rect = CGRect(x: min(max(0, from.x - 0.5), document.bounds.width - 1), y: rect.minY, width: 1, height: rect.height) }
-            if rect.height < 1 { rect = CGRect(x: rect.minX, y: min(max(0, from.y - 0.5), document.bounds.height - 1), width: rect.width, height: 1) }
+        if tool == .crop {
+            let rect = EditorGeometry.drag(from: from, to: to, bounds: document.bounds)
+            if !rect.isEmpty { edit { $0.crop = rect.integral.intersection(document.bounds) } }; return
         }
-        if rect.isNull || rect.width < 1 || rect.height < 1 {
-            if tool == .text || tool == .step { rect = CGRect(x: from.x, y: from.y, width: tool == .text ? 220 : 48, height: 48).intersection(document.bounds) }
-            else { return }
-        }
-        if tool == .crop { edit { $0.crop = rect.integral.intersection(document.bounds) }; return }
-        let annotation = EditorAnnotation(kind: tool, rect: rect, style: style, text: tool == .text ? String(localized: "Text") : "", stepNumber: nextStep, reversedX: from.x > to.x, reversedY: from.y > to.y, horizontalArrow: tool == .arrow && abs(from.y - to.y) < 1, verticalArrow: tool == .arrow && abs(from.x - to.x) < 1)
+        guard let annotation = candidate(tool: tool, from: from, to: to) else { return }
         edit { $0.annotations.append(annotation) }; selectedID = annotation.id
     }
     func updateSelected(_ mutation: (inout EditorAnnotation) -> Void) {
@@ -183,7 +241,7 @@ final class EditorSession {
     }
     func setSelectionRect(_ rect: CGRect) {
         guard let bounds = document?.bounds, EditorGeometry.valid(rect) else { return }
-        updateSelected { $0.rect = rect.intersection(bounds) }
+        updateSelected { $0.setRect(rect.intersection(bounds)) }
     }
     func nudge(dx: CGFloat, dy: CGFloat) {
         guard let annotation = selectedAnnotation, let bounds = document?.bounds else { return }
@@ -215,7 +273,12 @@ final class EditorSession {
         }
     }
     func waitForSensitiveText() async { await ocrTask?.value }
-    func waitForRendering() async { await renderTask?.value }
+    func waitForRendering() async {
+        await renderTask?.value
+        guard let document else { return }
+        let expected = revision
+        if let result = try? await worker.render(document), revision == expected, self.document?.id == document.id { preview = result; previewRevision = expected }
+    }
     func applySuggestions() {
         let accepted = suggestions.filter { selectedSuggestions.contains($0.id) }
         edit { edits in edits.annotations += accepted.map { EditorAnnotation(kind: .redact, rect: $0.rect, style: EditorStyle(color: .black)) } }
@@ -275,14 +338,14 @@ final class EditorSession {
         panel.begin { [weak self] response in guard response == .OK, let url = panel.url else { return }; Task { @MainActor in do { try await self?.export(to: url) } catch { self?.error = error.localizedDescription } } }
     }
     func inspectPixel(at sourcePoint: CGPoint?) {
-        guard let sourcePoint, let document, let preview, previewRevision == revision,
-              document.edits.crop.contains(sourcePoint) else { pixelHex = nil; pixelLocation = nil; return }
-        let crop = document.edits.crop.integral
-        let background = document.edits.background
-        let padding = background.preset == .none ? 0 : ceil(background.padding + background.frameWidth)
-        let point = CGPoint(x: sourcePoint.x - crop.minX + padding, y: sourcePoint.y - crop.minY + padding)
-        pixelHex = try? EditorRenderer.sample(preview.image, at: point)
-        pixelLocation = CGPoint(x: floor(sourcePoint.x), y: floor(sourcePoint.y))
+        guard let sourcePoint, let document, let base = displayBase, document.edits.crop.contains(sourcePoint) else { pixelHex = nil; pixelLocation = nil; return }
+        let point = CGPoint(x: floor(sourcePoint.x), y: floor(sourcePoint.y))
+        pixelRenderer.invalidate(baseGeneration: displayBaseGeneration, annotations: document.edits.annotations, baseEdits: displayBaseEdits)
+        if pixelRenderer.requiresLivePrivacy(document.edits.annotations), base.privacySource != nil {
+            try? pixelRenderer.preparePrivacy(region:CGRect(origin:point,size:CGSize(width:1,height:1)),scale:1,base:base,document:document,annotations:document.edits.annotations)
+        }
+        if let image = try? pixelRenderer.compose(rect: CGRect(origin: point, size: CGSize(width: 1, height: 1)), scale: 1, base: base, document: document, annotations: document.edits.annotations) { pixelHex = try? EditorRenderer.sample(image, at: .zero); pixelLocation = point }
+        else { pixelHex = nil; pixelLocation = nil }
     }
     func claimPublication() -> @MainActor () -> Bool {
         if let claimClipboardPublication { return claimClipboardPublication() }
@@ -293,9 +356,12 @@ final class EditorSession {
         let canPublish = claimPublication()
         guard !Task.isCancelled, canPublish() else { return }
         pasteboard.clearContents(); if !pasteboard.setString(hex, forType: .string) { error = String(localized: "The pixel color could not be copied.") } }
-    func resume() { if preview == nil && !isRendering { schedulePreview() } }
+    func resume() { if !isRendering { schedulePreview() } }
     func shutdown() { stop(); pins.closeAll(); temporaryExports.cleanup() }
-    func stop() { loadGeneration += 1; renderTask?.cancel(); ocrTask?.cancel(); isLoading = false; isRendering = false; isFindingText = false }
+    func stop() {
+        loadGeneration += 1; renderTask?.cancel(); ocrTask?.cancel(); isLoading = false; isRendering = false; isFindingText = false
+        displayBase?.privacySource = nil; acceptedDisplayKey = nil; requestedDisplayKey = nil
+    }
 }
 
 extension EnvironmentValues { @Entry var screenshotEditorSession: EditorSession? }

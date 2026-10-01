@@ -72,6 +72,8 @@ struct EditorWorkspace: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { session.resume() }
+        .onDisappear { session.stop() }
         .inspector(isPresented: $session.showsBackgroundInspector) {
             EditorBackgroundInspector(session: session)
                 .inspectorColumnWidth(Theme.Editor.inspectorWidth)

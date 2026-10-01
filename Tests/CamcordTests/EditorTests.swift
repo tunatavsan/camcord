@@ -369,6 +369,15 @@ struct EditorSessionTests {
     private func capture() throws -> CapturedScreenshot {
         CapturedScreenshot(id: UUID(), image: try EditorRendererTests.image(), pointSize: CGSize(width: 8, height: 6), kind: .screenshot, saveToDiskRequested: false)
     }
+    @Test("Vector changes retain the accepted raster until replacement is ready")
+    func interactionBaseRetention() async throws {
+        let session = EditorSession(); session.open(try capture()); await session.waitForRendering()
+        let original = try #require(session.preview?.image)
+        session.add(tool: .rectangle, from: CGPoint(x: 1, y: 1), to: CGPoint(x: 5, y: 5))
+        #expect(session.preview?.image === original)
+        session.stop()
+    }
+
     @Test("Native scroll magnification keeps crop and background coordinates single-scaled and presentation clean")
     func nativeCanvasMagnification() async throws {
         let session = EditorSession()
@@ -440,6 +449,12 @@ struct EditorSessionTests {
         session.undo(); #expect(session.document!.edits.crop == session.document!.bounds); #expect(session.document!.edits.annotations.count == 1)
         session.undo(); #expect(session.document!.edits.annotations.isEmpty); #expect(!session.hasUnsavedEdits)
         session.redo(); #expect(session.document!.source === source); #expect(session.document!.edits.annotations.count == 1)
+        let originalStyle = try #require(session.selectedAnnotation?.style)
+        session.beginContinuousEdit()
+        session.updateSelected { $0.style.lineWidth = 7 }; session.updateSelected { $0.style.lineWidth = 8 }
+        session.editUndoManager.undo(); #expect(session.selectedAnnotation?.style == originalStyle)
+        session.updateSelected { $0.style.lineWidth = 9 }; session.editUndoManager.undo()
+        #expect(session.selectedAnnotation?.style == originalStyle); session.endContinuousEdit()
         session.stop()
     }
     @Test("Fresh capture cannot silently discard edits; explicit discard opens requested identity")
@@ -685,4 +700,418 @@ struct EditorIdentityTests {
         await session.waitForSensitiveText()
         #expect(session.suggestions.isEmpty); #expect(!session.isFindingText); session.stop()
     }
+}
+
+@Suite("Editor native interaction", .serialized) @MainActor
+struct EditorNativeInteractionTests {
+    @Test("Background radius rounds the padded card while original source alpha reveals its background")
+    func backgroundCardRadius() throws {
+        var doc = try source(alpha: 0.4)
+        doc.edits.background = EditorBackground(preset: .paper, padding: 30, cornerRadius: 24, shadow: false, color: .paper)
+        let output = try EditorRenderer.render(doc).image
+        let bytes = try rgba(output)
+        #expect(bytes[3] == 0)
+        let sourceCorner = try #require(output.cropping(to: CGRect(x:30,y:30,width:1,height:1)))
+        let reference = try EditorRenderer.context(width:1,height:1)
+        reference.setFillColor(EditorColor.paper.cgColor); reference.fill(CGRect(x:0,y:0,width:1,height:1))
+        reference.draw(try #require(doc.source.cropping(to:CGRect(x:0,y:0,width:1,height:1))), in:CGRect(x:0,y:0,width:1,height:1))
+        #expect(try rgba(sourceCorner) == rgba(#require(reference.makeImage())))
+    }
+    @Test("Auto and Square preserve original alpha, Rounded uses twelve source points, and old background records default to Auto", arguments:[1,2])
+    func sourceCornerPolicies(scale:Int) throws {
+        var doc = try source(scale:scale,alpha:0.4)
+        let original = try rgba(doc.source)
+        #expect(try rgba(EditorRenderer.render(doc).image) == original)
+        doc.edits.background.imageCorners = .square
+        #expect(try rgba(EditorRenderer.render(doc).image) == original)
+        doc.edits.background.imageCorners = .rounded
+        let rounded = try EditorRenderer.render(doc).image
+        #expect(try rgba(#require(rounded.cropping(to:CGRect(x:scale,y:scale,width:1,height:1))))[3] == 0)
+        #expect(try rgba(#require(rounded.cropping(to:CGRect(x:12*scale,y:scale,width:1,height:1))))[3] == original[3])
+        let renderer = EditorLiveRenderer(), base = try EditorRenderer.displayBase(doc)
+        renderer.invalidate(baseGeneration:1,annotations:[])
+        #expect(try rgba(renderer.compose(rect:doc.bounds,scale:1,base:base,document:doc,annotations:[])) == rgba(rounded))
+        var object = try #require(JSONSerialization.jsonObject(with:JSONEncoder().encode(doc.edits.background)) as? [String:Any])
+        object.removeValue(forKey:"imageCorners")
+        let legacy = try JSONDecoder().decode(EditorBackground.self,from:JSONSerialization.data(withJSONObject:object))
+        #expect(legacy.imageCorners == .auto && legacy.padding == doc.edits.background.padding)
+    }
+    @Test("A source alpha shadow stays meaningful without a frame and agrees with bounded live patches", arguments:EditorBackground.ImageCorners.allCases)
+    func sourceAlphaShadow(corners:EditorBackground.ImageCorners) throws {
+        let context = try EditorRenderer.context(width:100,height:100)
+        context.setFillColor(CGColor(gray:0.8,alpha:1)); context.fill(CGRect(x:15,y:15,width:70,height:70))
+        var doc = try EditorDocument(source:#require(context.makeImage()))
+        doc.edits.background = EditorBackground(preset:.paper,padding:40,cornerRadius:20,shadow:false,imageCorners:corners)
+        let unshadowed = try EditorRenderer.render(doc).image
+        doc.edits.background.shadow = true
+        let shadowed = try EditorRenderer.render(doc).image
+        #expect(try rgba(shadowed) != rgba(unshadowed))
+        #expect(try EditorRenderer.sample(shadowed,at:CGPoint(x:90,y:149)) != EditorRenderer.sample(unshadowed,at:CGPoint(x:90,y:149)))
+        doc.edits.annotations = [EditorAnnotation(kind:.highlight,rect:CGRect(x:0,y:0,width:80,height:50),style:EditorStyle(color:EditorRenderer.markerColor))]
+        let full = try EditorRenderer.render(doc), base = try EditorRenderer.displayBase(doc)
+        let renderer = EditorLiveRenderer(); renderer.invalidate(baseGeneration:1,annotations:doc.edits.annotations)
+        let live = try renderer.compose(rect:doc.bounds,scale:1,base:base,document:doc,annotations:doc.edits.annotations)
+        #expect(try rgba(live) == rgba(#require(full.image.cropping(to:CGRect(x:40,y:40,width:100,height:100)))))
+    }
+    private func source(scale: Int = 1, alpha: CGFloat = 1) throws -> EditorDocument {
+        let context = try EditorRenderer.context(width: 320 * scale, height: 240 * scale)
+        context.setFillColor(CGColor(srgbRed: 0.8, green: 0.85, blue: 0.9, alpha: alpha)); context.fill(CGRect(x: 0, y: 0, width: context.width, height: context.height))
+        context.setFillColor(CGColor(gray: 0.08, alpha: alpha))
+        for x in stride(from: 40, to: 200, by: 20) { context.fill(CGRect(x: x * scale, y: 80 * scale, width: 8 * scale, height: 12 * scale)) }
+        return try EditorDocument(source: #require(context.makeImage()), pointSize: CGSize(width: 320, height: 240))
+    }
+    @Test("Privacy jobs retain accepted base, ignore vector-only changes and refresh after stop without stale publication")
+    func displayPrivacyLifecycle() async throws {
+        let gate = EditorDisplayRenderGate()
+        let session = EditorSession(worker: EditorWorker(displayRenderer: { try await gate.render($0) }))
+        let first = try source()
+        session.open(CapturedScreenshot(id:UUID(),image:first.source,pointSize:first.pointSize,kind:.screenshot,saveToDiskRequested:false)); await session.waitForRendering()
+        let accepted = try #require(session.displayBase?.image)
+        session.add(tool:.rectangle,from:.init(x:10,y:10),to:.init(x:80,y:80))
+        #expect(session.displayRasterRequests == 1 && session.displayBase?.image === accepted)
+        session.add(tool:.redact,from:.init(x:40,y:60),to:.init(x:90,y:90))
+        #expect(session.displayBase?.image === accepted && session.isRendering)
+        await gate.waitForStart()
+        session.stop(); #expect(session.displayBase?.image === accepted)
+        session.resume(); await session.waitForRendering()
+        #expect(session.displayRasterRequests == 3 && !session.isRendering)
+        #expect(try EditorRenderer.sample(#require(session.displayBase?.image), at:CGPoint(x:50,y:70)) == "#000000")
+        let generation = session.displayBaseGeneration
+        await gate.resume(); await Task.yield()
+        #expect(session.displayBaseGeneration == generation)
+        session.stop()
+    }
+    @Test("A moved blur or pixelate restores its old area and its live GPU patch matches full export", arguments:[EditorTool.blur,.pixelate])
+    func livePrivacyMove(tool:EditorTool) throws {
+        var original = try source()
+        original.edits.annotations = [EditorAnnotation(kind:tool,rect:CGRect(x:30,y:135,width:120,height:50))]
+        let base = try EditorRenderer.displayBase(original)
+        #expect(base.privacySource != nil)
+        let former = original.edits.annotations[0].rect
+        #expect(try rgba(#require(base.image.cropping(to:former))) != rgba(#require(original.source.cropping(to:former))))
+        var moved = original; moved.edits.annotations[0].rect = CGRect(x:175,y:135,width:120,height:50)
+        let renderer = EditorLiveRenderer(); renderer.invalidate(baseGeneration:1,annotations:moved.edits.annotations,baseEdits:original.edits)
+        let live = try renderer.compose(rect:moved.bounds,scale:1,base:base,document:moved,annotations:moved.edits.annotations)
+        let expected = try EditorRenderer.render(moved)
+        let actual = try rgba(live), full = try rgba(expected.image)
+        #expect(zip(actual,full).map { abs(Int($0)-Int($1)) }.max() ?? 0 <= 1)
+        #expect(try rgba(#require(live.cropping(to:former))) == rgba(#require(moved.source.cropping(to:former))))
+        #expect(renderer.privacyPatchComputations == 1)
+        _ = try renderer.compose(rect:former,scale:1,base:base,document:moved,annotations:moved.edits.annotations)
+        #expect(renderer.privacyPatchComputations == 1)
+    }
+    @Test("Unfiltered display privacySource can never become flattened or copied pixels and is released on stop")
+    func privateSourcePublication() async throws {
+        let poisonContext = try EditorRenderer.context(width:320,height:240)
+        poisonContext.setFillColor(CGColor(srgbRed:1,green:0,blue:1,alpha:1)); poisonContext.fill(CGRect(x:0,y:0,width:320,height:240))
+        let poison = try #require(poisonContext.makeImage())
+        var copied:Data?
+        var clipboard = EditorSession.ClipboardOperations()
+        clipboard.copyPNG = { image,size,_,allowed in
+            guard allowed() else { return false }
+            copied = try? EditorRendered(image:image,pointSize:size).png; return copied != nil
+        }
+        let session = EditorSession(worker:EditorWorker(displayRenderer:{ document in
+            var base = try EditorRenderer.displayBase(document); base.privacySource = poison; return base
+        }),clipboard:clipboard)
+        let document = try source()
+        session.open(CapturedScreenshot(id:UUID(),image:document.source,pointSize:document.pointSize,kind:.screenshot,saveToDiskRequested:false)); await session.waitForRendering()
+        session.add(tool:.redact,from:CGPoint(x:30,y:70),to:CGPoint(x:150,y:110)); await session.waitForRendering()
+        let expected = try EditorRenderer.render(#require(session.document))
+        #expect(try rgba(await session.flattened().image) == rgba(expected.image))
+        #expect(await session.copy())
+        #expect(copied == (try expected.png))
+        #expect(session.displayBase?.privacySource === poison)
+        session.stop(); #expect(session.displayBase?.privacySource == nil)
+        session.resume(); await session.waitForRendering(); #expect(session.displayBase?.privacySource === poison)
+        session.stop()
+    }
+    @Test("Pending redact sanitizes live GPU effect input before any neighboring pixels can be derived")
+    func pendingLiveDerivedPrivacy() throws {
+        func patch(secret:CGFloat) throws -> CGImage {
+            let c = try EditorRenderer.context(width:100,height:80)
+            c.setFillColor(CGColor(gray:0.8,alpha:1)); c.fill(CGRect(x:0,y:0,width:100,height:80))
+            c.setFillColor(CGColor(gray:secret,alpha:1)); c.fill(CGRect(x:35,y:30,width:20,height:20))
+            var doc = try EditorDocument(source:#require(c.makeImage()))
+            let clean = doc.edits, base = try EditorRenderer.displayBase(doc)
+            doc.edits.annotations = [EditorAnnotation(kind:.redact,rect:CGRect(x:35,y:30,width:20,height:20)),EditorAnnotation(kind:.blur,rect:CGRect(x:15,y:15,width:70,height:50))]
+            let renderer = EditorLiveRenderer(); renderer.invalidate(baseGeneration:1,annotations:doc.edits.annotations,baseEdits:clean)
+            return try renderer.compose(rect:doc.bounds,scale:1,base:base,document:doc,annotations:doc.edits.annotations)
+        }
+        #expect(try rgba(patch(secret:0)) == rgba(patch(secret:1)))
+    }
+    @Test("Actual native drawing shows every tool before commit; privacy events coalesce to one display-frame GPU patch", arguments:[EditorTool.arrow,.rectangle,.text,.step,.highlight,.blur,.pixelate,.redact])
+    func nativeLiveTools(tool:EditorTool) async throws {
+        let doc = try source()
+        let session = EditorSession(); session.open(CapturedScreenshot(id:UUID(),image:doc.source,pointSize:doc.pointSize,kind:.screenshot,saveToDiskRequested:false)); await session.waitForRendering()
+        let window = NSWindow(contentRect:CGRect(x:0,y:0,width:600,height:480),styleMask:[.titled],backing:.buffered,defer:false); window.isReleasedWhenClosed = false
+        let scroll = EditorScrollNSView(frame:CGRect(x:0,y:0,width:600,height:480)); scroll.allowsMagnification = true; scroll.minMagnification = 0.02; scroll.maxMagnification = 16
+        let canvas = EditorCanvasNSView(); canvas.session = session; scroll.documentView = canvas; window.contentView = scroll
+        session.fitZoom = false; session.zoom = session.actualPixelZoom; scroll.synchronize(viewport:scroll.contentSize)
+        defer { session.stop(); window.close() }
+        func mouse(_ type:NSEvent.EventType,_ p:CGPoint) throws -> NSEvent {
+            try #require(NSEvent.mouseEvent(with:type,location:canvas.convert(p,to:nil),modifierFlags:[],timestamp:0,windowNumber:window.windowNumber,context:nil,eventNumber:0,clickCount:1,pressure:1))
+        }
+        let from = canvas.viewRect(CGRect(x:30,y:140,width:0,height:0)).origin
+        let to = canvas.viewRect(CGRect(x:170,y:210,width:0,height:0)).origin
+        session.tool = tool; canvas.mouseDown(with:try mouse(.leftMouseDown,from))
+        for step in 1...20 {
+            let t = CGFloat(step)/20
+            canvas.mouseDragged(with:try mouse(.leftMouseDragged,CGPoint(x:from.x+(to.x-from.x)*t,y:from.y+(to.y-from.y)*t)))
+        }
+        #expect(session.document?.edits.annotations.isEmpty == true && session.displayRasterRequests == 1)
+        let candidate = try #require(canvas.candidateAnnotation)
+        if tool == .blur || tool == .pixelate {
+            #expect(canvas.privacyPatchComputations == 0)
+            canvas.renderPrivacyDisplayFrame(); #expect(canvas.privacyPatchComputations == 1)
+            canvas.renderPrivacyDisplayFrame(); #expect(canvas.privacyPatchComputations == 1)
+        }
+        let layer = try #require(canvas.layer), delegate = layer.delegate; layer.delegate = nil
+        defer { layer.delegate = delegate }
+        let context = try EditorRenderer.context(width:Int(canvas.bounds.width),height:Int(canvas.bounds.height))
+        context.translateBy(x:0,y:canvas.bounds.height); context.scaleBy(x:1,y:-1); layer.render(in:context)
+        let region = candidate.rect
+        let actual = try #require(context.makeImage()?.cropping(to:canvas.viewRect(region)))
+        var expected = doc; expected.edits.annotations = [candidate]
+        let full = try #require(EditorRenderer.render(expected).image.cropping(to:region))
+        #expect(zip(try rgba(actual),try rgba(full)).map { abs(Int($0)-Int($1)) }.max() ?? 0 <= 1)
+        #expect(try rgba(actual) != rgba(#require(doc.source.cropping(to:region))))
+        canvas.mouseUp(with:try mouse(.leftMouseUp,to)); #expect(session.document?.edits.annotations.count == 1)
+        if tool == .blur {
+            session.tool = .redact
+            let from = canvas.viewRect(CGRect(x:205,y:150,width:0,height:0)).origin
+            let to = canvas.viewRect(CGRect(x:240,y:190,width:0,height:0)).origin
+            canvas.mouseDown(with:try mouse(.leftMouseDown,from)); canvas.mouseDragged(with:try mouse(.leftMouseDragged,to))
+            // A retained destination-bearing blur tile must never occlude new
+            // opaque coverage while the next GPU patch is still queued.
+            let protected = try EditorRenderer.context(width:Int(canvas.bounds.width),height:Int(canvas.bounds.height))
+            protected.translateBy(x:0,y:canvas.bounds.height); protected.scaleBy(x:1,y:-1); layer.render(in:protected)
+            let black = try #require(protected.makeImage()?.cropping(to:canvas.viewRect(CGRect(x:215,y:160,width:10,height:10))))
+            let values = try rgba(black)
+            for pixel in stride(from:0,to:400,by:4) {
+                #expect(values[pixel] == 0 && values[pixel+1] == 0 && values[pixel+2] == 0 && values[pixel+3] == 255)
+            }
+            canvas.cancelGesture()
+        }
+        session.undo(); #expect(session.document?.edits.annotations.isEmpty == true && !session.canUndo)
+    }
+    @Test("True arrow points survive old records, all directions, zero-axis geometry and independent resize")
+    func arrowEndpoints() throws {
+        let starts: [CGPoint] = [.init(x: 10.25, y: 20.75), .init(x: 150, y: 10), .init(x: 20, y: 150), .init(x: 150, y: 150), .init(x: 10, y: 30), .init(x: 30, y: 10)]
+        let ends: [CGPoint] = [.init(x: 130.5, y: 140.25), .init(x: 10, y: 130), .init(x: 150, y: 20), .init(x: 10, y: 20), .init(x: 150, y: 30), .init(x: 30, y: 150)]
+        let session = EditorSession(); session.open(CapturedScreenshot(id: UUID(), image: try source().source, pointSize: CGSize(width: 320, height: 240), kind: .screenshot, saveToDiskRequested: false))
+        for (start, end) in zip(starts, ends) {
+            session.add(tool: .arrow, from: start, to: end)
+            let arrow = try #require(session.selectedAnnotation)
+            #expect(arrow.valid && arrow.resolvedArrowEndpoints.start == start && arrow.resolvedArrowEndpoints.end == end)
+            let decoded = try JSONDecoder().decode(EditorAnnotation.self, from: JSONEncoder().encode(arrow))
+            #expect(decoded == arrow)
+            var moved = arrow; moved.setRect(arrow.rect.offsetBy(dx: 3, dy: 5))
+            #expect(moved.resolvedArrowEndpoints.start == CGPoint(x: start.x + 3, y: start.y + 5))
+            var endpoint = arrow; endpoint.setArrowEndpoints(start: start, end: CGPoint(x: 170, y: 180))
+            #expect(endpoint.resolvedArrowEndpoints.start == start)
+        }
+        var legacy = EditorAnnotation(kind: .arrow, rect: CGRect(x: 20, y: 30, width: 40, height: 70), reversedX: true, reversedY: false)
+        var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as? [String: Any])
+        object.removeValue(forKey: "horizontalArrow"); object.removeValue(forKey: "verticalArrow")
+        let decoded = try JSONDecoder().decode(EditorAnnotation.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(decoded.resolvedArrowEndpoints.start == CGPoint(x: 60, y: 30))
+        #expect(decoded.resolvedArrowEndpoints.end == CGPoint(x: 20, y: 100))
+        legacy.setRect(CGRect(x: 10, y: 10, width: 80, height: 140)); #expect(legacy.resolvedArrowEndpoints.start.x == 90)
+        session.stop()
+    }
+    @Test("Viewport patches reproduce shared export pixels including overlapping multiply, prefix text and alpha", arguments: [1, 2, 5])
+    func patchParity(scale: Int) throws {
+        var doc = try source(scale: scale)
+        let k = CGFloat(scale)
+        doc.edits.annotations = [
+            EditorAnnotation(kind: .rectangle, rect: CGRect(x: 28*k, y: 28*k, width: 160*k, height: 100*k), style: EditorStyle(lineWidth: 4)),
+            EditorAnnotation(kind: .text, rect: CGRect(x: 30*k, y: 40*k, width: 200*k, height: 60*k), text: "Ready"),
+            EditorAnnotation(kind: .highlight, rect: CGRect(x: 20*k, y: 50*k, width: 210*k, height: 80*k), style: EditorStyle(color: EditorRenderer.markerColor)),
+            EditorAnnotation(kind: .arrow, rect: .zero, style: EditorStyle(lineWidth: 6), arrowStart: CGPoint(x: 70*k,y: 150*k), arrowEnd: CGPoint(x: 220*k,y: 170*k))]
+        let base = try EditorRenderer.displayBase(doc), full = try EditorRenderer.render(doc)
+        let renderer = EditorLiveRenderer(); renderer.invalidate(baseGeneration: 1, annotations: doc.edits.annotations)
+        let patch = try renderer.compose(rect: doc.bounds, scale: 1, base: base, document: doc, annotations: doc.edits.annotations)
+        #expect(try rgba(patch) == rgba(full.image))
+        let computations = renderer.treatmentComputations
+        _ = try renderer.compose(rect: CGRect(x: 80*k,y: 60*k,width: 20*k,height: 20*k), scale: 1, base: base, document: doc, annotations: doc.edits.annotations)
+        #expect(renderer.treatmentComputations == computations)
+        let transparent = try source(scale: scale, alpha: 0.4)
+        let transparentBase = try EditorRenderer.displayBase(transparent)
+        renderer.invalidate(baseGeneration: 2, annotations: [])
+        let raw = try renderer.compose(rect: transparent.bounds, scale: 1, base: transparentBase, document: transparent, annotations: [])
+        #expect(try rgba(raw) == rgba(transparentBase.image))
+    }
+    @Test("Independent card and image corners retain export parity and underlay statistics", arguments: [1, 2], [EditorBackground.Preset.paper, .graphite, .gradient])
+    func backgroundPatchParity(scale: Int, preset: EditorBackground.Preset) throws {
+        for alpha in [1.0, 0.4] { for corners in EditorBackground.ImageCorners.allCases {
+        var doc = try source(scale: scale, alpha: alpha); doc.edits.background.preset = preset; doc.edits.background.padding = 20; doc.edits.background.frameWidth = 2; doc.edits.background.cornerRadius = 40; doc.edits.background.shadow = true
+        doc.edits.background.imageCorners = corners
+        doc.edits.annotations = [EditorAnnotation(kind:.highlight,rect:CGRect(x:0,y:0,width:150*scale,height:70*scale),style:EditorStyle(color:EditorRenderer.markerColor))]
+        let base = try EditorRenderer.displayBase(doc), full = try EditorRenderer.render(doc)
+        let renderer = EditorLiveRenderer(); renderer.invalidate(baseGeneration:1,annotations:doc.edits.annotations)
+        let live = try renderer.compose(rect:doc.bounds,scale:1,base:base,document:doc,annotations:doc.edits.annotations)
+        var rawDoc = doc; rawDoc.edits.background.preset = .none; rawDoc.edits.background.imageCorners = .auto
+        let rawExpected = try EditorRenderer.render(rawDoc)
+        let rawLive = try renderer.compose(rect:doc.bounds,scale:1,base:base,document:doc,annotations:doc.edits.annotations,samplingUnderlay:true)
+        #expect(try rgba(rawLive) == rgba(rawExpected.image))
+        let expected = try #require(full.image.cropping(to:CGRect(x:22,y:22,width:doc.bounds.width,height:doc.bounds.height)))
+        let a = try rgba(live), b = try rgba(expected)
+        let mismatch = zip(a,b).filter { $0 != $1 }.count
+        if mismatch > 0 { print("Editor background parity", scale, preset.rawValue, "mismatch", mismatch, "samples", a.indices.filter { a[$0] != b[$0] }.prefix(12).map { "\($0):\(a[$0])/\(b[$0])" }) }
+        #expect(mismatch == 0)
+        for region in [CGRect(x: 0,y: 0,width: 64,height: 64), CGRect(x: doc.bounds.maxX-64,y:doc.bounds.maxY-64,width:64,height:64)] {
+            let tile = try renderer.compose(rect:region,scale:1,base:base,document:doc,annotations:doc.edits.annotations)
+            let tileExpected = try #require(full.image.cropping(to:region.offsetBy(dx:22,dy:22)))
+            #expect(try rgba(tile) == rgba(tileExpected))
+        } }
+        }
+    }
+    @Test("A pending solid redact covers every live patch before highlight and does not expose old source")
+    func pendingPrivacy() throws {
+        var doc = try source(); let originalBase = try EditorRenderer.displayBase(doc)
+        let rect = CGRect(x: 40, y: 80, width: 160, height: 30)
+        doc.edits.annotations = [EditorAnnotation(kind: .highlight, rect: rect, style: EditorStyle(color: EditorRenderer.markerColor)), EditorAnnotation(kind: .redact, rect: rect)]
+        let renderer = EditorLiveRenderer(); renderer.invalidate(baseGeneration: 1, annotations: doc.edits.annotations)
+        let image = try renderer.compose(rect: rect, scale: 1, base: originalBase, document: doc, annotations: doc.edits.annotations)
+        let bytes = try rgba(image)
+        for i in stride(from: 0, to: bytes.count, by: 4) { #expect(bytes[i] == 0 && bytes[i+1] == 0 && bytes[i+2] == 0 && bytes[i+3] == 255) }
+    }
+    private func rgba(_ image: CGImage) throws -> [UInt8] {
+        let context = try EditorRenderer.context(width: image.width, height: image.height)
+        context.setBlendMode(.copy); context.draw(image, in: CGRect(x:0,y:0,width:image.width,height:image.height))
+        return Array(UnsafeBufferPointer(start: try #require(context.data?.assumingMemoryBound(to: UInt8.self)), count: context.bytesPerRow * context.height))
+    }
+    @Test("Persistent layer replacement composites semi-transparent destination only once at physical 100 percent")
+    func nativeLayerAlpha() async throws {
+        let doc = try source(alpha: 0.4)
+        let session = EditorSession(); session.open(CapturedScreenshot(id: UUID(), image: doc.source, pointSize: doc.pointSize, kind: .screenshot, saveToDiskRequested: false)); await session.waitForRendering()
+        let window = NSWindow(contentRect: CGRect(x:0,y:0,width:600,height:480),styleMask:[.titled],backing:.buffered,defer:false); window.isReleasedWhenClosed = false
+        let scroll = EditorScrollNSView(frame: CGRect(x:0,y:0,width:600,height:480)); scroll.allowsMagnification = true; scroll.minMagnification = 0.02; scroll.maxMagnification = 16
+        let canvas = EditorCanvasNSView(); canvas.session = session; scroll.documentView = canvas; window.contentView = scroll
+        defer { session.stop(); window.close() }
+        session.fitZoom = false; session.zoom = session.actualPixelZoom; scroll.synchronize(viewport:scroll.contentSize)
+        for _ in 0..<20 { await Task.yield() }
+        session.add(tool:.highlight,from:CGPoint(x:20,y:30),to:CGPoint(x:210,y:140)); session.selectedID = nil; canvas.refreshLayers(); window.displayIfNeeded(); canvas.layer?.displayIfNeeded()
+        CATransaction.begin(); CATransaction.setDisableActions(true); canvas.canvasShadowLayer.shadowOpacity = 0; CATransaction.commit()
+        let layer = try #require(canvas.layer)
+        let delegate = layer.delegate; layer.delegate = nil
+        defer { layer.delegate = delegate }
+        let context = try EditorRenderer.context(width:Int(canvas.bounds.width),height:Int(canvas.bounds.height))
+        context.translateBy(x:0,y:canvas.bounds.height); context.scaleBy(x:1,y:-1)
+        layer.render(in:context)
+        let image = try #require(context.makeImage()?.cropping(to:CGRect(origin:canvas.imageOrigin,size:canvas.imageSize)))
+        let full = try EditorRenderer.render(#require(session.document))
+        let actual = try rgba(image), expected = try rgba(full.image)
+        let mismatch = zip(actual,expected).filter { $0 != $1 }.count
+        #expect(mismatch == 0)
+        #expect(session.canvasZoom * session.backingScale == 1)
+        // Compare actual masked source + replacement tiles over the common UI
+        // shadow/destination against one flattened layer over that same shadow.
+        // The whole source rectangle is compared; only outside decoration is omitted.
+        CATransaction.begin(); CATransaction.setDisableActions(true); canvas.canvasShadowLayer.shadowOpacity = 1; CATransaction.commit()
+        func composite() throws -> [UInt8] {
+            let c = try EditorRenderer.context(width:Int(canvas.bounds.width),height:Int(canvas.bounds.height))
+            c.setFillColor(CGColor(srgbRed:0.3,green:0.4,blue:0.5,alpha:1)); c.fill(canvas.bounds)
+            c.translateBy(x:0,y:canvas.bounds.height); c.scaleBy(x:1,y:-1); layer.render(in:c)
+            return try rgba(#require(c.makeImage()?.cropping(to:CGRect(origin:canvas.imageOrigin,size:canvas.imageSize))))
+        }
+        let liveComposite = try composite()
+        let reference = CALayer(); reference.frame = layer.bounds; reference.isGeometryFlipped = layer.isGeometryFlipped
+        let shadow = CALayer(), imageLayer = CALayer()
+        shadow.frame = canvas.canvasShadowLayer.frame; shadow.shadowColor = canvas.canvasShadowLayer.shadowColor
+        shadow.shadowOpacity = canvas.canvasShadowLayer.shadowOpacity; shadow.shadowRadius = canvas.canvasShadowLayer.shadowRadius
+        shadow.shadowOffset = canvas.canvasShadowLayer.shadowOffset; shadow.shadowPath = canvas.canvasShadowLayer.shadowPath
+        imageLayer.frame = canvas.baseLayer.frame; imageLayer.contents = full.image; imageLayer.isGeometryFlipped = canvas.baseLayer.isGeometryFlipped
+        if canvas.baseLayer.contentsAreFlipped() != imageLayer.contentsAreFlipped() { imageLayer.transform = CATransform3DMakeScale(1,-1,1) }
+        imageLayer.contentsScale = canvas.baseLayer.contentsScale; imageLayer.minificationFilter = .trilinear; imageLayer.magnificationFilter = .nearest
+        reference.addSublayer(shadow); reference.addSublayer(imageLayer)
+        let c = try EditorRenderer.context(width:Int(canvas.bounds.width),height:Int(canvas.bounds.height))
+        c.setFillColor(CGColor(srgbRed:0.3,green:0.4,blue:0.5,alpha:1)); c.fill(canvas.bounds)
+        c.translateBy(x:0,y:canvas.bounds.height); c.scaleBy(x:1,y:-1); reference.render(in:c)
+        let flatComposite = try rgba(#require(c.makeImage()?.cropping(to:CGRect(origin:canvas.imageOrigin,size:canvas.imageSize))))
+        let compositeMismatch = zip(liveComposite,flatComposite).filter { $0 != $1 }.count
+        if compositeMismatch > 0 { print("COMPOSITE",compositeMismatch,liveComposite.indices.filter { liveComposite[$0] != flatComposite[$0] }.prefix(16).map { "\($0):\(liveComposite[$0])/\(flatComposite[$0])" }) }
+        #expect(compositeMismatch == 0)
+    }
+    @Test("Native mouse gestures draw actual transient arrows, move with every tool, resize outside handles and commit one undo")
+    func nativeGesture() async throws {
+        let session = EditorSession(); session.open(CapturedScreenshot(id: UUID(), image: try source().source, pointSize: CGSize(width:320,height:240), kind:.screenshot, saveToDiskRequested:false)); await session.waitForRendering()
+        let window = NSWindow(contentRect: CGRect(x:0,y:0,width:600,height:480), styleMask:[.titled], backing:.buffered, defer:false); window.isReleasedWhenClosed = false
+        let scroll = EditorScrollNSView(frame: CGRect(x:0,y:0,width:600,height:480)); scroll.allowsMagnification = true; scroll.minMagnification = 0.02; scroll.maxMagnification = 16
+        let canvas = EditorCanvasNSView(); canvas.session = session; scroll.documentView = canvas; window.contentView = scroll
+        session.fitZoom = false; session.zoom = 1; scroll.synchronize(viewport: scroll.contentSize)
+        defer { session.stop(); window.close() }
+        func event(_ type: NSEvent.EventType, _ point: CGPoint, clicks: Int = 1) throws -> NSEvent {
+            let p = canvas.convert(point, to:nil)
+            return try #require(NSEvent.mouseEvent(with:type, location:p, modifierFlags:[], timestamp:0, windowNumber:window.windowNumber, context:nil, eventNumber:0, clickCount:clicks, pressure:1))
+        }
+        func drag(_ from: CGPoint, _ to: CGPoint) throws {
+            canvas.mouseDown(with:try event(.leftMouseDown,from)); canvas.mouseDragged(with:try event(.leftMouseDragged,to)); canvas.mouseUp(with:try event(.leftMouseUp,to))
+        }
+        let image = try #require(canvas.baseLayer.contents) as AnyObject
+        session.tool = .arrow
+        let from = canvas.viewRect(CGRect(x:20,y:20,width:0,height:0)).origin, to = canvas.viewRect(CGRect(x:160,y:120,width:0,height:0)).origin
+        canvas.mouseDown(with:try event(.leftMouseDown,from)); canvas.mouseDragged(with:try event(.leftMouseDragged,to))
+        #expect(session.document?.edits.annotations.isEmpty == true)
+        #expect(canvas.candidateAnnotation?.kind == .arrow)
+        #expect(canvas.candidateAnnotation?.resolvedArrowEndpoints.end == CGPoint(x:160,y:120))
+        #expect(canvas.baseLayer.contents as AnyObject? === image)
+        canvas.mouseUp(with:try event(.leftMouseUp,to)); #expect(session.document?.edits.annotations.count == 1 && session.selectedID != nil)
+        let arrow = try #require(session.selectedAnnotation)
+        #expect(canvas.handlePoints(for:arrow).count == 2)
+        session.tool = .text
+        let middle = canvas.viewRect(CGRect(x:90,y:70,width:0,height:0)).origin
+        try drag(middle,CGPoint(x:middle.x+10,y:middle.y+8))
+        #expect(session.document?.edits.annotations.count == 1)
+        let movedStart = try #require(session.selectedAnnotation?.resolvedArrowEndpoints.start)
+        #expect(abs(movedStart.x - 30) < 0.0001 && abs(movedStart.y - 28) < 0.0001)
+        session.undo(); #expect(session.selectedAnnotation?.resolvedArrowEndpoints.start == arrow.resolvedArrowEndpoints.start)
+        session.undo(); #expect(session.document?.edits.annotations.isEmpty == true && !session.canUndo)
+        session.redo(); session.redo(); #expect(session.document?.edits.annotations.count == 1)
+        for tool in EditorTool.allCases {
+            session.tool = tool
+            let arrow = try #require(session.selectedAnnotation), pair = arrow.resolvedArrowEndpoints
+            let middle = canvas.viewRect(CGRect(origin:CGPoint(x:(pair.start.x+pair.end.x)/2,y:(pair.start.y+pair.end.y)/2),size:.zero)).origin
+            try drag(middle,CGPoint(x:middle.x+2,y:middle.y+3))
+            #expect(session.document?.edits.annotations.count == 1 && session.selectedAnnotation?.rect != arrow.rect)
+            session.undo(); #expect(session.selectedAnnotation == arrow)
+        }
+        session.tool = .rectangle; session.add(tool:.rectangle,from:.init(x:0,y:0),to:.init(x:60,y:60)); canvas.refreshLayers()
+        let rectangle = try #require(session.selectedAnnotation); let points = canvas.handlePoints(for:rectangle); #expect(points.count == 8)
+        #expect(points[0].x < canvas.viewRect(rectangle.rect).minX && points[0].y < canvas.viewRect(rectangle.rect).minY)
+        try drag(points[3],CGPoint(x:points[3].x+20,y:points[3].y)); #expect(session.selectedAnnotation?.rect.width == 80)
+        #expect(session.displayRasterRequests == 1)
+        let beforeEscape = session.document?.edits
+        session.selectedID = nil; session.tool = .arrow
+        let escapeStart = canvas.viewRect(CGRect(x:200,y:20,width:0,height:0)).origin
+        canvas.mouseDown(with:try event(.leftMouseDown,escapeStart)); canvas.mouseDragged(with:try event(.leftMouseDragged,CGPoint(x:escapeStart.x+40,y:escapeStart.y+40)))
+        let escape = try #require(NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:0,windowNumber:window.windowNumber,context:nil,characters:"\u{1b}",charactersIgnoringModifiers:"\u{1b}",isARepeat:false,keyCode:53))
+        canvas.keyDown(with:escape); #expect(canvas.candidateAnnotation == nil && session.document?.edits == beforeEscape)
+        session.selectedID = rectangle.id
+        let delete = try #require(NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:0,windowNumber:window.windowNumber,context:nil,characters:"\u{7f}",charactersIgnoringModifiers:"\u{7f}",isARepeat:false,keyCode:51))
+        canvas.keyDown(with:delete); #expect(session.document?.edits.annotations.count == 1)
+        session.tool = .text
+        let textPoint = canvas.viewRect(CGRect(x:200,y:160,width:0,height:0)).origin
+        try drag(textPoint,textPoint)
+        #expect(session.showsAnnotationEditor && session.selectedAnnotation?.kind == .text)
+        session.tool = .rectangle; #expect(!session.showsAnnotationEditor)
+        let textMiddle = canvas.viewRect(CGRect(x:250,y:184,width:0,height:0)).origin
+        let beforeDoubleClick = session.document?.edits
+        canvas.mouseDown(with:try event(.leftMouseDown,textMiddle,clicks:2))
+        canvas.mouseUp(with:try event(.leftMouseUp,textMiddle,clicks:2))
+        #expect(session.showsAnnotationEditor && session.document?.edits == beforeDoubleClick)
+        session.reportBackingScale(2); #expect(session.actualPixelZoom == 0.5)
+    }
+}
+
+private actor EditorDisplayRenderGate {
+    private var blocked = false
+    private let gate = EditorTestGate()
+    func render(_ document: EditorDocument) async throws -> EditorDisplayBase {
+        if !blocked && document.edits.annotations.contains(where: { $0.kind == .redact }) { blocked = true; await gate.suspend() }
+        return try EditorRenderer.displayBase(document)
+    }
+    func waitForStart() async { await gate.waitForStart() }
+    func resume() async { await gate.resume() }
 }

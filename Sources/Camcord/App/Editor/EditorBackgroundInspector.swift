@@ -25,6 +25,11 @@ struct EditorBackgroundInspector: View {
                 EditorBackgroundValue(title: "Corner radius", value: background.cornerRadius, presets: [0, 8, 12, 24], range: 0...80) { value in
                     session.edit { $0.background.cornerRadius = value }
                 }
+                Picker("Image corners", selection: Binding(get: { background.imageCorners }, set: { value in session.edit { $0.background.imageCorners = value } })) {
+                    Text("Auto").tag(EditorBackground.ImageCorners.auto)
+                    Text("Square").tag(EditorBackground.ImageCorners.square)
+                    Text("Rounded").tag(EditorBackground.ImageCorners.rounded)
+                }.pickerStyle(.segmented)
                 EditorBackgroundValue(title: "Frame width", value: background.frameWidth, presets: [0, 1, 2, 4], range: 0...24) { value in
                     session.edit { $0.background.frameWidth = value }
                 }

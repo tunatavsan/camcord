@@ -424,6 +424,65 @@ struct MainWindowTests {
         editor.stop()
     }
 
+    @Test("The actual Editor window routes native Edit menu Undo through toolbar, canvas and its focused text, retaining other-module history")
+    func editorNativeUndoRoute() async throws {
+        let defaults = try freshDefaults(); defer { defaults.removePersistentDomain(forName: Self.suiteName) }
+        var operations = CaptureCoordinator.Operations(); operations.feedback = false
+        let coordinator = CaptureCoordinator(operations: operations)
+        let recording = RecordingController(coordinator: coordinator)
+        let engine = EventTapEngine(coordinator: coordinator, recordingController: recording,
+            bindings: TapBindings(mouseButton3: nil, mouseButton4: nil, mouseButton5: nil, doubleTapRightCommand: nil), buttonIsDown: { _ in false })
+        let editor = EditorSession()
+        let library = LibraryStore(defaults: defaults, roots: [], cacheDirectory: EditorTemporaryExports().directory.appendingPathComponent(UUID().uuidString))
+        let services = AppServices(defaults: defaults, coordinator: coordinator, recordingController: recording, eventTapEngine: engine, recordingState: RecordingStateModel(), library: library, editor: editor)
+        let controller = MainWindowController(presentBackground: { _ in }, defaults: defaults, dock: DockController(defaults: defaults) { _ in }, services: services, frameAutosaveName: nil, present: { _ in })
+        controller.show(module: .edit, activate: false)
+        let window = try #require(controller.windowForTesting)
+        defer { editor.stop(); controller.close() }
+        #expect(window.undoManager === editor.editUndoManager)
+        editor.open(CapturedScreenshot(id: UUID(), image: try EditorRendererTests.image(), pointSize: CGSize(width:8,height:6), kind:.screenshot, saveToDiskRequested:false))
+        editor.add(tool:.text,from:.zero,to:CGPoint(x:8,y:8))
+        let menu = try #require(AppMenus.editingMenuItem().submenu)
+        let undoItem = try #require(menu.items.first), redoItem = menu.items[1]
+        #expect(undoItem.target == nil && redoItem.target == nil)
+        let host = try #require(window.contentViewController as? EditorUndoHostingController<MainWindowView>)
+        let button = NSButton(frame:CGRect(x:0,y:0,width:40,height:28)); host.view.addSubview(button)
+        #expect(button.tryToPerform(try #require(undoItem.action), with:undoItem))
+        #expect(editor.document?.edits.annotations.isEmpty == true)
+        #expect(button.tryToPerform(try #require(redoItem.action), with:redoItem))
+        #expect(editor.document?.edits.annotations.count == 1)
+        let text = EditorAnnotationTextView(frame:CGRect(x:0,y:0,width:160,height:60)); text.session = editor; text.allowsUndo = false; text.delegate = text
+        text.string = editor.selectedAnnotation?.text ?? ""
+        host.view.addSubview(text); #expect(window.makeFirstResponder(text))
+        text.selectAll(nil); text.insertText("One", replacementRange:text.selectedRange())
+        text.selectAll(nil); text.insertText("Two", replacementRange:text.selectedRange())
+        #expect(editor.selectedAnnotation?.text == "Two")
+        #expect(text.undoManager === window.undoManager)
+        #expect(text.tryToPerform(try #require(undoItem.action), with:undoItem))
+        #expect(editor.selectedAnnotation?.text == "Text" && text.string == "Text")
+        #expect(text.tryToPerform(try #require(redoItem.action), with:redoItem))
+        #expect(editor.selectedAnnotation?.text == "Two" && text.string == "Two")
+        let commandZ = try #require(NSEvent.keyEvent(with:.keyDown, location:.zero, modifierFlags:.command, timestamp:0, windowNumber:window.windowNumber, context:nil, characters:"z", charactersIgnoringModifiers:"z", isARepeat:false, keyCode:6))
+        let redoZ = try #require(NSEvent.keyEvent(with:.keyDown, location:.zero, modifierFlags:[.command,.shift], timestamp:0, windowNumber:window.windowNumber, context:nil, characters:"Z", charactersIgnoringModifiers:"z", isARepeat:false, keyCode:6))
+        #expect(text.performKeyEquivalent(with:commandZ)); #expect(editor.selectedAnnotation?.text == "Text")
+        #expect(text.performKeyEquivalent(with:redoZ)); #expect(editor.selectedAnnotation?.text == "Two")
+        window.makeFirstResponder(button)
+        let count = editor.document?.edits.annotations.count
+        controller.model.select(.settings)
+        let standard = try #require(window.undoManager)
+        #expect(standard !== editor.editUndoManager)
+        #expect(editor.document?.edits.annotations.count == count && editor.canUndo)
+        standard.beginUndoGrouping()
+        standard.registerUndo(withTarget:button) { button in MainActor.assumeIsolated { button.title = "retained undo" } }
+        standard.endUndoGrouping()
+        controller.model.select(.edit); #expect(window.undoManager === editor.editUndoManager)
+        editor.open(CapturedScreenshot(id:UUID(),image:try EditorRendererTests.image(),pointSize:CGSize(width:8,height:6),kind:.screenshot,saveToDiskRequested:false))
+        await editor.discardAndOpenPending()
+        #expect(!editor.canUndo && standard.canUndo)
+        controller.model.select(.settings); standard.undo(); #expect(button.title == "retained undo")
+        #expect(!window.isVisible && !window.isKeyWindow)
+    }
+
     @Test("the Settings module renders the real settings from the environment's services, the placeholder without")
     func settingsModuleUsesTheEnvironment() throws {
         _ = NSApplication.shared

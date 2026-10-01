@@ -291,6 +291,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     private let isAppActive: @MainActor () -> Bool
     private let waitForRemoval: @MainActor () async throws -> Void
     private var window: NSWindow?
+    private let standardUndoManager = UndoManager()
     let lifecycle = MainWindowLifecycle()
     private var presentationGeneration: UInt64 = 0
     private var temporarilyHidden = false
@@ -407,9 +408,13 @@ final class MainWindowController: NSObject, NSWindowDelegate {
 
     /// A fresh SwiftUI tree. Setting a content view controller resizes the window to the
     /// controller's view, so the frame the owner left is put back afterwards.
+    func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? {
+        model.selection == .edit ? services?.editor.editUndoManager ?? standardUndoManager : standardUndoManager
+    }
     private func installContent(in window: NSWindow) {
         let frame = window.frame
-        let host = NSHostingController(rootView: MainWindowView(model: model, services: services, lifecycle: lifecycle))
+        let host = EditorUndoHostingController(rootView: MainWindowView(model: model, services: services, lifecycle: lifecycle))
+        host.activeEditor = { [weak self] in self?.model.selection == .edit ? self?.services?.editor : nil }
         // SwiftUI's .toolbar and .navigationTitle become the NSWindow's own toolbar and title.
         host.sceneBridgingOptions = [.toolbars, .title]
         window.contentViewController = host
@@ -453,5 +458,36 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         lifecycle.update(window: nil, temporarilyHidden: false)
         window?.contentViewController = nil
         dock.windowDidClose()
+    }
+}
+
+/// The native Edit menu follows this responder after ordinary controls in the Editor.
+@MainActor final class EditorUndoHostingController<Content: View>: NSHostingController<Content>, NSMenuItemValidation {
+    var activeEditor: (() -> EditorSession?)?
+    override var undoManager: UndoManager? { activeEditor?()?.editUndoManager ?? super.undoManager }
+    @objc func undo(_ sender: Any?) {
+        if let text = view.window?.firstResponder as? EditorAnnotationTextView { text.undo(sender) }
+        else if let canvas = view.window?.firstResponder as? EditorCanvasNSView { canvas.undo(sender) }
+        else { undoManager?.undo() }
+    }
+    @objc func redo(_ sender: Any?) {
+        if let text = view.window?.firstResponder as? EditorAnnotationTextView { text.redo(sender) }
+        else if let canvas = view.window?.firstResponder as? EditorCanvasNSView { canvas.redo(sender) }
+        else { undoManager?.redo() }
+    }
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if activeEditor?() != nil, event.modifierFlags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "z" {
+            event.modifierFlags.contains(.shift) ? redo(nil) : undo(nil); return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if let session = activeEditor?() {
+            if menuItem.action == #selector(undo(_:)) { return session.canUndo }
+            if menuItem.action == #selector(redo(_:)) { return session.canRedo }
+        }
+        if menuItem.action == #selector(undo(_:)) { return undoManager?.canUndo == true }
+        if menuItem.action == #selector(redo(_:)) { return undoManager?.canRedo == true }
+        return true
     }
 }

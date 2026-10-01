@@ -31,10 +31,12 @@ enum EditorSensitiveText {
 /// A serial actor bounds expensive image work to one operation at a time.
 actor EditorWorker {
     private let decoder: (@Sendable (URL) async throws -> EditorDocument)?
+    private let displayRenderer: (@Sendable (EditorDocument) async throws -> EditorDisplayBase)?
     private let recognizer: (@Sendable (EditorDocument) async throws -> [EditorSensitiveSuggestion])?
     init(decoder: (@Sendable (URL) async throws -> EditorDocument)? = nil,
-         recognizer: (@Sendable (EditorDocument) async throws -> [EditorSensitiveSuggestion])? = nil) {
-        self.decoder = decoder; self.recognizer = recognizer
+         recognizer: (@Sendable (EditorDocument) async throws -> [EditorSensitiveSuggestion])? = nil,
+         displayRenderer: (@Sendable (EditorDocument) async throws -> EditorDisplayBase)? = nil) {
+        self.decoder = decoder; self.recognizer = recognizer; self.displayRenderer = displayRenderer
     }
     func decode(_ url: URL) async throws -> EditorDocument {
         try Task.checkCancellation()
@@ -43,6 +45,9 @@ actor EditorWorker {
     }
     func png(_ rendered: EditorRendered) throws -> Data { try Task.checkCancellation(); return try rendered.png }
     func render(_ document: EditorDocument) throws -> EditorRendered { try EditorRenderer.render(document) }
+    func displayBase(_ document: EditorDocument) async throws -> EditorDisplayBase {
+        if let displayRenderer { return try await displayRenderer(document) }; return try EditorRenderer.displayBase(document)
+    }
     func recognize(_ document: EditorDocument) async throws -> [EditorSensitiveSuggestion] {
         if let recognizer { return try await recognizer(document) }
         try Task.checkCancellation()

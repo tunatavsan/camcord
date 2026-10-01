@@ -3102,6 +3102,24 @@
         }
       }
     },
+    "Image corners": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Image corners"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Görüntü köşeleri"
+          }
+        }
+      }
+    },
     "Images and logos keep their proportions and are centered inside these bounds. Text fits from the top left.": {
       "extractionState": "manual",
       "comment": "Studio interface",
@@ -5852,6 +5870,24 @@
         }
       }
     },
+    "Rounded": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rounded"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yuvarlak"
+          }
+        }
+      }
+    },
     "SDR · compatible": {
       "comment": "Dynamic range option",
       "extractionState": "manual",
@@ -6852,6 +6888,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Seviyeyi görmek için konuş"
+          }
+        }
+      }
+    },
+    "Square": {
+      "extractionState": "manual",
+      "comment": "Screenshot editor",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Square"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kare"
           }
         }
       }

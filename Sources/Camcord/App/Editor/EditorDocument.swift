@@ -55,17 +55,61 @@ struct EditorAnnotation: Identifiable, Codable, Equatable, Sendable {
     var reversedY = false
     var horizontalArrow = false
     var verticalArrow = false
-    var valid: Bool { EditorGeometry.valid(rect) && !rect.isEmpty && style.valid && text.utf8.count <= 16_384 && (1...9999).contains(stepNumber) && kind != .select && kind != .crop }
+    var arrowStart: CGPoint? = nil
+    var arrowEnd: CGPoint? = nil
+    var resolvedArrowEndpoints: (start: CGPoint, end: CGPoint) {
+        if let arrowStart, let arrowEnd { return (arrowStart, arrowEnd) }
+        return (CGPoint(x: verticalArrow ? rect.midX : (reversedX ? rect.maxX : rect.minX), y: horizontalArrow ? rect.midY : (reversedY ? rect.maxY : rect.minY)),
+                CGPoint(x: verticalArrow ? rect.midX : (reversedX ? rect.minX : rect.maxX), y: horizontalArrow ? rect.midY : (reversedY ? rect.minY : rect.maxY)))
+    }
+    var valid: Bool {
+        let pair = resolvedArrowEndpoints
+        let geometry = kind == .arrow ? [pair.start.x, pair.start.y, pair.end.x, pair.end.y].allSatisfy(\.isFinite) && hypot(pair.end.x - pair.start.x, pair.end.y - pair.start.y) > 0 : !rect.isEmpty
+        return EditorGeometry.valid(rect) && geometry && style.valid && text.utf8.count <= 16_384 && (1...9999).contains(stepNumber) && kind != .select && kind != .crop
+    }
+    init(id: UUID = UUID(), kind: EditorTool, rect: CGRect, style: EditorStyle = EditorStyle(), text: String = "", stepNumber: Int = 1, reversedX: Bool = false, reversedY: Bool = false, horizontalArrow: Bool = false, verticalArrow: Bool = false, arrowStart: CGPoint? = nil, arrowEnd: CGPoint? = nil) {
+        self.id = id; self.kind = kind; self.rect = rect; self.style = style; self.text = text; self.stepNumber = stepNumber
+        self.reversedX = reversedX; self.reversedY = reversedY; self.horizontalArrow = horizontalArrow; self.verticalArrow = verticalArrow
+        self.arrowStart = kind == .arrow ? arrowStart : nil; self.arrowEnd = kind == .arrow ? arrowEnd : nil
+        if kind == .arrow, let arrowStart, let arrowEnd { setArrowEndpoints(start: arrowStart, end: arrowEnd) }
+    }
+    private enum CodingKeys: String, CodingKey { case id, kind, rect, style, text, stepNumber, reversedX, reversedY, horizontalArrow, verticalArrow, arrowStart, arrowEnd }
+    init(from decoder: Decoder) throws {
+        let v = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(id: try v.decode(UUID.self, forKey: .id), kind: try v.decode(EditorTool.self, forKey: .kind), rect: try v.decode(CGRect.self, forKey: .rect), style: try v.decode(EditorStyle.self, forKey: .style), text: try v.decode(String.self, forKey: .text), stepNumber: try v.decode(Int.self, forKey: .stepNumber), reversedX: try v.decodeIfPresent(Bool.self, forKey: .reversedX) ?? false, reversedY: try v.decodeIfPresent(Bool.self, forKey: .reversedY) ?? false, horizontalArrow: try v.decodeIfPresent(Bool.self, forKey: .horizontalArrow) ?? false, verticalArrow: try v.decodeIfPresent(Bool.self, forKey: .verticalArrow) ?? false, arrowStart: try v.decodeIfPresent(CGPoint.self, forKey: .arrowStart), arrowEnd: try v.decodeIfPresent(CGPoint.self, forKey: .arrowEnd))
+        if kind == .arrow, arrowStart == nil || arrowEnd == nil { let pair = resolvedArrowEndpoints; setArrowEndpoints(start: pair.start, end: pair.end) }
+    }
+    mutating func setArrowEndpoints(start: CGPoint, end: CGPoint) {
+        arrowStart = start; arrowEnd = end
+        rect = CGRect(x: min(start.x, end.x), y: min(start.y, end.y), width: abs(end.x - start.x), height: abs(end.y - start.y))
+    }
+    mutating func setRect(_ target: CGRect) {
+        if kind == .arrow {
+            let pair = resolvedArrowEndpoints, old = rect
+            func map(_ p: CGPoint) -> CGPoint { CGPoint(x: old.width > 0 ? target.minX + (p.x - old.minX) * target.width / old.width : target.midX, y: old.height > 0 ? target.minY + (p.y - old.minY) * target.height / old.height : target.midY) }
+            setArrowEndpoints(start: map(pair.start), end: map(pair.end))
+        } else { rect = target }
+    }
 }
 
 struct EditorBackground: Codable, Equatable, Sendable {
     enum Preset: String, CaseIterable, Codable, Sendable { case none, paper, graphite, gradient }
+    enum ImageCorners: String, CaseIterable, Codable, Sendable { case auto, square, rounded }
     var preset: Preset = .none
     var padding: Double = 40
     var cornerRadius: Double = 12
     var frameWidth: Double = 0
     var shadow: Bool = true
     var color = EditorColor.paper
+    var imageCorners: ImageCorners = .auto
+    init(preset: Preset = .none, padding: Double = 40, cornerRadius: Double = 12, frameWidth: Double = 0, shadow: Bool = true, color: EditorColor = .paper, imageCorners: ImageCorners = .auto) {
+        self.preset = preset; self.padding = padding; self.cornerRadius = cornerRadius; self.frameWidth = frameWidth; self.shadow = shadow; self.color = color; self.imageCorners = imageCorners
+    }
+    private enum CodingKeys: String, CodingKey { case preset, padding, cornerRadius, frameWidth, shadow, color, imageCorners }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(preset: try values.decode(Preset.self, forKey: .preset), padding: try values.decode(Double.self, forKey: .padding), cornerRadius: try values.decode(Double.self, forKey: .cornerRadius), frameWidth: try values.decode(Double.self, forKey: .frameWidth), shadow: try values.decode(Bool.self, forKey: .shadow), color: try values.decode(EditorColor.self, forKey: .color), imageCorners: try values.decodeIfPresent(ImageCorners.self, forKey: .imageCorners) ?? .auto)
+    }
     var valid: Bool { color.valid && padding.isFinite && (0...1000).contains(padding) && cornerRadius.isFinite && (0...500).contains(cornerRadius) && frameWidth.isFinite && (0...100).contains(frameWidth) }
 }
 
