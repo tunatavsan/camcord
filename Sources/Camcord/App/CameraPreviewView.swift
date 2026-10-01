@@ -9,10 +9,18 @@ struct PixelBufferBox: @unchecked Sendable {
     let value: CVPixelBuffer
     /// Camera placement bounds in destination buffer pixels, with a top-left origin.
     let cameraContentRect: CGRect?
+    let pts: CMTime
+    let sequence: UInt64
+    let epoch: UUID?
+    var contentRect: CGRect? { cameraContentRect }
 
-    init(_ value: CVPixelBuffer, cameraContentRect: CGRect? = nil) {
+    init(_ value: CVPixelBuffer, cameraContentRect: CGRect? = nil,
+         pts: CMTime = .invalid, sequence: UInt64 = 0, epoch: UUID? = nil) {
         self.value = value
         self.cameraContentRect = cameraContentRect
+        self.pts = pts
+        self.sequence = sequence
+        self.epoch = epoch
     }
 
     var pixelSize: CGSize {
@@ -54,8 +62,8 @@ final class CameraPreviewMonitor: ObservableObject {
     @Published private(set) var recordingLocked = false
     @Published private(set) var message: String?
 
-    /// The camera preview and recording stage share this renderer, including its queue
-    /// and CIContext, so opening the stage creates no second GPU rendering pipeline.
+    /// Image surfaces share this renderer. Native Studio consumes the underlying
+    /// immutable camera source and does not start the image conversion poll.
     let renderer = CameraPreviewRenderer()
     private var ownedCapture: CameraCapture?
     private var ownedCaptureID: UUID?
@@ -63,7 +71,9 @@ final class CameraPreviewMonitor: ObservableObject {
     private var pollTask: Task<Void, Never>?
     private var renderInFlight = false
     private var visibleOwners = Set<String>()
+    private var imageOwners = Set<String>()
     private var visible: Bool { !visibleOwners.isEmpty }
+    private var imageVisible: Bool { !imageOwners.isEmpty }
     private var ownedDeviceID: String?
     private var ownedFormat: CameraFormatChoice?
     private var generation: UInt64 = 0
@@ -214,9 +224,10 @@ final class CameraPreviewMonitor: ObservableObject {
     static func makeOwnerID(_ surface: String) -> String { "\(surface)-\(UUID().uuidString)" }
 
     /// Each visible surface owns its rendering subscription independently.
-    func setVisible(_ visible: Bool, owner: String) {
+    func setVisible(_ visible: Bool, owner: String, rendersImage: Bool = true) {
         if visible { visibleOwners.insert(owner) } else { visibleOwners.remove(owner) }
-        if self.visible {
+        if visible && rendersImage { imageOwners.insert(owner) } else { imageOwners.remove(owner) }
+        if imageVisible {
             startPollingIfNeeded()
         } else {
             stopPolling()
@@ -226,6 +237,8 @@ final class CameraPreviewMonitor: ObservableObject {
     /// True while any surface still holds the preview open — the floating preview keeps
     /// its claim through the fade-out, so the device outlives the last visible frame.
     var isObserved: Bool { visible }
+    /// Native source observers hold the device without running the image bridge.
+    var isRenderingImagePreview: Bool { pollTask != nil }
 
     /// Studio may join a compatible rehearsal, but cannot replace another visible owner's camera.
     func canObserve(options: CameraOptions, owner: String) -> Bool {
@@ -238,11 +251,11 @@ final class CameraPreviewMonitor: ObservableObject {
     }
 
     private func startPollingIfNeeded() {
-        guard visible, pollTask == nil, activeSource != nil else { return }
+        guard imageVisible, pollTask == nil, activeSource != nil else { return }
         let token = generation
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
-                guard let self, self.visible, self.generation == token else { return }
+                guard let self, self.imageVisible, self.generation == token else { return }
                 await self.updateImage(generation: token)
                 guard !Task.isCancelled else { return }
                 try? await Task.sleep(for: .milliseconds(16))
@@ -261,6 +274,10 @@ final class CameraPreviewMonitor: ObservableObject {
     func currentPreviewFrame() -> PixelBufferBox? {
         activeSource?.latestFrame().map { PixelBufferBox($0) }
     }
+
+    /// Snapshot the source identity on a lifecycle change. Its locked native frame
+    /// accessor can then be used by Studio's serial compositor without actor hops.
+    func currentPreviewSource() -> (any CameraFrameSource)? { activeSource }
 
     private func updateImage(generation token: UInt64) async {
         guard !renderInFlight else { return }

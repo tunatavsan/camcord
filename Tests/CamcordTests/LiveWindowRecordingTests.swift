@@ -63,7 +63,7 @@ struct LiveWindowRecordingTests {
         settings.canvasAspect = canvas
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("camcord-live-\(canvas.rawValue)-\(UUID().uuidString).mov")
-        let engine = RecordingEngine()
+        let engine = RecordingEngine(diagnostics: { _ in })
         try await engine.start(target: .window(scWindow), settings: settings, outputURL: url)
 
         func animate(to size: NSSize, seconds: Double) async throws {

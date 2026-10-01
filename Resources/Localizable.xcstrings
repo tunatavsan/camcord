@@ -1113,6 +1113,24 @@
         }
       }
     },
+    "Camera size": {
+      "extractionState": "manual",
+      "comment": "Studio",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camera size"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera boyutu"
+          }
+        }
+      }
+    },
     "Cancel": {
       "comment": "Button",
       "extractionState": "manual",
@@ -3372,6 +3390,24 @@
         }
       }
     },
+    "LIVE": {
+      "extractionState": "manual",
+      "comment": "Studio",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LIVE"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CANLI"
+          }
+        }
+      }
+    },
     "Last inspected pixel": {
       "extractionState": "manual",
       "comment": "Screenshot editor",
@@ -3958,6 +3994,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Modüller"
+          }
+        }
+      }
+    },
+    "More sources": {
+      "extractionState": "manual",
+      "comment": "Studio",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "More sources"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diğer kaynaklar"
           }
         }
       }
@@ -4844,6 +4898,24 @@
         }
       }
     },
+    "PAUSED": {
+      "extractionState": "manual",
+      "comment": "Studio",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PAUSED"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DURAKLATILDI"
+          }
+        }
+      }
+    },
     "Padding": {
       "extractionState": "manual",
       "comment": "Screenshot editor",
@@ -5272,6 +5344,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Göz At"
+          }
+        }
+      }
+    },
+    "REC": {
+      "extractionState": "manual",
+      "comment": "Studio",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "REC"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "KAYIT"
           }
         }
       }
@@ -6298,6 +6388,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kaydırmalı çekimler"
+          }
+        }
+      }
+    },
+    "Scroll to see more sources": {
+      "extractionState": "manual",
+      "comment": "Studio",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scroll to see more sources"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diğer kaynakları görmek için kaydırın"
           }
         }
       }

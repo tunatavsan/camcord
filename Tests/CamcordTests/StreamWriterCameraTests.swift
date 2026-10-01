@@ -9,6 +9,38 @@ import os
 
 @Suite("Stream writer camera cadence", .serialized)
 struct StreamWriterCameraTests {
+    @Test("an append rejection after composition publishes no stage frame or accepted sequence")
+    func stageOnlyAfterAcceptedAppend() async throws {
+        let url = temporaryMovieURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let compositions = OSAllocatedUnfairLock(initialState: 0)
+        let attempts = OSAllocatedUnfairLock(initialState: 0)
+        let metadata = OSAllocatedUnfairLock(initialState: [(UInt64, CMTime, UUID?)]())
+        let compositor = CameraCompositor(cameraPreflight: { compositions.withLock { $0 += 1 } })
+        let source = FakeCameraFrameSource(try pixelBuffer(width: 80, height: 60, color: .red))
+        let writer = try StreamWriter(outputURL: url, container: .mov, codec: .h264, bitrateMbps: 2,
+            pixelWidth: 320, pixelHeight: 180, frameDuration: CMTime(value: 1, timescale: 30), dynamicRange: .sdr,
+            includeSystemAudio: false, includeMicrophone: false, cameraSource: source,
+            cameraOptions: CameraOptions(enabled: true), compositor: compositor,
+            videoAppendProvider: { _ in attempts.withLock { $0 += 1; return $0 > 1 } })
+        writer.stageSink = { frame in metadata.withLock { $0.append((frame.sequence, frame.pts, frame.epoch)) } }
+        writer.consume(try screenSample(pts: CMTime(value: 100, timescale: 30)), of: .screen)
+        #expect(metadata.withLock { $0.isEmpty })
+        #expect(compositions.withLock { $0 } == 1)
+        writer.consume(try screenSample(pts: CMTime(value: 101, timescale: 30)), of: .screen)
+        let received = metadata.withLock { $0 }
+        #expect(compositions.withLock { $0 } == 2)
+        #expect(received.count == 1)
+        #expect(received.first?.0 == 1)
+        #expect(received.first?.1 == CMTime(value: 101, timescale: 30))
+        #expect(received.first?.2 != nil)
+        #expect(writer.healthSnapshot().video.appended == 1)
+        #expect(writer.healthSnapshot().video.dropped == 1)
+        writer.stageSink = nil
+        writer.markFinished(atHostTime: nil)
+        _ = try await writer.finishWriting()
+    }
+
     @Test("fit errors retain a healthy camera; camera errors degrade once and pool drops remain transient",
           arguments: [0, 1, 2])
     func compositorErrorAttribution(stage: Int) async throws {
@@ -52,6 +84,7 @@ struct StreamWriterCameraTests {
         let frames = try await decodedFrames(at: url)
         #expect(failures.withLock { $0 } == (stage == 1 ? 1 : 0))
         if stage == 2 {
+            #expect(writer.healthSnapshot().compositorPoolExhaustions == 1)
             #expect(writer.healthSnapshot().video.appended == 1)
             #expect(writer.healthSnapshot().video.dropped == 1)
             #expect(!frames.isEmpty)
@@ -369,7 +402,7 @@ struct StreamWriterCameraTests {
         #expect(abs(videoDuration - audioDuration) < 0.08)
     }
 
-    @Test("stage handoff is limited to 10 Hz, freezes on pause, and detaches cleanly")
+    @Test("stage handoff publishes every accepted frame, freezes on pause, and detaches cleanly")
     func stageCadence() async throws {
         let url = temporaryMovieURL()
         defer { try? FileManager.default.removeItem(at: url) }
@@ -388,15 +421,15 @@ struct StreamWriterCameraTests {
             clock.withLock { $0 = CMTime(value: Int64(milliseconds), timescale: 1_000) }
             writer.consume(try screenSample(pts: CMTime(value: Int64(101 + index), timescale: 30)), of: .screen)
         }
-        #expect(received.withLock { $0 } == [20, 120, 220].map { CMTime(value: $0, timescale: 1_000) })
+        #expect(received.withLock { $0 } == [20, 40, 80, 120, 140, 220].map { CMTime(value: $0, timescale: 1_000) })
         writer.pause()
         clock.withLock { $0 = CMTime(value: 300, timescale: 1_000) }
         writer.consume(try screenSample(pts: CMTime(value: 110, timescale: 30)), of: .screen)
-        #expect(received.withLock { $0.count } == 3)
+        #expect(received.withLock { $0.count } == 6)
         writer.stageSink = nil
         writer.resume()
         writer.consume(try screenSample(pts: CMTime(value: 111, timescale: 30)), of: .screen)
-        #expect(received.withLock { $0.count } == 3)
+        #expect(received.withLock { $0.count } == 6)
         writer.markFinished(atHostTime: nil)
         _ = try await writer.finishWriting()
     }

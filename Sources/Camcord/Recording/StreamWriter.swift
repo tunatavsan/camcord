@@ -22,7 +22,14 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     private let hostTimeProvider: @Sendable () -> CMTime
     private let writerStatusProvider: (@Sendable () -> AVAssetWriter.Status)?
     private let videoReadinessProvider: (@Sendable () -> Bool)?
+    /// Test-only rejection seam; production always uses AVAssetWriterInput.append.
+    private let videoAppendProvider: (@Sendable (CMSampleBuffer) -> Bool)?
     private let frameDuration: CMTime
+
+    var nominalFramesPerSecond: Double? {
+        let seconds = frameDuration.seconds
+        return frameDuration.isNumeric && seconds.isFinite && seconds > 0 ? 1 / seconds : nil
+    }
 
     private var pauseClock: PauseClock
     private var sessionStarted = false
@@ -56,10 +63,11 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     private var isAwaitingInitialRelease: Bool
     private var lastCameraPTS: CMTime = .invalid
     private var lastAppendedMediaEnd: CMTime = .invalid
-    private var lastStageTime: CMTime = .invalid
-    var stageSink: (@Sendable (PixelBufferBox) -> Void)? {
-        didSet { lastStageTime = .invalid }
-    }
+    private let stageEpoch = UUID()
+    private var stageSequence: UInt64 = 0
+    /// Queue-confined instrumentation of the existing compositor backpressure path.
+    private(set) var compositorPoolExhaustions: UInt64 = 0
+    var stageSink: (@Sendable (PixelBufferBox) -> Void)?
     private var studioLayers: StudioLayerSnapshot = .empty
 
     func updateStudioLayers(_ snapshot: StudioLayerSnapshot) { studioLayers = snapshot }
@@ -75,7 +83,11 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         microphoneGainDB = microphoneDB.isFinite ? min(24, max(-24, microphoneDB)) : 0
     }
 
-    func healthSnapshot() -> RecordingHealth { health }
+    func healthSnapshot() -> RecordingHealth {
+        var snapshot = health
+        snapshot.compositorPoolExhaustions = compositorPoolExhaustions
+        return snapshot
+    }
 
     /// True while the writer can still accept samples. The stream can die (display
     /// reconfiguration) while the writer is perfectly healthy — that's the case the
@@ -112,6 +124,7 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         compositor: CameraCompositor? = nil,
         writerStatusProvider: (@Sendable () -> AVAssetWriter.Status)? = nil,
         videoReadinessProvider: (@Sendable () -> Bool)? = nil,
+        videoAppendProvider: (@Sendable (CMSampleBuffer) -> Bool)? = nil,
         hostTimeProvider: @escaping @Sendable () -> CMTime = {
             CMClockGetTime(CMClockGetHostTimeClock())
         }
@@ -126,6 +139,7 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         cameraCompositor = compositor
         self.writerStatusProvider = writerStatusProvider
         self.videoReadinessProvider = videoReadinessProvider
+        self.videoAppendProvider = videoAppendProvider
         self.hostTimeProvider = hostTimeProvider
         self.frameDuration = frameDuration
         systemGainDB = systemAudioGainDB.isFinite ? min(12, max(-60, systemAudioGainDB)) : 0
@@ -323,6 +337,7 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
                                                          options: cameraOptions, fit: fit, layers: studioLayers)
                 didCompose = true
             } catch CameraCompositorError.poolExhausted {
+                compositorPoolExhaustions &+= 1
                 // Encoder backpressure is temporary. Skip this video frame instead
                 // of permanently disabling the camera or flashing a camera-less frame.
                 health.video.dropped += 1
@@ -342,18 +357,15 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
                 logger.error("Canvas fit failed: \(String(describing: error), privacy: .public)")
             }
         }
-        if let stageSink {
-            let now = hostTimeProvider()
-            if !lastStageTime.isValid || CMTimeSubtract(now, lastStageTime) >= CMTime(value: 1, timescale: 10),
-               let pixels = CMSampleBufferGetImageBuffer(output) {
-                lastStageTime = now
-                let fullBounds = CGRect(x: 0, y: 0, width: CVPixelBufferGetWidth(pixels), height: CVPixelBufferGetHeight(pixels))
-                stageSink(PixelBufferBox(pixels, cameraContentRect: didCompose ? fit?.fitted ?? fullBounds : fullBounds))
-            }
-        }
         if append(output, retimedTo: retimedPTS, originalPTS: pts, input: videoInput) {
             health.video.appended += 1
             if cameraSource != nil { lastCameraPTS = pts }
+            stageSequence &+= 1
+            if let stageSink, let pixels = CMSampleBufferGetImageBuffer(output) {
+                let bounds = CGRect(x: 0, y: 0, width: CVPixelBufferGetWidth(pixels), height: CVPixelBufferGetHeight(pixels))
+                stageSink(PixelBufferBox(pixels, cameraContentRect: didCompose ? fit?.fitted ?? bounds : bounds,
+                                        pts: retimedPTS, sequence: stageSequence, epoch: stageEpoch))
+            }
             return true
         } else {
             health.video.dropped += 1
@@ -428,7 +440,12 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
 
         let buffer = retimedPTS == originalPTS ? sampleBuffer : retimed(sampleBuffer, to: retimedPTS)
         guard let buffer else { return false }
-        let accepted = input.append(buffer)
+        let accepted: Bool
+        if input === videoInput, let videoAppendProvider, !videoAppendProvider(buffer) {
+            accepted = false
+        } else {
+            accepted = input.append(buffer)
+        }
         if accepted {
             let sampleDuration = CMSampleBufferGetDuration(buffer)
             let acceptedDuration = sampleDuration.isNumeric && sampleDuration > .zero

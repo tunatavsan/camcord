@@ -25,6 +25,7 @@ final class StudioSession {
     private(set) var sources: [StudioSourceChoice] = []
     private(set) var selectedSource: StudioSourceChoice?
     private(set) var stageImage: NSImage?
+    private(set) var previewHasFrame = false
     private(set) var previewState: StudioPreviewState = .inactive
     private(set) var isRefreshingSources = false
     private(set) var issue: StudioIssue?
@@ -33,6 +34,7 @@ final class StudioSession {
     private(set) var systemAudioTestRequested = false
     private(set) var systemAudioLevels: AudioLevels?
     private var frameCameraContentRect: CGRect?
+    private var previewCanvasSize: CGSize?
     var countdownSeconds: Int {
         didSet {
             if !Self.countdownChoices.contains(countdownSeconds) { countdownSeconds = 3 }
@@ -45,7 +47,13 @@ final class StudioSession {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let controller: RecordingController
     @ObservationIgnored private let operations: Operations
-    @ObservationIgnored private let idleRenderer = StudioIdlePreviewRenderer()
+    @ObservationIgnored private let previewTransport = StudioPreviewBufferTransport()
+    @ObservationIgnored private var previewViewport: StudioPreviewViewport?
+    @ObservationIgnored private var previewHostOwner: UUID?
+    @ObservationIgnored private var nativeProducer: UUID?
+    @ObservationIgnored private var presentedProducer: UUID?
+    @ObservationIgnored private var viewportUpdateTask: Task<Void, Never>?
+    @ObservationIgnored private var viewportUpdateToken: UUID?
     @ObservationIgnored private var layerSnapshot = StudioLayerSnapshot.empty
     @ObservationIgnored private var visibility = StudioVisibility()
     @ObservationIgnored private let previewOwner = StudioPreviewOwner()
@@ -62,9 +70,9 @@ final class StudioSession {
     @ObservationIgnored private var poll: Task<Void, Never>?
     @ObservationIgnored private var stateObservation: AnyCancellable?
     @ObservationIgnored private var microphoneObservation: AnyCancellable?
+    @ObservationIgnored private var cameraObservation: AnyCancellable?
     @ObservationIgnored private var settingsObservation: AnyCancellable?
     @ObservationIgnored private var lastSourceRefresh = -Double.infinity
-    @ObservationIgnored private var stageRendering = false
 
     init(defaults: UserDefaults, controller: RecordingController, recordingState: RecordingStateModel,
          coordinator: CaptureCoordinator, layers: StudioLayerDocument = .init(),
@@ -94,6 +102,7 @@ final class StudioSession {
             guard let self else { return }
             self.layerSnapshot = snapshot
             self.controller.updateStudioLayers(snapshot)
+            self.updateIdlePreviewConfiguration()
         }
         // Combine can invoke a sink on its publisher's thread. These Sendable callbacks
         // stay nonisolated; only the explicit MainActor tasks read or change session state.
@@ -112,6 +121,13 @@ final class StudioSession {
                     }
                 }
             }
+        cameraObservation = cameraMonitor.$isRunning.combineLatest(cameraMonitor.$isStarting, cameraMonitor.$recordingLocked)
+            .sink { @Sendable [weak self] _, _, _ in
+                Task { @MainActor [weak self] in self?.updateIdlePreviewConfiguration() }
+            }
+        previewTransport.setEventHandler { [weak self] event in
+            Task { @MainActor [weak self] in self?.receivePreviewEvent(event) }
+        }
         settingsObservation = NotificationCenter.default.publisher(for: RecordingSettings.didChangeNotification)
             .merge(with: NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification))
             .sink { @Sendable [weak self] _ in
@@ -128,6 +144,7 @@ final class StudioSession {
     }
     var isBusy: Bool { controller.isBusy }
     var canvasSize: CGSize {
+        if let previewCanvasSize, Self.validCanvasSize(previewCanvasSize) { return previewCanvasSize }
         if let size = stageImage?.size, Self.validCanvasSize(size) { return size }
         return Self.plannedCanvasSize(source: selectedSource, settings: settings)
     }
@@ -164,6 +181,78 @@ final class StudioSession {
     }
     var ownsMicrophoneTest: Bool { microphoneMonitor.owns(microphoneOwner) }
     func dismissIssue() { issue = nil }
+
+    var previewStatistics: StudioPreviewBufferTransport.Statistics { previewTransport.statistics }
+
+    func attachPreviewHost(_ layer: AVSampleBufferDisplayLayer, viewport: StudioPreviewViewport) -> UUID {
+        if let previous = previewHostOwner { previewTransport.detach(host: previous) }
+        let owner = previewTransport.attach(layer, viewport: viewport)
+        previewHostOwner = owner
+        previewViewport = viewport
+        previewHasFrame = false
+        Task { [weak self] in await self?.reconcilePreview() }
+        return owner
+    }
+
+    func updatePreviewViewport(_ viewport: StudioPreviewViewport, owner: UUID) {
+        guard previewHostOwner == owner, previewViewport != viewport else { return }
+        previewViewport = viewport
+        previewTransport.updateViewport(viewport, host: owner)
+        updateCaptureViewportIfNeeded()
+    }
+
+    func detachPreviewHost(owner: UUID) {
+        guard previewHostOwner == owner else { return }
+        previewHostOwner = nil
+        previewViewport = nil
+        previewTransport.detach(host: owner)
+        nativeProducer = nil
+        if let stageOwner { controller.unsubscribeStage(owner: stageOwner); self.stageOwner = nil }
+        let old = detachPreview()
+        if let old { Task { await old.stop() } }
+    }
+
+    private func updateCaptureViewportIfNeeded() {
+        guard viewportUpdateTask == nil, let capture = previewCapture, recordingState.state == .idle else { return }
+        let generation = previewGeneration
+        let updateToken = UUID()
+        viewportUpdateToken = updateToken
+        viewportUpdateTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.viewportUpdateToken == updateToken { self.viewportUpdateTask = nil; self.viewportUpdateToken = nil }
+            }
+            var applied: StudioPreviewViewport?
+            while !Task.isCancelled, self.visibility.allowsPreview, self.previewGeneration == generation,
+                  self.previewCapture === capture, self.recordingState.state == .idle,
+                  let desired = self.previewViewport, desired != applied {
+                do { try await capture.updateViewport(desired) } catch {
+                    guard self.previewGeneration == generation, self.previewCapture === capture else { return }
+                    self.resetPreview(); self.issue = .previewFailed; self.previewState = .unavailable
+                    return
+                }
+                applied = desired
+            }
+        }
+    }
+
+    private func updateIdlePreviewConfiguration() {
+        let isWindow: Bool
+        if case .window = selectedSource?.id { isWindow = true } else { isWindow = false }
+        previewTransport.updateIdleConfiguration(.init(
+            cameraSource: cameraPreviewRequested ? cameraMonitor.currentPreviewSource() : nil,
+            cameraOptions: settings.camera, layers: layerSnapshot, fitsWindow: isWindow))
+    }
+
+    private func activatePreview(owner: UUID) {
+        guard nativeProducer != owner else { return }
+        nativeProducer = owner
+        previewTransport.activate(owner: owner)
+    }
+    private func retirePreview() {
+        if let nativeProducer { previewTransport.retire(owner: nativeProducer) }
+        nativeProducer = nil
+    }
 
     func setVisibility(moduleVisible: Bool, windowAllowsPreview: Bool, captureTransition: Bool) {
         let new = StudioVisibility(moduleVisible: moduleVisible, windowAllowsPreview: windowAllowsPreview,
@@ -333,9 +422,11 @@ final class StudioSession {
             Task { [weak self] in await self?.reconcilePreview() }
         }
         previewCapture?.updateGain(current.resolvedSystemAudioGainDB)
+        updateIdlePreviewConfiguration()
     }
 
     func setCameraPreviewRequested(_ requested: Bool, requestPermission: Bool = true) async {
+        defer { updateIdlePreviewConfiguration() }
         cameraIntentGeneration = UUID()
         let token = cameraIntentGeneration
         guard requested, visibility.allowsPreview, !controller.isBusy else {
@@ -350,7 +441,7 @@ final class StudioSession {
             return
         }
         cameraPreviewRequested = true
-        cameraMonitor.setVisible(true, owner: cameraOwner)
+        cameraMonitor.setVisible(true, owner: cameraOwner, rendersImage: false)
         await cameraMonitor.start(deviceID: settings.camera.deviceID, format: settings.camera.format, requestPermission: requestPermission)
         guard cameraIntentGeneration == token, cameraPreviewRequested, visibility.allowsPreview else { return }
         if !cameraMonitor.isRunning { cameraPreviewRequested = false; cameraMonitor.setVisible(false, owner: cameraOwner) }
@@ -442,9 +533,10 @@ final class StudioSession {
         cameraOwner = CameraPreviewMonitor.makeOwnerID("studio")
         if let stageOwner { controller.unsubscribeStage(owner: stageOwner) }
         stageOwner = nil
+        retirePreview()
         let old = detachPreview()
         stageImage = nil
-        frameCameraContentRect = nil
+        updateIdlePreviewConfiguration()
         previewState = .inactive
         Task { [microphoneMonitor, cameraMonitor] in
             await microphoneMonitor.release(owner: oldMicrophoneOwner)
@@ -454,15 +546,19 @@ final class StudioSession {
     }
 
     private func resetPreview() {
+        retirePreview()
         let old = detachPreview()
         stageImage = nil
-        frameCameraContentRect = nil
         if let old { Task { await old.stop() } }
     }
 
     private func detachPreview() -> (any StudioPreviewResource)? {
+        if nativeProducer == previewGeneration { retirePreview() }
         poll?.cancel()
         poll = nil
+        viewportUpdateTask?.cancel()
+        viewportUpdateTask = nil
+        viewportUpdateToken = nil
         return previewOwner.detach()
     }
 
@@ -477,21 +573,37 @@ final class StudioSession {
 
     private func reconcilePreview() async {
         guard visibility.allowsPreview else { return }
+        if recordingState.state == .idle {
+            guard selectedSource != nil else { previewState = .noSource; return }
+            guard operations.screenCaptureAuthorized() else {
+                previewState = .permissionRequired; issue = .screenPermissionRequired; return
+            }
+        }
+        guard previewHostOwner != nil, let viewport = previewViewport else { return }
         if recordingState.state != .idle {
             let old = detachPreview()
             if let old { await old.stop() }
             guard visibility.allowsPreview, recordingState.state != .idle else { return }
             previewState = recordingState.state == .paused ? .paused : .recording
+            if recordingState.state == .paused {
+                if let stageOwner { controller.unsubscribeStage(owner: stageOwner); self.stageOwner = nil }
+                retirePreview()
+                return
+            }
             if stageOwner == nil {
                 let owner = UUID()
                 stageOwner = owner
-                controller.subscribeStage(owner: owner) { [weak self] frame in
-                    Task { @MainActor [weak self] in await self?.receiveStage(frame, owner: owner) }
+                activatePreview(owner: owner)
+                let transport = previewTransport
+                controller.subscribeStage(owner: owner, maximumFramesPerSecond: nil) { frame in
+                    transport.tryOffer(frame, owner: owner)
                 }
+            } else if let stageOwner {
+                activatePreview(owner: stageOwner)
             }
             return
         }
-        if let stageOwner { controller.unsubscribeStage(owner: stageOwner); self.stageOwner = nil }
+        if let stageOwner { controller.unsubscribeStage(owner: stageOwner); self.stageOwner = nil; retirePreview() }
         guard !recordingState.isStarting, !recordingState.isFinishing, previewCapture == nil else { return }
         guard let choice = selectedSource else { previewState = .noSource; return }
         guard operations.screenCaptureAuthorized() else { previewState = .permissionRequired; issue = .screenPermissionRequired; return }
@@ -507,6 +619,11 @@ final class StudioSession {
             selectedSource = StudioSourceChoice(id: choice.id, title: choice.title, frame: choice.frame, pixelSize: size)
             let capture = operations.makePreview()
             capture.updateGain(settings.resolvedSystemAudioGainDB)
+            updateIdlePreviewConfiguration()
+            activatePreview(owner: token)
+            let transport = previewTransport
+            let configuredViewport = previewViewport ?? viewport
+            capture.configure(viewport: configuredViewport) { frame in transport.tryOfferIdle(frame, owner: token) }
             let capturesAudio = settings.systemAudio || systemAudioTestRequested
             let installed = try await previewOwner.install(capture, generation: token) {
                 try await capture.start(target: target, canvasSize: size, capturesAudio: capturesAudio)
@@ -519,6 +636,7 @@ final class StudioSession {
             }
             previewState = .live
             issue = nil
+            if previewViewport != configuredViewport { updateCaptureViewportIfNeeded() }
             poll = Task { [weak self] in
                 while !Task.isCancelled {
                     guard let self, self.previewGeneration == token, self.visibility.allowsPreview,
@@ -531,22 +649,16 @@ final class StudioSession {
                         self.previewState = .unavailable
                         return
                     }
-                    if let frame = capture.latestFrame() {
-                        let camera = self.cameraPreviewRequested ? self.cameraMonitor.currentPreviewFrame() : nil
-                        let image = await self.idleRenderer.render(frame, camera: camera, options: self.settings.camera,
-                                                                  layers: self.layerSnapshot, fitsWindow: target.isWindow)
-                        guard !Task.isCancelled, self.previewGeneration == token, self.visibility.allowsPreview else { return }
-                        if let image, let buffer = CMSampleBufferGetImageBuffer(frame.sample) {
-                            self.stageImage = NSImage(cgImage: image, size: size)
-                            let bufferSize = CGSize(width: CVPixelBufferGetWidth(buffer), height: CVPixelBufferGetHeight(buffer))
-                            let content = target.isWindow ? StreamWriter.canvasFit(of: frame.sample)?.fitted : nil
-                            self.frameCameraContentRect = Self.mappedCameraContentRect(content, bufferSize: bufferSize, canvasSize: size)
-                        }
+                    // A static source may provide its only complete frame while the
+                    // renderer is flushing. Retry only until this producer's first
+                    // native enqueue; moving sources always use the callback path.
+                    if self.presentedProducer != token, let frame = capture.latestFrame() {
+                        self.previewTransport.tryOfferIdle(frame, owner: token)
                     }
                     if self.settings.systemAudio || self.systemAudioTestRequested {
                         self.systemAudioLevels = captureStatus.levels
                     }
-                    do { try await Task.sleep(for: .milliseconds(84)) } catch { return }
+                    do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
                 }
             }
         } catch {
@@ -557,16 +669,25 @@ final class StudioSession {
         }
     }
 
-    private func receiveStage(_ frame: PixelBufferBox, owner: UUID) async {
-        guard stageOwner == owner, visibility.allowsPreview, !stageRendering else { return }
-        stageRendering = true
-        defer { stageRendering = false }
-        let rendered = await cameraMonitor.renderer.render(frame.value, maximumWidth: 960)
-        guard stageOwner == owner, visibility.allowsPreview, let rendered else { return }
-        // StreamWriter already composed fit/camera/layers; this path only downscales.
-        stageImage = NSImage(cgImage: rendered.image, size: rendered.size)
-        frameCameraContentRect = Self.mappedCameraContentRect(frame.cameraContentRect, bufferSize: frame.pixelSize,
-                                                            canvasSize: rendered.size)
+    private func receivePreviewEvent(_ event: StudioPreviewBufferTransport.Event) {
+        switch event {
+        case .firstFrameOrGeometry(let owner, let host, let geometry):
+            guard previewHostOwner == host, nativeProducer == owner, visibility.allowsPreview,
+                  owner == stageOwner || owner == previewGeneration else { return }
+            let destination = owner == stageOwner ? geometry.pixelSize
+                : Self.plannedCanvasSize(source: selectedSource, settings: settings)
+            previewCanvasSize = destination
+            frameCameraContentRect = Self.mappedCameraContentRect(geometry.contentRect,
+                bufferSize: geometry.pixelSize, canvasSize: destination)
+            presentedProducer = owner
+            previewHasFrame = true
+        case .failed(let owner, let host):
+            guard previewHostOwner == host, nativeProducer == owner, visibility.allowsPreview else { return }
+            if let stageOwner, stageOwner == owner { controller.unsubscribeStage(owner: stageOwner); self.stageOwner = nil }
+            resetPreview()
+            issue = .previewFailed
+            previewState = .unavailable
+        }
     }
 }
 

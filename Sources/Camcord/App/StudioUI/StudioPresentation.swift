@@ -84,8 +84,8 @@ enum StudioStageGeometry {
         guard validCameraViewport(canvas: canvas, contentRect: contentRect, fitted: fitted) else { return options }
         let scale = canvas.width / fitted.width
         var result = options
-        result.place(options.rect(in: contentRect.size).offsetBy(dx: translation.width * scale, dy: -translation.height * scale),
-                     in: contentRect.size, snapDistance: min(84, min(contentRect.width, contentRect.height) * 0.18))
+        let moved = options.rect(in: contentRect.size).offsetBy(dx: translation.width * scale, dy: -translation.height * scale)
+        result.place(edgeMagnet(moved, in: contentRect.size, distance: 8 * scale), in: contentRect.size)
         return result.resolved()
     }
     static func resizedCamera(_ options: CameraOptions, translation: CGSize, corner: CameraCorner,
@@ -95,6 +95,18 @@ enum StudioStageGeometry {
         return CameraResizeGeometry.resize(start: options.rect(in: contentRect.size),
             translation: CGPoint(x: translation.width * scale, y: -translation.height * scale),
             corner: corner, options: options, in: contentRect.size)
+    }
+    /// Stage-point attraction is converted to destination units; placement stays shared with the compositor.
+    static func edgeMagnet(_ rect: CGRect, in size: CGSize, distance: CGFloat) -> CGRect {
+        let margin = CameraOptions.margin(in: size)
+        let left = margin, right = max(left, size.width - margin - rect.width)
+        let bottom = margin, top = max(bottom, size.height - margin - rect.height)
+        var result = rect
+        if abs(rect.minX - left) <= distance { result.origin.x = left }
+        else if abs(rect.minX - right) <= distance { result.origin.x = right }
+        if abs(rect.minY - bottom) <= distance { result.origin.y = bottom }
+        else if abs(rect.minY - top) <= distance { result.origin.y = top }
+        return result
     }
     private static func validCameraViewport(canvas: CGSize, contentRect: CGRect, fitted: CGRect) -> Bool {
         canvas.width.isFinite && canvas.height.isFinite && canvas.width > 0 && canvas.height > 0

@@ -29,7 +29,8 @@ final class RecordingController: NSObject {
     private var preparedStartGeneration: UUID?
     private var preparedOperationGeneration: UUID?
     private let coordinator: CaptureCoordinator
-    private let engine = RecordingEngine()
+    private let engine: RecordingEngine
+    var finalRecordingHealth: RecordingFinalHealth? { engine.finalHealth }
     private let indicator = CaptureAreaIndicator()
     private let windowPicker = WindowPickerPanel()
     private let logger = Logger(subsystem: "dev.tavsan.camcord", category: "recording-controller")
@@ -64,8 +65,9 @@ final class RecordingController: NSObject {
         if let sink { subscribeStage(owner: legacyStageOwner, handler: sink) }
         else { unsubscribeStage(owner: legacyStageOwner) }
     }
-    func subscribeStage(owner: UUID, handler: @escaping @Sendable (PixelBufferBox) -> Void) {
-        stageRegistry.subscribe(owner: owner, handler: handler)
+    func subscribeStage(owner: UUID, maximumFramesPerSecond: Double? = 10,
+                        handler: @escaping @Sendable (PixelBufferBox) -> Void) {
+        stageRegistry.subscribe(owner: owner, maximumFramesPerSecond: maximumFramesPerSecond, handler: handler)
         engine.setStageSink(stageRegistry.snapshot())
     }
     func unsubscribeStage(owner: UUID) {
@@ -151,10 +153,11 @@ final class RecordingController: NSObject {
     private var lastRecordToggle: ContinuousClock.Instant?
 
     init(coordinator: CaptureCoordinator, defaults: UserDefaults = .standard,
-         preparedStartOperations: PreparedStartOperations = .init()) {
+         preparedStartOperations: PreparedStartOperations = .init(), engine injectedEngine: RecordingEngine? = nil) {
         self.defaults = defaults
         self.preparedStartOperations = preparedStartOperations
         self.coordinator = coordinator
+        self.engine = injectedEngine ?? RecordingEngine()
         super.init()
         NotificationCenter.default.addObserver(self, selector: #selector(recordingSettingsChanged), name: RecordingSettings.didChangeNotification, object: nil)
         engine.onCameraIssue = { [weak self] message in
@@ -555,7 +558,7 @@ final class RecordingController: NSObject {
         lastPauseToggle = now
         switch uiState {
         case .idle:
-            FeedbackSound.error.play()
+            FeedbackSound.error.play(in: defaults)
         case .recording:
             engine.pause()
             accumulatedElapsed += segmentStart.map { Date().timeIntervalSince($0) } ?? 0
@@ -563,7 +566,7 @@ final class RecordingController: NSObject {
             stopElapsedTimer()
             uiState = .paused
             pushUI()
-            FeedbackSound.recordPause.play()
+            FeedbackSound.recordPause.play(in: defaults)
         case .paused:
             guard pendingResumeCue == nil else { return }
             let id = UUID()
@@ -576,7 +579,7 @@ final class RecordingController: NSObject {
     }
 
     private func finishResume(after id: UUID) async {
-        await FeedbackSound.recordResume.playAndWait()
+        await FeedbackSound.recordResume.playAndWait(in: defaults)
         guard pendingResumeCue?.id == id else { return }
         pendingResumeCue = nil
         guard !Task.isCancelled, !isTerminating, uiState == .paused, engine.isRecording else { return }
@@ -732,7 +735,7 @@ final class RecordingController: NSObject {
             defer { isEngineStarting = false }
             // The existing cue and stream setup overlap. The writer stays paused
             // until both finish, so the cue cannot enter either recorded audio track.
-            let cueTask = Task { @MainActor in await FeedbackSound.recordStart.playAndWait() }
+            let cueTask = Task { @MainActor [defaults] in await FeedbackSound.recordStart.playAndWait(in: defaults) }
             startCueTask = cueTask
             defer { cueTask.cancel(); startCueTask = nil }
             guard requireStudioLayersReady(), preparedGenerationIsCurrent(preparedGeneration) else { return }
@@ -906,7 +909,7 @@ final class RecordingController: NSObject {
                 await engine.waitForPendingMixes()
                 // Recordings are NOT copied to the clipboard (only screenshots are) — they're
                 // saved to disk and surfaced in the panel's "done" card.
-                FeedbackSound.recordStop.play()
+                FeedbackSound.recordStop.play(in: defaults)
                 showFinishedToast()
                 onRecordingFinished?(url)
                 logger.notice("Recording finished: \(url.lastPathComponent, privacy: .public)")
@@ -1102,7 +1105,7 @@ final class RecordingController: NSObject {
         logger.error("\(message, privacy: .public)")
         // The diagnostic string is for the log; the toast stays user-facing Turkish.
         onToast?(ToastRequest(text: "Kayıt başarısız oldu", systemSymbol: "exclamationmark.triangle", tint: .systemRed, important: true))
-        FeedbackSound.error.play()
+        FeedbackSound.error.play(in: defaults)
         onFailure?()
         PermissionRecovery.noteCaptureFailure()
     }

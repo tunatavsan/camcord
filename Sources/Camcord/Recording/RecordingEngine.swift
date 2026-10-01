@@ -28,6 +28,41 @@ final class RecordingEngine: NSObject {
     private let logger = Logger(subsystem: "dev.tavsan.camcord", category: "recording-engine")
 
     private let sampleQueue = DispatchQueue(label: "dev.tavsan.camcord.recording.samples", qos: .userInitiated)
+    private let diagnostics: @Sendable (String) -> Void
+    private var recordingEpoch = UUID()
+    private(set) var finalHealth: RecordingFinalHealth?
+
+    init(diagnostics: @escaping @Sendable (String) -> Void = { DiagnosticsLog.append($0) }) {
+        self.diagnostics = diagnostics
+        super.init()
+    }
+
+    /// Start's synchronous boundary: stale finalization continuations cannot publish
+    /// a previous recording's counters after this epoch becomes current.
+    @discardableResult
+    func beginRecordingEpoch() -> UUID {
+        recordingEpoch = UUID()
+        finalHealth = nil
+        return recordingEpoch
+    }
+
+    @discardableResult
+    func sealFinalHealth(_ writer: StreamWriter, epoch: UUID, endHostTime: CMTime?) async -> RecordingFinalHealth {
+        let result = await withCheckedContinuation { continuation in
+            sampleQueue.async {
+                writer.markFinished(atHostTime: endHostTime)
+                continuation.resume(returning: RecordingFinalHealth(epoch: epoch,
+                    health: writer.healthSnapshot(), nominalFPS: writer.nominalFramesPerSecond))
+            }
+        }
+        if recordingEpoch == epoch, finalHealth == nil {
+            finalHealth = result
+            let nominal = result.nominalFPS.map { String(format: "%.3f", $0) } ?? "unknown"
+            diagnostics("recording epoch=\(epoch.uuidString) nominal_fps=\(nominal) "
+                + "video_dropped=\(result.health.video.dropped) compositor_pool_exhaustions=\(result.health.compositorPoolExhaustions)")
+        }
+        return result
+    }
 
     private var stream: SCStream?
     var streamWriter: StreamWriter?
@@ -124,6 +159,7 @@ final class RecordingEngine: NSObject {
         preparedCamera: CameraCapture? = nil
     ) async throws {
         guard stream == nil else { throw RecordingError.alreadyRecording }
+        beginRecordingEpoch()
         startCancelled = false
         var didStart = false
         defer { if !didStart { clearStreamState() } }
@@ -152,7 +188,7 @@ final class RecordingEngine: NSObject {
                 let line = "camera format=\(source.activeFormat?.label ?? "unknown") "
                     + "choice=\(CameraFormatSelection.label(options.format)) handoff=\(preparedCamera != nil)"
                 logger.notice("\(line, privacy: .public)")
-                DiagnosticsLog.append(line)
+                diagnostics(line)
             } catch {
                 cameraSource = nil
                 cameraToken = nil
@@ -500,6 +536,7 @@ final class RecordingEngine: NSObject {
         // Freeze the user's Stop boundary before the potentially five-second SCK wait.
         // Finalization must never turn stopCapture latency into recorded static tail time.
         let stopHostTime = Self.currentHostTime()
+        let epoch = recordingEpoch
         // Drop the engine's references BEFORE any await: a late didStopWithError /
         // writer-failure callback landing mid-finalize must see streamWriter == nil,
         // or it finalizes the same writer a second time and deletes the finished file.
@@ -508,12 +545,7 @@ final class RecordingEngine: NSObject {
         // Seal the writer on its owning queue before asking SCK to stop. The stop call can
         // time out after five seconds; callbacks arriving during that wait must not append
         // beyond the user-command boundary. finalize() repeats this idempotently.
-        await withCheckedContinuation { continuation in
-            sampleQueue.async {
-                writer.markFinished(atHostTime: stopHostTime)
-                continuation.resume()
-            }
-        }
+        await sealFinalHealth(writer, epoch: epoch, endHostTime: stopHostTime)
 
         do {
             // stopCapture is the same continuation-bridged replayd round-trip the
@@ -530,7 +562,7 @@ final class RecordingEngine: NSObject {
             logger.notice("stopCapture threw or timed out (continuing to finalize): \(String(describing: error), privacy: .public)")
         }
 
-        return try await finalize(writer, endHostTime: stopHostTime)
+        return try await finalize(writer, epoch: epoch, endHostTime: stopHostTime)
     }
 
     /// SCStream is not Sendable in the 15.x SDK; passing it into the hard-timeout's
@@ -595,10 +627,11 @@ final class RecordingEngine: NSObject {
             }
         }
         guard streamWriter === writer else { return }
+        let epoch = recordingEpoch
         clearStreamState()
         // Salvage whatever was written so a long recording isn't lost.
         do {
-            let salvaged = try await finalize(writer)
+            let salvaged = try await finalize(writer, epoch: epoch)
             await waitForPendingMixes()
             onUnexpectedStop?(salvaged, error)
         } catch RecordingError.incompleteRecording(let url, let underlying) {
@@ -703,6 +736,7 @@ final class RecordingEngine: NSObject {
     private func handleWriterRuntimeFailure(token: UUID) {
         guard writerToken == token, let stream, let writer = streamWriter else { return }
         logger.error("Writer runtime failure; stopping the orphaned stream")
+        let epoch = recordingEpoch
         clearStreamState()
         Task {
             let box = StreamBox(stream)
@@ -712,7 +746,7 @@ final class RecordingEngine: NSObject {
             // Movie fragments may contain the only surviving copy of a long session.
             // Preserve it even when AVFoundation cannot finalize the trailing fragment.
             do {
-                let url = try await finalize(writer)
+                let url = try await finalize(writer, epoch: epoch)
                 await waitForPendingMixes()
                 onUnexpectedStop?(url, RecordingError.incompleteRecording(url, nil))
             } catch RecordingError.incompleteRecording(let url, let underlying) {
@@ -726,7 +760,7 @@ final class RecordingEngine: NSObject {
     private var finalizations: [ObjectIdentifier: Task<URL, Error>] = [:]
     var isFinalizing: Bool { !finalizations.isEmpty || isMixing }
 
-    private func finalize(_ writer: StreamWriter, endHostTime: CMTime? = nil) async throws -> URL {
+    private func finalize(_ writer: StreamWriter, epoch: UUID, endHostTime: CMTime? = nil) async throws -> URL {
         let id = ObjectIdentifier(writer)
         if let existing = finalizations[id] { return try await existing.value }
         let shouldMix = pendingAudioMix
@@ -735,12 +769,7 @@ final class RecordingEngine: NSObject {
         let task = Task { @MainActor in
             // Snapshot the output policy before suspending: late stop/recovery callers
             // must never apply a future recording's settings to this file.
-            await withCheckedContinuation { continuation in
-                sampleQueue.async {
-                    writer.markFinished(atHostTime: endHostTime)
-                    continuation.resume()
-                }
-            }
+            await sealFinalHealth(writer, epoch: epoch, endHostTime: endHostTime)
             let url = try await writer.finishWriting()
             if shouldMix { startBackgroundAudioMix(url: url, fileType: fileType) }
             return url

@@ -21,7 +21,16 @@ struct AudioSourceHealth: Sendable, Equatable {
 }
 
 struct RecordingHealth: Sendable, Equatable {
+    var compositorPoolExhaustions: UInt64 = 0
     var video = SampleDeliveryStats()
     var systemAudio: AudioSourceHealth
     var microphone: AudioSourceHealth
+}
+
+/// Immutable counters captured after the writer's serial-queue seal. The frame rate
+/// is the configured interval, not a measurement of capture or displayed cadence.
+struct RecordingFinalHealth: Sendable, Equatable {
+    let epoch: UUID
+    let health: RecordingHealth
+    let nominalFPS: Double?
 }

@@ -12,6 +12,8 @@ struct StudioPreviewOwnershipTests {
         func latestFrame() -> StudioSampleFrame? { nil }
         func audioSnapshot() -> MicrophoneProbeSnapshot { .init() }
         func updateGain(_ gainDB: Double) {}
+        func configure(viewport: StudioPreviewViewport, frameSink: @escaping @Sendable (StudioSampleFrame) -> Void) {}
+        func updateViewport(_ viewport: StudioPreviewViewport) async throws {}
     }
 
     @Test("an old start completion stops only the old preview and preserves the replacement")
@@ -35,9 +37,9 @@ struct StudioPreviewOwnershipTests {
     @Test("bounded idle configuration has no microphone or passive audio", arguments: [false, true])
     func previewConfiguration(explicitAudioTest: Bool) {
         let configuration = StudioScreenPreview.configuration(canvasSize: CGSize(width: 7680, height: 4320),
-                                                               capturesAudio: explicitAudioTest)
-        #expect(configuration.width == 960 && configuration.height == 540)
-        #expect(configuration.minimumFrameInterval == CMTime(value: 1, timescale: 12))
+            capturesAudio: explicitAudioTest, viewport: .init(pixelSize: CGSize(width: 1536, height: 864), refreshRate: 120))
+        #expect(configuration.width == 1536 && configuration.height == 864)
+        #expect(configuration.minimumFrameInterval == CMTime(value: 1, timescale: 120))
         #expect(configuration.queueDepth == 3)
         #expect(!configuration.captureMicrophone)
         #expect(configuration.capturesAudio == explicitAudioTest)

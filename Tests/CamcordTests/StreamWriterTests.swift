@@ -1,6 +1,7 @@
 import AVFoundation
 import ScreenCaptureKit
 import Testing
+import os
 @testable import Camcord
 
 @Suite("Stream writer file safety")
@@ -311,7 +312,7 @@ struct StreamWriterTests {
         writer.consume(try videoFrame(index: 0), of: .screen)
         writer.consume(try videoFrame(index: 15, duration: .invalid), of: .screen)
 
-        let engine = RecordingEngine()
+        let engine = RecordingEngine(diagnostics: { _ in })
         let token = UUID()
         engine.streamWriter = writer
         engine.streamToken = token
@@ -326,6 +327,55 @@ struct StreamWriterTests {
         #expect(handedOverURL == url)
         let duration = try await AVURLAsset(url: url).load(.duration).seconds
         #expect(abs(duration - (0.5 + 1.0 / 30.0)) < 0.02)
+    }
+
+    @MainActor
+    @Test("final health is sealed before late media and logged once into an injected sink")
+    func finalHealthRejectsLateBuffer() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("camcord-final-health-\(UUID()).mov")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let lines = OSAllocatedUnfairLock(initialState: [String]())
+        let engine = RecordingEngine(diagnostics: { line in lines.withLock { $0.append(line) } })
+        let writer = try StreamWriter(outputURL: url, container: .mov, codec: .h264, bitrateMbps: 1,
+            pixelWidth: 64, pixelHeight: 48, frameDuration: CMTime(value: 1, timescale: 30),
+            dynamicRange: .sdr, includeSystemAudio: false, includeMicrophone: false)
+        writer.consume(try videoFrame(index: 0), of: .screen)
+        let epoch = engine.beginRecordingEpoch()
+        let sealed = await engine.sealFinalHealth(writer, epoch: epoch, endHostTime: nil)
+        #expect(sealed.health.video.appended == 1)
+        #expect(sealed.nominalFPS == 30)
+        writer.consume(try videoFrame(index: 1), of: .screen)
+        #expect(writer.healthSnapshot() == sealed.health)
+        #expect(engine.finalHealth == sealed)
+        let repeated = await engine.sealFinalHealth(writer, epoch: epoch, endHostTime: nil)
+        #expect(repeated == sealed)
+        #expect(lines.withLock { $0.count } == 1)
+        #expect(lines.withLock { $0.first?.contains("nominal_fps=30.000") } == true)
+        #expect(lines.withLock { $0.first?.contains("video_dropped=0 compositor_pool_exhaustions=0") } == true)
+        _ = try await writer.finishWriting()
+    }
+
+    @MainActor
+    @Test("a new recording epoch clears prior health and rejects an old seal continuation")
+    func newEpochRetiresPreviousFinalHealth() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("camcord-health-epoch-\(UUID()).mov")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let lines = OSAllocatedUnfairLock(initialState: [String]())
+        let engine = RecordingEngine(diagnostics: { line in lines.withLock { $0.append(line) } })
+        let writer = try StreamWriter(outputURL: url, container: .mov, codec: .h264, bitrateMbps: 1,
+            pixelWidth: 64, pixelHeight: 48, frameDuration: CMTime(value: 1, timescale: 30),
+            dynamicRange: .sdr, includeSystemAudio: false, includeMicrophone: false)
+        writer.consume(try videoFrame(index: 0), of: .screen)
+        let old = engine.beginRecordingEpoch()
+        await engine.sealFinalHealth(writer, epoch: old, endHostTime: nil)
+        #expect(engine.finalHealth?.epoch == old)
+        let current = engine.beginRecordingEpoch()
+        #expect(current != old)
+        #expect(engine.finalHealth == nil)
+        await engine.sealFinalHealth(writer, epoch: old, endHostTime: nil)
+        #expect(engine.finalHealth == nil)
+        #expect(lines.withLock { $0.count } == 1)
+        _ = try await writer.finishWriting()
     }
 
     private func videoFrame(

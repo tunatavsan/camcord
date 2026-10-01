@@ -8,6 +8,31 @@ import os
 
 @MainActor @Suite("Studio session intent and shared settings")
 struct StudioSessionTests {
+    @Test("native camera observers retain the device while image-owner handoffs alone control image polling")
+    func nativeCameraImageOwnership() async throws {
+        var starts = 0, stops = 0
+        let monitor = CameraPreviewMonitor(operations: .init(authorize: { _ in true },
+            start: { _, _, _ in starts += 1 }, waitForFirstFrame: { _ in }, stop: { _ in stops += 1 }))
+        monitor.setVisible(true, owner: "native", rendersImage: false)
+        await monitor.start(deviceID: "native", format: .auto)
+        let original = try #require(monitor.currentPreviewSource() as? CameraCapture)
+        #expect(monitor.isObserved && monitor.isRunning && !monitor.isRenderingImagePreview)
+        monitor.setVisible(true, owner: "native", rendersImage: true)
+        #expect(monitor.isRenderingImagePreview)
+        #expect((monitor.currentPreviewSource() as? CameraCapture) === original)
+        monitor.setVisible(true, owner: "foreign")
+        monitor.setVisible(true, owner: "native", rendersImage: false)
+        #expect(monitor.isRenderingImagePreview)
+        monitor.setVisible(false, owner: "foreign")
+        #expect(!monitor.isRenderingImagePreview && monitor.isObserved)
+        await monitor.stopIfUnobserved()
+        #expect(monitor.isRunning && stops == 0 && starts == 1)
+        #expect((monitor.currentPreviewSource() as? CameraCapture) === original)
+        monitor.setVisible(false, owner: "native", rendersImage: false)
+        await monitor.stopIfUnobserved()
+        #expect(!monitor.isObserved && !monitor.isRunning && stops == 1)
+    }
+
     @Test("enabled authorized idle meters start without prompting, hide/disable retire only Studio and stolen leases stay retired")
     func automaticMicrophoneLifecycle() async throws {
         let defaults = try isolatedDefaults(), coordinator = CaptureCoordinator()

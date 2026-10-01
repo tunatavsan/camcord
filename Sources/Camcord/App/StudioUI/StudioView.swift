@@ -85,7 +85,7 @@ private struct StudioControlRoom: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: Theme.Studio.mainSpacing) {
+            VStack(alignment: .leading, spacing: Theme.Space.m) {
                 StudioHeading(session: session, state: state, locked: policy.bindingsLocked)
                 if displayState != .idle {
                     StudioRecordingTransport(session: session, state: state)
@@ -94,14 +94,17 @@ private struct StudioControlRoom: View {
                 }
                 if presentation == nil, let issue = session.issue { StudioIssueBanner(session: session, issue: issue) }
                 if let url = finishedURL {
-                    StudioCompletedCard(url: url, fileActions: fileActions, claimClipboard: claimClipboard)
-                    Spacer(minLength: 0)
+                    ScrollView(.vertical) {
+                        StudioCompletedCard(url: url, fileActions: fileActions, claimClipboard: claimClipboard)
+                            .padding(.bottom, Theme.Space.xs)
+                    }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .scrollBounceBehavior(.basedOnSize)
                 } else {
                     StudioStageView(session: session, canEdit: presentation == nil && !policy.liveEditsLocked)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .padding(Theme.Space.xl)
+            .padding(Theme.Space.l)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             StudioInspector(session: session, state: state, allowsPreview: allowsPreview,
                             completed: finishedURL != nil, record: record)
@@ -277,11 +280,11 @@ private struct StudioCompletedCard: View {
     var body: some View {
         ViewThatFits(in: .horizontal) {
             HStack(alignment: .center, spacing: Theme.Space.l) {
-                thumbnail.frame(width: Theme.Studio.sourceWidth * 2)
+                thumbnail.frame(width: 180, height: 112.5)
                 details.frame(minWidth: Theme.Studio.sourceWidth * 1.5)
             }
             VStack(alignment: .leading, spacing: Theme.Space.l) {
-                thumbnail.frame(maxWidth: .infinity)
+                thumbnail.frame(maxWidth: .infinity).frame(height: 112.5)
                 details
             }
         }
@@ -292,16 +295,22 @@ private struct StudioCompletedCard: View {
         .onDisappear { media.hide() }
     }
     private var thumbnail: some View {
-        ZStack(alignment: .bottomLeading) {
+        ZStack {
             Theme.Palette.well.color
-            if let image = file?.thumbnail { Image(nsImage: image).resizable().aspectRatio(contentMode: .fit) }
-            else { Image(systemName: "film").font(Theme.Studio.placeholderSymbol).foregroundStyle(Theme.Palette.ink3.color).frame(maxWidth: .infinity, maxHeight: .infinity) }
+            if let image = file?.thumbnail {
+                Image(nsImage: image).resizable().aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            } else {
+                Image(systemName: "film").font(Theme.Studio.placeholderSymbol).foregroundStyle(Theme.Palette.ink3.color)
+            }
+        }
+        .overlay(alignment: .bottomLeading) {
             if let duration = file?.duration {
                 Text(verbatim: "▷ " + StudioDisplayTime.length(duration)).font(Theme.Font.dataSmall)
                     .foregroundStyle(Theme.Palette.onRecord.color).padding(Theme.Space.xs)
                     .background(Theme.Palette.well.color, in: .rect(cornerRadius: Theme.Radius.key)).padding(Theme.Space.s)
             }
-        }.frame(height: Theme.Studio.sourceHeight * 2).clipShape(.rect(cornerRadius: Theme.Radius.control))
+        }.clipShape(.rect(cornerRadius: Theme.Radius.control))
     }
     private var details: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {

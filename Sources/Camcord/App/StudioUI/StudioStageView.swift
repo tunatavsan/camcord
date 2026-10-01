@@ -5,66 +5,73 @@ struct StudioStageView: View {
     let canEdit: Bool
     @Environment(\.studioPresentationProvider) private var provider
     private var presentation: StudioPresentationSnapshot? { provider?.snapshot }
-    private var image: NSImage? { presentation == nil ? session.stageImage : presentation?.stageImage }
+    private var hasFrame: Bool { presentation.map { $0.stageImage != nil } ?? session.previewHasFrame }
     private var canvasSize: CGSize { presentation?.canvasSize ?? session.canvasSize }
     private var previewState: StudioPreviewState { presentation?.previewState ?? session.previewState }
     private var permitsEditing: Bool { presentation == nil && canEdit }
     @State private var layerDragStart: CGRect?
     @State private var cameraDragStart: CameraOptions?
     @State private var cameraResizeCorner: CameraCorner?
-    @State private var editCamera = false
+    @State private var cameraPointer: PointerStyle?
 
     var body: some View {
         GeometryReader { proxy in
             let fitted = StudioStageGeometry.fittedCanvas(canvasSize, in: CGRect(origin: .zero, size: proxy.size))
             ZStack(alignment: .topLeading) {
                 Theme.Palette.well.color
-                if let image {
-                    Image(nsImage: image).resizable().interpolation(.high)
-                        .frame(width: fitted.width, height: fitted.height)
-                        .position(x: fitted.midX, y: fitted.midY)
-                        .accessibilityLabel(Text("Recording preview"))
-                    if permitsEditing, let layer = selectedLayer, layer.isVisible {
-                        layerOutline(layer, fitted: fitted)
-                    }
-                    if permitsEditing, editCamera, session.settings.camera.enabled, session.cameraMonitor.currentPreviewFrame() != nil {
-                        cameraOutline(fitted: fitted)
+                if let presentation {
+                    if let image = presentation.stageImage {
+                        Image(nsImage: image).resizable().interpolation(.high)
+                            .frame(width: fitted.width, height: fitted.height)
+                            .position(x: fitted.midX, y: fitted.midY)
+                            .accessibilityLabel(Text("Recording preview"))
                     }
                 } else {
+                    StudioNativePreviewView(session: session)
+                        .frame(width: fitted.width, height: fitted.height)
+                        .position(x: fitted.midX, y: fitted.midY)
+                }
+                if !hasFrame {
                     placeholder.frame(width: proxy.size.width, height: proxy.size.height)
                 }
-                if presentation == nil, image != nil, previewState == .live || previewState == .recording || previewState == .paused {
-                    HStack(spacing: Theme.Space.s) {
-                        Circle().fill(previewState == .live ? Theme.Palette.ok.color : Theme.Palette.record.color).frame(width: Theme.Studio.meterHeight, height: Theme.Studio.meterHeight)
-                        Text(verbatim: previewState == .live ? "LIVE" : previewState == .paused ? "PAUSED" : "REC")
-                        Text(verbatim: "12 fps preview")
-                    }.font(Theme.Font.dataSmall).foregroundStyle(Theme.Palette.onRecord.color).padding(Theme.Space.m)
-                }
-                VStack {
-                    Spacer()
-                    HStack {
-                        if session.settings.camera.enabled, permitsEditing {
-                            Button { editCamera.toggle(); session.layers.selectedID = nil } label: {
-                                Label("Place camera", systemImage: "viewfinder")
-                            }
-                            .buttonStyle(.bordered)
-                            .tint(.white)
-                            .disabled(session.stageImage == nil || session.cameraMonitor.currentPreviewFrame() == nil)
-                            .help(Text("Camera preview is unavailable until a camera frame arrives."))
-                        }
-                        Spacer()
+                if hasFrame, permitsEditing {
+                    if let layer = selectedLayer, layer.isVisible { layerOutline(layer, fitted: fitted) }
+                    if session.settings.camera.enabled, session.cameraMonitor.isRunning {
+                        cameraOutline(fitted: fitted)
                     }
                 }
-                .padding(12)
+                if hasFrame, previewState == .live || previewState == .recording || previewState == .paused {
+                    HStack(spacing: Theme.Space.s) {
+                        Circle().fill(previewState == .live ? Theme.Palette.ok.color : Theme.Palette.record.color)
+                            .frame(width: Theme.Studio.meterHeight, height: Theme.Studio.meterHeight)
+                        Text(previewBadge)
+                    }
+                    .font(Theme.Font.dataSmall).foregroundStyle(Theme.Palette.onRecord.color)
+                    .padding(.horizontal, Theme.Space.m).padding(.vertical, Theme.Space.s)
+                    .background(.black.opacity(0.65), in: .capsule)
+                    .padding(Theme.Space.m).allowsHitTesting(false)
+                }
+                if hasFrame, permitsEditing, session.settings.camera.enabled, !session.cameraMonitor.isRunning {
+                    Text("Camera preview is unavailable until a camera frame arrives.")
+                        .font(Theme.Font.caption).foregroundStyle(Theme.Palette.onRecord.color)
+                        .padding(Theme.Space.s).background(.black.opacity(0.65), in: .capsule)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                        .padding(Theme.Space.m).allowsHitTesting(false)
+                }
             }
         }
         .frame(minHeight: 140)
         .coordinateSpace(.named("studio-stage"))
         .clipShape(.rect(cornerRadius: Theme.Radius.box))
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.box).strokeBorder(Theme.Palette.hairline.color))
-        .onChange(of: session.layers.selectedID) { _, id in if id != nil { editCamera = false } }
+        .onChange(of: permitsEditing) { _, editable in
+            if !editable { cameraDragStart = nil; cameraResizeCorner = nil; cameraPointer = nil; layerDragStart = nil }
+        }
     }
 
+    private var previewBadge: LocalizedStringResource {
+        switch previewState { case .live: "LIVE"; case .paused: "PAUSED"; default: "REC" }
+    }
     private var selectedLayer: StudioLayer? { session.layers.layers.first { $0.id == session.layers.selectedID } }
     private func layerOutline(_ layer: StudioLayer, fitted: CGRect) -> some View {
         let rect = StudioStageGeometry.layerRect(layer.rect, in: fitted)
@@ -87,7 +94,9 @@ struct StudioStageView: View {
             .overlay {
                 Canvas { context, size in
                     for corner in CameraCorner.allCases {
-                        context.stroke(StageGrip.arc(corner, in: CGRect(origin: .zero, size: size)), with: .color(.white), lineWidth: StageGrip.strokeWidth)
+                        let arc = StageGrip.arc(corner, in: CGRect(origin: .zero, size: size))
+                        context.stroke(arc, with: .color(.black.opacity(0.8)), lineWidth: 5)
+                        context.stroke(arc, with: .color(.white), lineWidth: 2.5)
                     }
                 }.accessibilityHidden(true)
             }
@@ -95,6 +104,7 @@ struct StudioStageView: View {
             .frame(width: rect.width, height: rect.height)
             .gesture(DragGesture(coordinateSpace: .named("studio-stage")).onChanged { value in
                 if cameraDragStart == nil {
+                    session.layers.selectedID = nil
                     cameraDragStart = session.settings.camera
                     cameraResizeCorner = StageGrip.corner(at: CGPoint(x: value.startLocation.x - rect.minX, y: value.startLocation.y - rect.minY),
                                                           in: CGRect(origin: .zero, size: rect.size), yDown: true)
@@ -109,7 +119,29 @@ struct StudioStageView: View {
                         contentRect: session.cameraContentRect, fitted: fitted)
                 }
                 session.updateSettings { $0.camera.position = next.position; $0.camera.corner = next.corner; $0.camera.widthFraction = next.widthFraction }
-            }.onEnded { _ in cameraDragStart = nil; cameraResizeCorner = nil })
+            }.onEnded { _ in cameraDragStart = nil; cameraResizeCorner = nil; cameraPointer = nil })
+            .onContinuousHover(coordinateSpace: .named("studio-stage")) { phase in
+                guard cameraDragStart == nil else { return }
+                switch phase {
+                case .active(let point):
+                    let local = CGPoint(x: point.x - rect.minX, y: point.y - rect.minY)
+                    cameraPointer = StageGrip.corner(at: local, in: CGRect(origin: .zero, size: rect.size), yDown: true)
+                        .map { StageCursor.resize($0).style } ?? .grabIdle
+                case .ended: cameraPointer = nil
+                }
+            }
+            .pointerStyle(cameraDragStart == nil ? cameraPointer : cameraResizeCorner.map { StageCursor.resize($0).style } ?? .grabActive)
+            .overlay(alignment: .top) {
+                if cameraDragStart != nil {
+                    let size = session.settings.camera.rect(in: session.cameraContentRect.size).size
+                    Text(verbatim: "\(Int(size.width.rounded())) × \(Int(size.height.rounded())) px")
+                        .font(Theme.Font.dataSmall).foregroundStyle(.white)
+                        .padding(.horizontal, Theme.Space.s).padding(.vertical, Theme.Space.xs)
+                        .background(.black.opacity(0.8), in: .capsule)
+                        .fixedSize().offset(y: rect.minY - fitted.minY >= 32 ? -28 : rect.height + 4).allowsHitTesting(false)
+                        .accessibilityLabel(Text("Camera size"))
+                }
+            }
             .position(x: rect.midX, y: rect.midY)
             .accessibilityLabel(Text("Camera position"))
             .accessibilityHint(Text("Use the inspector to adjust position with the keyboard."))

@@ -47,10 +47,11 @@ struct StudioCompositorTests {
         let key = SCStreamFrameInfo.contentRect.rawValue as NSString
         let rect = CGRect(x: 0, y: 0, width: 96, height: 60).dictionaryRepresentation
         CFDictionarySetValue(dictionary, Unmanaged.passUnretained(key).toOpaque(), Unmanaged.passUnretained(rect).toOpaque())
-        let image = try #require(await StudioIdlePreviewRenderer().render(.init(sample: sample), camera: nil, options: .init(),
-                                                                         layers: .empty, fitsWindow: true))
-        #expect(image.width == 160 && image.height == 90)
+        let frame = try #require(StudioIdlePreviewRenderer().render(.init(sample: sample),
+            configuration: .init(cameraSource: nil, cameraOptions: .init(), layers: .empty, fitsWindow: true)))
+        #expect(CVPixelBufferGetWidth(frame.value) == 160 && CVPixelBufferGetHeight(frame.value) == 90)
         let fit = try #require(StreamWriter.canvasFit(of: sample))
+        #expect(frame.cameraContentRect == fit.fitted)
         #expect(fit.canvas == CGSize(width: 160, height: 90))
         #expect(fit.content.size == CGSize(width: 96, height: 60))
     }
@@ -58,7 +59,7 @@ struct StudioCompositorTests {
     func stageBeforeWriter() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("camcord-stage-pending-\(UUID()).mov")
         defer { try? FileManager.default.removeItem(at: url) }
-        let engine = RecordingEngine()
+        let engine = RecordingEngine(diagnostics: { _ in })
         let frames = OSAllocatedUnfairLock(initialState: 0)
         engine.setStageSink { _ in frames.withLock { $0 += 1 } }
         let writer = try StreamWriter(outputURL: url, container: .mov, codec: .h264, bitrateMbps: 1,

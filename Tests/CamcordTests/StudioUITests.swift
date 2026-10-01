@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Foundation
 import Testing
 import SwiftUI
@@ -155,6 +156,124 @@ struct StudioUITests {
         #expect(abs(resizedRect.height - original.height - 10.125) < 0.000001)
     }
 
+    @Test("all camera resize grips preserve the opposite content corner", arguments: CameraCorner.allCases)
+    func allCameraCorners(_ corner: CameraCorner) {
+        let canvas = CGSize(width: 1920, height: 1080)
+        let content = CGRect(x: 420, y: 0, width: 1080, height: 1080)
+        let fitted = CGRect(x: 12, y: 88, width: 640, height: 360)
+        let start = CameraOptions(enabled: true, widthFraction: 0.20, position: CameraPosition(x: 0.5, y: 0.5))
+        let original = StudioStageGeometry.cameraRect(start, canvas: canvas, contentRect: content, fitted: fitted)
+        let right = corner == .topRight || corner == .bottomRight
+        let top = corner == .topLeft || corner == .topRight
+        let next = StudioStageGeometry.resizedCamera(start,
+            translation: CGSize(width: right ? 18 : -18, height: top ? -10.125 : 10.125),
+            corner: corner, canvas: canvas, contentRect: content, fitted: fitted)
+        let resized = StudioStageGeometry.cameraRect(next, canvas: canvas, contentRect: content, fitted: fitted)
+        #expect(abs(resized.width - original.width - 18) < 0.000001)
+        #expect(abs(resized.height - original.height - 10.125) < 0.000001)
+        #expect(abs((right ? resized.minX : resized.maxX) - (right ? original.minX : original.maxX)) < 0.000001)
+        #expect(abs((top ? resized.maxY : resized.minY) - (top ? original.maxY : original.minY)) < 0.000001)
+        let encoded = next.rect(in: content.size)
+        #expect(abs(encoded.width - resized.width * 3) < 0.000001)
+        #expect(abs(encoded.height - resized.height * 3) < 0.000001)
+    }
+
+    @Test("camera movement attracts each edge independently in stage points", arguments: CameraCorner.allCases)
+    func edgeMagnets(_ corner: CameraCorner) {
+        let canvas = CGSize(width: 1920, height: 1080)
+        let content = CGRect(x: 656.25, y: 0, width: 607.5, height: 1080)
+        let fitted = CGRect(x: 12, y: 88, width: 640, height: 360)
+        let start = CameraOptions(enabled: true, widthFraction: 0.20, position: CameraPosition(x: 0.5, y: 0.5))
+        let original = start.rect(in: content.size)
+        let margin = CameraOptions.margin(in: content.size)
+        let right = corner == .topRight || corner == .bottomRight
+        let top = corner == .topLeft || corner == .topRight
+        // Five stage points from one edge, with the other axis left at center.
+        let targetX = right ? content.width - margin - original.width - 15 : margin + 15
+        let horizontal = StudioStageGeometry.movedCamera(start,
+            translation: CGSize(width: (targetX - original.minX) / 3, height: 0),
+            canvas: canvas, contentRect: content, fitted: fitted)
+        #expect(horizontal.position?.x == (right ? 1 : 0))
+        #expect(abs((horizontal.position?.y ?? 0) - 0.5) < 0.000001)
+        let targetY = top ? content.height - margin - original.height - 15 : margin + 15
+        let vertical = StudioStageGeometry.movedCamera(start,
+            translation: CGSize(width: 0, height: -(targetY - original.minY) / 3),
+            canvas: canvas, contentRect: content, fitted: fitted)
+        #expect(vertical.position?.y == (top ? 1 : 0))
+        #expect(abs((vertical.position?.x ?? 0) - 0.5) < 0.000001)
+        let outside = StudioStageGeometry.edgeMagnet(original.offsetBy(dx: 20, dy: 20), in: content.size, distance: 24)
+        #expect(outside == original.offsetBy(dx: 20, dy: 20))
+    }
+
+    @MainActor @Test("native host attaches before a frame, changes only its viewport and detaches its own lease")
+    func nativeHostLease() throws {
+        let session = StudioHostSessionSpy()
+        let host = StudioNativePreviewHost()
+        host.configure(session: session)
+        #expect(session.attachments.isEmpty)
+        host.frame = CGRect(x: 0, y: 0, width: 301, height: 169)
+        host.layout()
+        let attachment = try #require(session.attachments.first)
+        #expect(attachment.layer === host.displayLayer)
+        #expect(host.displayLayer.superlayer === host.layer)
+        let initialBacking = host.convertToBacking(host.bounds).size
+        let initialPixels = CGSize(width: (initialBacking.width / 2).rounded(.down) * 2,
+                                   height: (initialBacking.height / 2).rounded(.down) * 2)
+        #expect(attachment.viewport.pixelSize == initialPixels)
+        host.configure(session: session)
+        host.layout()
+        #expect(session.attachments.count == 1 && session.updates.isEmpty)
+        host.frame.size = CGSize(width: 401, height: 225)
+        host.layout()
+        #expect(session.updates.count == 1)
+        #expect(session.updates.first?.owner == attachment.owner)
+        let resizedBacking = host.convertToBacking(host.bounds).size
+        let resizedPixels = CGSize(width: (resizedBacking.width / 2).rounded(.down) * 2,
+                                   height: (resizedBacking.height / 2).rounded(.down) * 2)
+        #expect(session.updates.first?.viewport.pixelSize == resizedPixels)
+        host.detachSession()
+        host.layout() // A delayed layout must not publish to a retired session.
+        #expect(session.detachments == [attachment.owner])
+        #expect(session.updates.count == 1)
+        #expect(host.displayLayer.superlayer === host.layer)
+    }
+
+    @MainActor @Test("two Studio hosts cannot detach or update the other host, and replacement retires the old session")
+    func nativeHostIsolation() throws {
+        let session = StudioHostSessionSpy(), replacement = StudioHostSessionSpy()
+        let first = StudioNativePreviewHost(), second = StudioNativePreviewHost()
+        for host in [first, second] {
+            host.frame = CGRect(x: 0, y: 0, width: 320, height: 180)
+            host.configure(session: session)
+        }
+        #expect(session.attachments.count == 2)
+        let firstOwner = try #require(session.attachments.first?.owner)
+        let secondOwner = try #require(session.attachments.last?.owner)
+        #expect(firstOwner != secondOwner)
+        first.detachSession()
+        second.frame.size.width = 640
+        second.layout()
+        #expect(session.detachments == [firstOwner])
+        #expect(session.updates.last?.owner == secondOwner)
+        second.configure(session: replacement)
+        #expect(session.detachments == [firstOwner, secondOwner])
+        #expect(replacement.attachments.count == 1)
+        #expect(replacement.attachments.first?.layer === second.displayLayer)
+        second.layout()
+        #expect(session.updates.count == 1)
+        #expect(replacement.attachments.count == 1)
+        second.detachSession()
+    }
+
+    @MainActor @Test("native viewport uses even backing pixels and the current display refresh class")
+    func nativeViewport() {
+        #expect(StudioNativePreviewHost.viewport(backingSize: CGSize(width: 601, height: 339), maximumFramesPerSecond: 120)
+            == StudioPreviewViewport(pixelSize: CGSize(width: 600, height: 338), refreshRate: 120))
+        #expect(StudioNativePreviewHost.viewport(backingSize: CGSize(width: 300, height: 168), maximumFramesPerSecond: 60)?.refreshRate == 60)
+        #expect(StudioNativePreviewHost.viewport(backingSize: .zero, maximumFramesPerSecond: 120) == nil)
+        #expect(StudioNativePreviewHost.viewport(backingSize: CGSize(width: CGFloat.infinity, height: 100), maximumFramesPerSecond: 120) == nil)
+    }
+
     @MainActor @Test("the coordinator is claimed before validation, and a newer capture prevents clipboard publication")
     func clipboardEpochWins() async {
         let validator = HeldStudioFileValidation()
@@ -269,4 +388,19 @@ private actor HeldStudioFileValidation {
     func release(_ url: URL) {
         pending.removeValue(forKey: url)?.resume(returning: .init(url: url, thumbnail: nil, dimensions: nil, duration: nil, byteCount: nil))
     }
+}
+
+@MainActor private final class StudioHostSessionSpy: StudioPreviewHostSession {
+    struct Attachment { let owner: UUID; let viewport: StudioPreviewViewport; let layer: AVSampleBufferDisplayLayer }
+    struct Update { let owner: UUID; let viewport: StudioPreviewViewport }
+    var attachments: [Attachment] = []
+    var updates: [Update] = []
+    var detachments: [UUID] = []
+    func attachPreviewHost(_ layer: AVSampleBufferDisplayLayer, viewport: StudioPreviewViewport) -> UUID {
+        let owner = UUID()
+        attachments.append(Attachment(owner: owner, viewport: viewport, layer: layer))
+        return owner
+    }
+    func updatePreviewViewport(_ viewport: StudioPreviewViewport, owner: UUID) { updates.append(Update(owner: owner, viewport: viewport)) }
+    func detachPreviewHost(owner: UUID) { detachments.append(owner) }
 }
