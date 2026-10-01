@@ -309,6 +309,29 @@ extension Theme {
         static let tileOffsetY: CGFloat = -6
     }
 
+    /// Studio geometry from the Graphite II source/inspector CSS.
+    enum Studio {
+        static let inspectorWidth: CGFloat = 312
+        static let sideInset: CGFloat = 20
+        static let sectionSpacing: CGFloat = 18
+        static let mainSpacing: CGFloat = 14
+        static let sourceWidth: CGFloat = 124
+        static let sourceHeight: CGFloat = 77.5
+        static let sourceCaptionGap: CGFloat = 5
+        static let sourceGap: CGFloat = 10
+        static let channelIcon: CGFloat = 28
+        static let decibelWidth: CGFloat = 56
+        static let meterHeight: CGFloat = 6
+        static let meterSegmentWidth: CGFloat = 11
+        static let meterSegmentGap: CGFloat = 1
+        static let gainHeight: CGFloat = 14
+        static let gainTrack: CGFloat = 2
+        static let gainKnob: CGFloat = 12
+        static let popupHeight: CGFloat = 26
+        static let primaryHeight: CGFloat = 44
+        static let placeholderSymbol = SwiftUI.Font.system(size: 34, weight: .light)
+    }
+
     /// Editor chrome follows Graphite's 32-point keys and 4/8/12/16 spacing.
     enum Editor {
         static let toolWidth: CGFloat = 30

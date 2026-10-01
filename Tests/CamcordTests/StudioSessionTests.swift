@@ -8,6 +8,90 @@ import os
 
 @MainActor @Suite("Studio session intent and shared settings")
 struct StudioSessionTests {
+    @Test("enabled authorized idle meters start without prompting, hide/disable retire only Studio and stolen leases stay retired")
+    func automaticMicrophoneLifecycle() async throws {
+        let defaults = try isolatedDefaults(), coordinator = CaptureCoordinator()
+        var settings = RecordingSettings(); settings.microphone = true; settings.save(to: defaults)
+        let controller = RecordingController(coordinator: coordinator, defaults: defaults)
+        var prompts = 0, probes: [Probe] = []
+        let signal = AudioLevels(rmsDBFS: -18, peakDBFS: -6, limited: false)
+        let microphone = MicrophoneMonitor(operations: .init(authorize: { prompts += 1; return true }, makeProbe: {
+            let probe = Probe(levels: signal); probes.append(probe); return probe
+        }, isAuthorized: { true }))
+        let session = StudioSession(defaults: defaults, controller: controller, recordingState: .init(), coordinator: coordinator,
+                                    microphoneMonitor: microphone,
+                                    operations: .init(screenCaptureAuthorized: { false }, content: { _ in throw CancellationError() }))
+        await Task.yield()
+        #expect(probes.isEmpty && prompts == 0)
+        session.setVisibility(moduleVisible: true, windowAllowsPreview: true, captureTransition: false)
+        try await wait { session.microphoneLevels == signal }
+        #expect(probes.count == 1 && prompts == 0)
+        let foreign = UUID()
+        await microphone.start(owner: foreign, deviceID: "foreign", gainDB: 0)
+        try await wait { !session.microphoneTestRequested }
+        await microphone.release(owner: foreign)
+        for _ in 0..<20 { await Task.yield() }
+        #expect(probes.count == 2 && !microphone.isRunning && session.microphoneLevels == nil)
+        session.setVisibility(moduleVisible: false, windowAllowsPreview: true, captureTransition: false)
+        session.setVisibility(moduleVisible: true, windowAllowsPreview: true, captureTransition: false)
+        try await wait { session.ownsMicrophoneTest && probes.count == 3 }
+        #expect(prompts == 1)
+        session.updateSettings { $0.microphone = false }
+        try await wait { !microphone.isRunning && probes[2].stops == 1 }
+        #expect(probes[2].stops == 1)
+        await session.releaseVisibleResources()
+    }
+
+    @Test("an enabled camera uses the passive permission mode and refuses incompatible visible owners")
+    func passiveCameraLifecycle() async throws {
+        let defaults = try isolatedDefaults(), coordinator = CaptureCoordinator()
+        var settings = RecordingSettings(); settings.camera.enabled = true; settings.camera.deviceID = "studio"; settings.save(to: defaults)
+        let controller = RecordingController(coordinator: coordinator, defaults: defaults)
+        var permissions: [Bool] = [], starts = 0, stops = 0
+        let monitor = CameraPreviewMonitor(operations: .init(authorize: { permission in permissions.append(permission); return true },
+            start: { _, _, _ in starts += 1 }, waitForFirstFrame: { _ in }, stop: { _ in stops += 1 }))
+        let session = StudioSession(defaults: defaults, controller: controller, recordingState: .init(), coordinator: coordinator,
+                                    cameraMonitor: monitor,
+                                    operations: .init(screenCaptureAuthorized: { false }, content: { _ in throw CancellationError() },
+                                                      cameraAuthorized: { true }))
+        session.setVisibility(moduleVisible: true, windowAllowsPreview: true, captureTransition: false)
+        try await wait { session.cameraPreviewRequested && monitor.isRunning }
+        #expect(permissions == [false] && starts == 1)
+        session.setVisibility(moduleVisible: false, windowAllowsPreview: true, captureTransition: false)
+        try await wait { !monitor.isRunning }
+        monitor.setVisible(true, owner: "foreign")
+        await monitor.start(deviceID: "foreign", format: .auto, requestPermission: true)
+        session.setVisibility(moduleVisible: true, windowAllowsPreview: true, captureTransition: false)
+        for _ in 0..<20 { await Task.yield() }
+        #expect(!session.cameraPreviewRequested && starts == 2 && stops == 1)
+        #expect(permissions == [false, true] && monitor.isRunning)
+        await session.releaseVisibleResources()
+        #expect(monitor.isRunning && stops == 1)
+        monitor.setVisible(false, owner: "foreign")
+        await monitor.stopIfUnobserved()
+    }
+
+    @Test("manual Clear invalidates an in-flight refresh immediately and stale errors cannot restore its spinner")
+    func clearDuringRefresh() async throws {
+        let defaults = try isolatedDefaults(), coordinator = CaptureCoordinator()
+        let controller = RecordingController(coordinator: coordinator, defaults: defaults)
+        var pending: CheckedContinuation<SCShareableContent, any Error>?
+        let session = StudioSession(defaults: defaults, controller: controller, recordingState: .init(), coordinator: coordinator,
+                                    operations: .init(screenCaptureAuthorized: { true }, content: { _ in
+            try await withCheckedThrowingContinuation { pending = $0 }
+        }))
+        session.setVisibility(moduleVisible: true, windowAllowsPreview: true, captureTransition: false)
+        let refresh = Task { await session.refreshSources() }
+        try await wait { pending != nil }
+        #expect(session.isRefreshingSources)
+        session.clearSource()
+        #expect(!session.isRefreshingSources && session.selectedSource == nil)
+        pending?.resume(throwing: RegionProviderFailure())
+        await refresh.value
+        #expect(!session.isRefreshingSources && session.selectedSource == nil && session.issue == nil)
+        await session.releaseVisibleResources()
+    }
+
     enum RegionCompletion: CaseIterable, Sendable {
         case cancelledTask, cancellationError, supersededSource, currentFailure
     }
@@ -31,7 +115,7 @@ struct StudioSessionTests {
         var probes: [Probe] = []
         let microphone = MicrophoneMonitor(operations: .init(authorize: { true }, makeProbe: {
             let probe = Probe(levels: levels); probes.append(probe); return probe
-        }))
+        }, isAuthorized: { false }))
         let session = StudioSession(defaults: defaults, controller: controller, recordingState: .init(), coordinator: coordinator,
                                     microphoneMonitor: microphone)
         session.setVisibility(moduleVisible: true, windowAllowsPreview: true, captureTransition: false)
@@ -69,7 +153,7 @@ struct StudioSessionTests {
     func passiveSession() async throws {
         let defaults = try isolatedDefaults()
         var sourceCalls = 0, microphoneCalls = 0, cameraCalls = 0
-        let microphone = MicrophoneMonitor(operations: .init(authorize: { microphoneCalls += 1; return false }))
+        let microphone = MicrophoneMonitor(operations: .init(authorize: { microphoneCalls += 1; return false }, isAuthorized: { false }))
         let camera = CameraPreviewMonitor(operations: .init(authorize: { _ in cameraCalls += 1; return false }))
         let coordinator = CaptureCoordinator()
         let controller = RecordingController(coordinator: coordinator, defaults: defaults)
@@ -117,10 +201,11 @@ struct StudioSessionTests {
         let defaults = try isolatedDefaults(), coordinator = CaptureCoordinator()
         let controller = RecordingController(coordinator: coordinator, defaults: defaults)
         var cameraCalls = 0, microphoneCalls = 0
-        let microphone = MicrophoneMonitor(operations: .init(authorize: { microphoneCalls += 1; return false }))
+        let microphone = MicrophoneMonitor(operations: .init(authorize: { microphoneCalls += 1; return false }, isAuthorized: { false }))
         let camera = CameraPreviewMonitor(operations: .init(authorize: { _ in cameraCalls += 1; return false }))
         let session = StudioSession(defaults: defaults, controller: controller, recordingState: .init(), coordinator: coordinator,
-                                    microphoneMonitor: microphone, cameraMonitor: camera)
+                                    microphoneMonitor: microphone, cameraMonitor: camera,
+                                    operations: .init(content: { _ in throw CancellationError() }, cameraAuthorized: { false }))
         session.setVisibility(moduleVisible: true, windowAllowsPreview: true, captureTransition: false)
         var changed = RecordingSettings.load(from: defaults)
         changed.microphoneDeviceID = "ExternalInput"
@@ -149,7 +234,7 @@ struct StudioSessionTests {
         let controller = RecordingController(coordinator: coordinator, defaults: defaults)
         var sourceCalls = 0, cameraCalls = 0, microphoneCalls = 0
         let camera = CameraPreviewMonitor(operations: .init(authorize: { _ in cameraCalls += 1; return false }))
-        let microphone = MicrophoneMonitor(operations: .init(authorize: { microphoneCalls += 1; return false }))
+        let microphone = MicrophoneMonitor(operations: .init(authorize: { microphoneCalls += 1; return false }, isAuthorized: { false }))
         let session = StudioSession(defaults: defaults, controller: controller, recordingState: .init(), coordinator: coordinator,
                                     microphoneMonitor: microphone, cameraMonitor: camera,
                                     operations: .init(screenCaptureAuthorized: { true }, content: { _ in

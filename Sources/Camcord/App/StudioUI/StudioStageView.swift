@@ -21,7 +21,7 @@ struct StudioStageView: View {
                     if canEdit, let layer = selectedLayer, layer.isVisible {
                         layerOutline(layer, fitted: fitted)
                     }
-                    if canEdit, editCamera, session.settings.camera.enabled {
+                    if canEdit, editCamera, session.settings.camera.enabled, session.cameraMonitor.currentPreviewFrame() != nil {
                         cameraOutline(fitted: fitted)
                     }
                 } else {
@@ -36,7 +36,8 @@ struct StudioStageView: View {
                             }
                             .buttonStyle(.bordered)
                             .tint(.white)
-                            .disabled(session.stageImage == nil)
+                            .disabled(session.stageImage == nil || session.cameraMonitor.currentPreviewFrame() == nil)
+                            .help(Text("Camera preview is unavailable until a camera frame arrives."))
                         }
                         Spacer()
                     }
@@ -47,7 +48,7 @@ struct StudioStageView: View {
         .frame(minHeight: 140)
         .coordinateSpace(.named("studio-stage"))
         .clipShape(.rect(cornerRadius: Theme.Radius.box))
-        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.box).strokeBorder(Theme.Palette.hairlineStrong.color))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.box).strokeBorder(Theme.Palette.hairline.color))
         .onChange(of: session.layers.selectedID) { _, id in if id != nil { editCamera = false } }
     }
 
@@ -103,15 +104,15 @@ struct StudioStageView: View {
     private var placeholder: some View {
         VStack(spacing: Theme.Space.m) {
             if session.previewState == .starting { ProgressView().controlSize(.regular) }
-            else { Image(systemName: session.previewState == .permissionRequired ? "lock.shield" : "viewfinder").font(.system(size: 34, weight: .light)) }
+            else { Image(systemName: session.previewState == .permissionRequired ? "lock.shield" : "viewfinder").font(Theme.Studio.placeholderSymbol) }
             Text(placeholderTitle).font(Theme.Font.bodyStrong)
             Text(placeholderDetail).font(Theme.Font.caption).multilineTextAlignment(.center).frame(maxWidth: 280)
             if session.previewState == .permissionRequired || session.previewState == .unavailable {
                 Button("Retry preview") { Task { await session.retryPreview() } }.buttonStyle(.bordered)
             }
         }
-        .foregroundStyle(.white.opacity(0.85))
-        .padding(24)
+        .foregroundStyle(Theme.Palette.onRecord.color)
+        .padding(Theme.Space.xl)
     }
     private var placeholderTitle: LocalizedStringResource {
         switch session.previewState {

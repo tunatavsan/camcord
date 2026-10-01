@@ -64,7 +64,8 @@ private struct ShellConfiguration {
             ? CGSize(width: 980, height: 640) : CGSize(width: 1180, height: 772)
         appearance = environment["CAMCORD_SHELL_APPEARANCE"] == "light" ? .aqua : .darkAqua
         module = environment["CAMCORD_SHELL_MODULE"] == "edit" ? .edit
-            : environment["CAMCORD_SHELL_MODULE"] == "settings" ? .settings : .library
+            : environment["CAMCORD_SHELL_MODULE"] == "settings" ? .settings
+            : environment["CAMCORD_SHELL_MODULE"] == "studio" ? .studio : .library
         editorState = environment["CAMCORD_EDITOR_STATE"] ?? "loaded"
         editorSampleSheet = environment["CAMCORD_EDITOR_SAMPLE_SHEET"] == "1"
         emptyLibrary = environment["CAMCORD_SHELL_LIBRARY"] == "empty" || module == .edit && editorState == "empty"
@@ -282,6 +283,12 @@ private final class ShellFixture {
             "reduceMotion": NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
             "appActive": NSApp.isActive, "module": controller.model.selection.rawValue,
             "sidebarVisible": controller.model.sidebarVisible,
+            "studioWindowVisible": window.isVisible && !window.isMiniaturized,
+            "studioWindowOccluded": !window.occlusionState.contains(.visible),
+            "studioPreviewState": String(describing: services.studioSession.previewState),
+            "studioSourceCount": services.studioSession.sources.count,
+            "studioThumbnailCount": services.studioSession.sourceThumbnails.images.count,
+            "studioHasStageFrame": services.studioSession.stageImage != nil,
             "settingsGroup": controller.model.settingsGroup.rawValue,
             "captureCount": services.library.items.count,
             "knownBytes": MainWindowLayout.totalKnownBytes(services.library.items.map(\.byteSize)),

@@ -5,6 +5,46 @@ import os
 
 @MainActor @Suite("Microphone probe owners")
 struct MicrophoneOwnershipTests {
+    @Test("passive rehearsal never asks permission, cannot steal pending/active owners, and respects recording locks")
+    func passiveAuthorizationAndOwnership() async {
+        var permissions = 0, made = 0, authorized = false
+        let monitor = MicrophoneMonitor(operations: .init(authorize: { permissions += 1; return true },
+            makeProbe: { made += 1; return Probe() }, isAuthorized: { authorized }))
+        let studio = UUID(), foreign = UUID()
+        await monitor.start(owner: studio, deviceID: nil, gainDB: 0, requestPermission: false)
+        #expect(permissions == 0 && made == 0 && !monitor.isRunning)
+        await monitor.release(owner: studio)
+        authorized = true
+        await monitor.start(owner: studio, deviceID: nil, gainDB: 0, requestPermission: false)
+        #expect(permissions == 0 && made == 1 && monitor.isRunning)
+        await monitor.start(owner: foreign, deviceID: "foreign", gainDB: 0)
+        #expect(permissions == 1 && made == 2 && monitor.owns(foreign))
+        await monitor.start(owner: studio, deviceID: nil, gainDB: 0, requestPermission: false)
+        await monitor.release(owner: studio)
+        #expect(permissions == 1 && made == 2 && monitor.owns(foreign) && monitor.isRunning)
+        await monitor.prepareForRecording()
+        await monitor.start(owner: studio, deviceID: nil, gainDB: 0, requestPermission: false)
+        #expect(permissions == 1 && made == 2 && !monitor.owns(studio))
+    }
+
+    @Test("passive intent cannot supersede a foreign permission request before it completes")
+    func passiveRefusesPendingAuthorization() async {
+        var continuation: CheckedContinuation<Bool, Never>?
+        var probes = 0
+        let monitor = MicrophoneMonitor(operations: .init(authorize: {
+            await withCheckedContinuation { continuation = $0 }
+        }, makeProbe: { probes += 1; return Probe() }, isAuthorized: { true }))
+        let foreign = UUID(), studio = UUID()
+        let request = Task { await monitor.start(owner: foreign, deviceID: nil, gainDB: 0) }
+        while continuation == nil { await Task.yield() }
+        await monitor.start(owner: studio, deviceID: nil, gainDB: 0, requestPermission: false)
+        #expect(monitor.owns(foreign) && probes == 0)
+        continuation?.resume(returning: true)
+        await request.value
+        #expect(monitor.owns(foreign) && probes == 1)
+        await monitor.release(owner: foreign)
+    }
+
     private final class Probe: MicrophoneProbe, @unchecked Sendable {
         private let state = OSAllocatedUnfairLock(initialState: (stopped: 0, gain: 0.0))
         private let startBlock: @MainActor () async -> Void

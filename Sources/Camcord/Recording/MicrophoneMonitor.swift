@@ -29,6 +29,7 @@ final class MicrophoneMonitor: ObservableObject {
             }
         }
         var makeProbe: () -> any MicrophoneProbe = { MicrophoneProbeCapture() }
+        var isAuthorized: () -> Bool = { AVCaptureDevice.authorizationStatus(for: .audio) == .authorized }
     }
     @Published private(set) var isRunning = false
     @Published private(set) var isStarting = false
@@ -42,6 +43,7 @@ final class MicrophoneMonitor: ObservableObject {
         let owner: UUID
         var deviceID: String?
         var gainDB: Double
+        var requestPermission: Bool
     }
     private let operations: Operations
     private let legacyOwner = UUID()
@@ -56,10 +58,15 @@ final class MicrophoneMonitor: ObservableObject {
     /// Older registrations may remain available after the newest owner is released.
     func owns(_ owner: UUID) -> Bool { requests.last?.owner == owner && !recordingLocked }
 
-    func start(owner: UUID, deviceID: String?, gainDB: Double) async {
+    func canStartPassively(owner: UUID) -> Bool {
+        !recordingLocked && (requests.last == nil || requests.last?.owner == owner)
+    }
+
+    func start(owner: UUID, deviceID: String?, gainDB: Double, requestPermission: Bool = true) async {
         guard !recordingLocked, !Task.isCancelled else { return }
+        guard requestPermission || canStartPassively(owner: owner) else { return }
         requests.removeAll { $0.owner == owner }
-        let request = Request(owner: owner, deviceID: deviceID, gainDB: Self.gain(gainDB))
+        let request = Request(owner: owner, deviceID: deviceID, gainDB: Self.gain(gainDB), requestPermission: requestPermission)
         requests.append(request)
         await withTaskCancellationHandler {
             await reconcile()
@@ -118,7 +125,9 @@ final class MicrophoneMonitor: ObservableObject {
         if let retiring { await retiring.stop() }
         guard generation == token, !Task.isCancelled else { return }
         guard let desired, !recordingLocked, owns(desired.owner) else { isStarting = false; return }
-        let authorized = await operations.authorize()
+        let authorized: Bool
+        if desired.requestPermission { authorized = await operations.authorize() }
+        else { authorized = operations.isAuthorized() }
         guard generation == token, !Task.isCancelled, !recordingLocked, owns(desired.owner) else { return }
         guard authorized else {
             isStarting = false

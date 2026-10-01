@@ -140,3 +140,27 @@ struct StudioVisibility: Equatable, Sendable {
     var captureTransition = false
     var allowsPreview: Bool { moduleVisible && windowAllowsPreview && !captureTransition }
 }
+
+/// Source defaults never override explicit selection, Clear, or a vanished manual source.
+struct StudioDefaultSourcePolicy: Equatable, Sendable {
+    private(set) var eligible = true
+    private(set) var automaticID: StudioSourceChoice.ID?
+
+    mutating func manualIntent() { eligible = false; automaticID = nil }
+
+    mutating func choose(from choices: [StudioSourceChoice], mainDisplayID: UInt32) -> StudioSourceChoice? {
+        guard eligible else { return nil }
+        let displays = choices.filter { if case .display = $0.id { true } else { false } }
+        guard let selected = displays.first(where: { $0.id == .display(mainDisplayID) }) ?? displays.first else { return nil }
+        eligible = false
+        automaticID = selected.id
+        return selected
+    }
+
+    mutating func sourceDisappeared(_ id: StudioSourceChoice.ID, idle: Bool) -> Bool {
+        guard idle, automaticID == id else { return false }
+        eligible = true
+        automaticID = nil
+        return true
+    }
+}

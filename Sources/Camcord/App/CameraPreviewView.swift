@@ -227,6 +227,12 @@ final class CameraPreviewMonitor: ObservableObject {
     /// its claim through the fade-out, so the device outlives the last visible frame.
     var isObserved: Bool { visible }
 
+    /// Studio may join a compatible rehearsal, but cannot replace another visible owner's camera.
+    func canObserve(options: CameraOptions, owner: String) -> Bool {
+        visibleOwners.subtracting([owner]).isEmpty
+            || Self.canHandOff(running: isRunning, deviceID: ownedDeviceID, format: ownedFormat, to: options)
+    }
+
     func stopIfUnobserved() async {
         if visibleOwners.isEmpty { await stop() }
     }

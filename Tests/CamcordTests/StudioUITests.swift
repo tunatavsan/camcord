@@ -1,10 +1,39 @@
 import AppKit
 import Foundation
 import Testing
+import SwiftUI
 @testable import Camcord
 
 @Suite("Studio presentation and completion actions")
 struct StudioUITests {
+    @MainActor @Test("the slim slider keeps native continuous input, rounded binding and disabled state")
+    func continuousSlider() throws {
+        var gain = 0.0
+        let binding = Binding(get: { gain }, set: { gain = min(24, max(-24, $0.rounded())) })
+        for disabled in [false, true] {
+            let host = NSHostingView(rootView: CamcordSlider(value: binding, range: -24...24)
+                .frame(width: 200, height: Theme.Studio.gainHeight).disabled(disabled))
+            host.frame = CGRect(x: 0, y: 0, width: 200, height: Theme.Studio.gainHeight)
+            host.layoutSubtreeIfNeeded()
+            func sliders(_ view: NSView) -> [NSSlider] {
+                (view as? NSSlider).map { [$0] } ?? view.subviews.flatMap(sliders)
+            }
+            let slider = try #require(sliders(host).first)
+            #expect(slider.isEnabled == !disabled)
+            #expect(slider.isContinuous)
+            #expect(slider.numberOfTickMarks == 0)
+            #expect(!slider.allowsTickMarkValuesOnly)
+            #expect(slider.accessibilityRole() == .slider)
+            if !disabled {
+                let target = try #require(slider.target as? NSObject)
+                let action = try #require(slider.action)
+                slider.doubleValue = 7.49
+                _ = target.perform(action, with: slider)
+                #expect(gain == 7)
+            }
+        }
+    }
+
     @Test("occlusion, another module and a capture transition each close the visible gate")
     func visibleGate() {
         let visible = StudioViewGate(moduleVisible: true, windowAllowsPreview: true, captureTransition: false)

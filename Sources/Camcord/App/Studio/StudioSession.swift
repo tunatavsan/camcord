@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import Combine
 import Observation
@@ -10,6 +11,8 @@ final class StudioSession {
         var screenCaptureAuthorized: () -> Bool = { CGPreflightScreenCaptureAccess() }
         var content: (Bool) async throws -> SCShareableContent
         var makePreview: () -> any StudioPreviewCapture = { StudioScreenPreview() }
+        var mainDisplayID: () -> UInt32 = { CGMainDisplayID() }
+        var cameraAuthorized: () -> Bool = { AVCaptureDevice.authorizationStatus(for: .video) == .authorized }
         var uptime: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     }
 
@@ -17,6 +20,7 @@ final class StudioSession {
     let layers: StudioLayerDocument
     let microphoneMonitor: MicrophoneMonitor
     let cameraMonitor: CameraPreviewMonitor
+    let sourceThumbnails: StudioSourceThumbnails
     private(set) var settings: RecordingSettings
     private(set) var sources: [StudioSourceChoice] = []
     private(set) var selectedSource: StudioSourceChoice?
@@ -48,11 +52,13 @@ final class StudioSession {
     private var previewCapture: (any StudioPreviewCapture)? { previewOwner.capture as? any StudioPreviewCapture }
     private var previewGeneration: UUID { previewOwner.generation }
     @ObservationIgnored private var sourceGeneration = UUID()
+    @ObservationIgnored private var defaultSourcePolicy = StudioDefaultSourcePolicy()
     @ObservationIgnored private var stageOwner: UUID?
     @ObservationIgnored private var microphoneOwner = UUID()
     @ObservationIgnored private var cameraOwner = CameraPreviewMonitor.makeOwnerID("studio")
     @ObservationIgnored private var cameraIntentGeneration = UUID()
     @ObservationIgnored private var microphoneIntentGeneration = UUID()
+    @ObservationIgnored private var deviceSettingsGeneration = UUID()
     @ObservationIgnored private var poll: Task<Void, Never>?
     @ObservationIgnored private var stateObservation: AnyCancellable?
     @ObservationIgnored private var microphoneObservation: AnyCancellable?
@@ -70,7 +76,13 @@ final class StudioSession {
         self.layers = layers
         self.microphoneMonitor = microphoneMonitor
         self.cameraMonitor = cameraMonitor
-        self.operations = operations ?? Operations(content: { try await coordinator.contentCache.content(forceRefresh: $0) })
+        let configured = operations ?? Operations(content: { try await coordinator.contentCache.content(forceRefresh: $0) })
+        self.operations = configured
+        sourceThumbnails = StudioSourceThumbnails(operations: .init(batch: { choices, maximum in
+            guard configured.screenCaptureAuthorized(), !Task.isCancelled,
+                  let content = try? await configured.content(false), !Task.isCancelled else { return [:] }
+            return await StudioSourceThumbnails.capture(choices, content: content, maximum: maximum)
+        }))
         settings = RecordingSettings.load(from: defaults)
         let saved = defaults.object(forKey: Self.countdownKey) as? Int
         countdownSeconds = saved.flatMap { Self.countdownChoices.contains($0) ? $0 : nil } ?? 3
@@ -93,7 +105,11 @@ final class StudioSession {
             .sink { @Sendable [weak self] _, locked in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
-                    if locked || !self.microphoneMonitor.owns(self.microphoneOwner) { self.microphoneTestRequested = false }
+                    if locked || !self.microphoneMonitor.owns(self.microphoneOwner) {
+                        self.microphoneTestRequested = false
+                        // A superseded Studio lease must not restart when a foreign lease ends.
+                        await self.microphoneMonitor.release(owner: self.microphoneOwner)
+                    }
                 }
             }
         settingsObservation = NotificationCenter.default.publisher(for: RecordingSettings.didChangeNotification)
@@ -107,7 +123,7 @@ final class StudioSession {
     }
 
     var canStart: Bool {
-        selectedSource != nil && !controller.isBusy && visibility.allowsPreview
+        selectedSource != nil && issue != .sourceUnavailable && issue != .screenPermissionRequired && !controller.isBusy && visibility.allowsPreview
             && layers.isReady && !layers.isRasterizing && layers.issue == nil
     }
     var isBusy: Bool { controller.isBusy }
@@ -154,12 +170,22 @@ final class StudioSession {
                                    captureTransition: captureTransition)
         guard new != visibility else { return }
         visibility = new
+        deviceSettingsGeneration = UUID()
         if !new.allowsPreview {
             retireVisibleResources()
         } else {
             settings = RecordingSettings.load(from: defaults)
-            Task { [weak self] in await self?.reconcilePreview() }
+            sourceThumbnails.update(choices: thumbnailChoices, visible: true)
+            Task { [weak self] in
+                await self?.reconcileDevices()
+                await self?.reconcilePreview()
+            }
         }
+    }
+
+    var thumbnailChoices: [StudioSourceChoice] {
+        if let selectedSource, case .region = selectedSource.id { return sources + [selectedSource] }
+        return sources
     }
 
     func refreshSources() async {
@@ -167,6 +193,8 @@ final class StudioSession {
         let now = operations.uptime()
         guard now - lastSourceRefresh >= 1 else { return }
         guard operations.screenCaptureAuthorized() else {
+            resetPreview()
+            systemAudioLevels = nil
             issue = .screenPermissionRequired
             previewState = .permissionRequired
             return
@@ -181,14 +209,25 @@ final class StudioSession {
             guard !Task.isCancelled, sourceGeneration == token, visibility.allowsPreview else { return }
             sources = StudioSourceResolver.choices(in: content, settings: settings)
             issue = nil
-            if let selectedSource, case .region = selectedSource.id {} else if let selectedSource {
-                self.selectedSource = sources.first { $0.id == selectedSource.id }
-                if self.selectedSource == nil { resetPreview(); issue = .sourceUnavailable; previewState = .unavailable }
-                else if self.selectedSource != selectedSource, !controller.isBusy {
+            if let selectedSource, case .region = selectedSource.id {} else if let selectedSource, !controller.isBusy {
+                if let updated = sources.first(where: { $0.id == selectedSource.id }) {
+                    self.selectedSource = updated
+                    if updated != selectedSource { resetPreview() }
+                } else {
                     resetPreview()
-                    Task { [weak self] in await self?.reconcilePreview() }
+                    issue = .sourceUnavailable
+                    previewState = .unavailable
+                    if defaultSourcePolicy.sourceDisappeared(selectedSource.id, idle: true) { self.selectedSource = nil }
                 }
             }
+            if selectedSource == nil, !controller.isBusy,
+               let choice = defaultSourcePolicy.choose(from: sources, mainDisplayID: operations.mainDisplayID()) {
+                selectedSource = choice
+                issue = nil
+                resetPreview()
+            }
+            sourceThumbnails.update(choices: thumbnailChoices, visible: true)
+            await reconcilePreview()
         } catch {
             guard sourceGeneration == token, visibility.allowsPreview else { return }
             issue = .sourceListUnavailable
@@ -202,8 +241,11 @@ final class StudioSession {
               source.pixelSize.width.isFinite, source.pixelSize.height.isFinite,
               source.pixelSize.width >= 2, source.pixelSize.height >= 2 else { return }
         sourceGeneration = UUID()
+        isRefreshingSources = false
+        defaultSourcePolicy.manualIntent()
         selectedSource = source
         issue = nil
+        sourceThumbnails.update(choices: thumbnailChoices, visible: visibility.allowsPreview)
         resetPreview()
         Task { [weak self] in await self?.reconcilePreview() }
     }
@@ -212,6 +254,9 @@ final class StudioSession {
         guard !controller.isBusy, cgRect.origin.x.isFinite, cgRect.origin.y.isFinite,
               cgRect.size.width.isFinite, cgRect.size.height.isFinite,
               cgRect.size.width > 1, cgRect.size.height > 1 else { return }
+        sourceGeneration = UUID()
+        isRefreshingSources = false
+        defaultSourcePolicy.manualIntent()
         let token = sourceGeneration
         do {
             let content = try await operations.content(true)
@@ -234,7 +279,10 @@ final class StudioSession {
     func clearSource() {
         guard !controller.isBusy else { return }
         sourceGeneration = UUID()
+        isRefreshingSources = false
+        defaultSourcePolicy.manualIntent()
         selectedSource = nil
+        sourceThumbnails.update(choices: thumbnailChoices, visible: visibility.allowsPreview)
         resetPreview()
         previewState = visibility.allowsPreview ? .noSource : .inactive
     }
@@ -244,41 +292,50 @@ final class StudioSession {
         change(&current)
         current.camera = current.camera.resolved()
         current.save(to: defaults)
-        acceptSettings(current)
+        acceptSettings(current, requestPermission: true)
     }
 
-    private func acceptSettings(_ current: RecordingSettings) {
+    private func acceptSettings(_ current: RecordingSettings, requestPermission: Bool = false) {
         let before = settings
         guard current != before else { return }
         settings = current
         if microphoneMonitor.owns(microphoneOwner) {
             microphoneMonitor.updateGain(current.microphoneGainDB, owner: microphoneOwner)
         }
-        if before.microphoneDeviceID != current.microphoneDeviceID, microphoneTestRequested {
-            let owner = microphoneOwner, token = microphoneIntentGeneration
+        let micChanged = before.microphone != current.microphone || before.microphoneDeviceID != current.microphoneDeviceID
+        let cameraChanged = before.camera.enabled != current.camera.enabled
+            || before.camera.deviceID != current.camera.deviceID || before.camera.format != current.camera.format
+        if micChanged || cameraChanged {
+            deviceSettingsGeneration = UUID()
+            let deviceToken = deviceSettingsGeneration
+            let requestedMicrophone = current.microphone, requestedDevice = current.microphoneDeviceID
+            let requestedCamera = current.camera
             Task { [weak self] in
-                guard let self, self.microphoneOwner == owner, self.microphoneIntentGeneration == token,
-                      self.microphoneMonitor.owns(owner), self.microphoneTestRequested,
-                      self.visibility.allowsPreview else { return }
-                await self.setMicrophoneTestRequested(true)
+                guard let self, self.visibility.allowsPreview, self.deviceSettingsGeneration == deviceToken,
+                      self.settings.microphone == requestedMicrophone, self.settings.microphoneDeviceID == requestedDevice,
+                      self.settings.camera == requestedCamera else { return }
+                if micChanged { await self.setMicrophoneTestRequested(false) }
+                guard self.deviceSettingsGeneration == deviceToken, self.visibility.allowsPreview else { return }
+                if cameraChanged, self.cameraPreviewRequested {
+                    if self.cameraMonitor.canObserve(options: current.camera, owner: self.cameraOwner) {
+                        await self.cameraMonitor.cameraSettingsChanged(current.camera)
+                    } else { await self.setCameraPreviewRequested(false) }
+                }
+                guard self.deviceSettingsGeneration == deviceToken, self.visibility.allowsPreview else { return }
+                await self.reconcileDevices(requestMicrophonePermission: requestPermission && !before.microphone && current.microphone,
+                                            requestCameraPermission: requestPermission && !before.camera.enabled && current.camera.enabled)
             }
         }
-        if cameraPreviewRequested, before.camera != current.camera {
-            let token = cameraIntentGeneration
-            Task { [weak self] in
-                guard let self, self.cameraIntentGeneration == token, self.cameraPreviewRequested,
-                      self.visibility.allowsPreview, self.settings.camera == current.camera else { return }
-                await self.cameraMonitor.cameraSettingsChanged(current.camera)
-            }
-        }
-        if before.canvasAspect != current.canvasAspect || before.resolutionScale != current.resolutionScale {
+        if before.canvasAspect != current.canvasAspect || before.resolutionScale != current.resolutionScale
+            || before.systemAudio != current.systemAudio {
+            systemAudioLevels = nil
             resetPreview()
             Task { [weak self] in await self?.reconcilePreview() }
         }
         previewCapture?.updateGain(current.resolvedSystemAudioGainDB)
     }
 
-    func setCameraPreviewRequested(_ requested: Bool) async {
+    func setCameraPreviewRequested(_ requested: Bool, requestPermission: Bool = true) async {
         cameraIntentGeneration = UUID()
         let token = cameraIntentGeneration
         guard requested, visibility.allowsPreview, !controller.isBusy else {
@@ -287,14 +344,19 @@ final class StudioSession {
             await cameraMonitor.stopIfUnobserved()
             return
         }
+        guard cameraMonitor.canObserve(options: settings.camera, owner: cameraOwner) else {
+            cameraPreviewRequested = false
+            cameraMonitor.setVisible(false, owner: cameraOwner)
+            return
+        }
         cameraPreviewRequested = true
         cameraMonitor.setVisible(true, owner: cameraOwner)
-        await cameraMonitor.start(deviceID: settings.camera.deviceID, format: settings.camera.format, requestPermission: true)
+        await cameraMonitor.start(deviceID: settings.camera.deviceID, format: settings.camera.format, requestPermission: requestPermission)
         guard cameraIntentGeneration == token, cameraPreviewRequested, visibility.allowsPreview else { return }
         if !cameraMonitor.isRunning { cameraPreviewRequested = false; cameraMonitor.setVisible(false, owner: cameraOwner) }
     }
 
-    func setMicrophoneTestRequested(_ requested: Bool) async {
+    func setMicrophoneTestRequested(_ requested: Bool, requestPermission: Bool = true) async {
         microphoneIntentGeneration = UUID()
         let token = microphoneIntentGeneration
         let owner = microphoneOwner
@@ -303,10 +365,33 @@ final class StudioSession {
             await microphoneMonitor.release(owner: owner)
             return
         }
+        guard requestPermission || microphoneMonitor.canStartPassively(owner: owner) else { return }
         microphoneTestRequested = true
-        await microphoneMonitor.start(owner: owner, deviceID: settings.microphoneDeviceID, gainDB: settings.microphoneGainDB)
+        await microphoneMonitor.start(owner: owner, deviceID: settings.microphoneDeviceID, gainDB: settings.microphoneGainDB, requestPermission: requestPermission)
         guard microphoneIntentGeneration == token, microphoneOwner == owner, visibility.allowsPreview else { return }
         microphoneTestRequested = microphoneMonitor.owns(owner) && (microphoneMonitor.isRunning || microphoneMonitor.isStarting)
+    }
+
+    private func reconcileDevices(requestMicrophonePermission: Bool = false, requestCameraPermission: Bool = false) async {
+        guard visibility.allowsPreview, !controller.isBusy, recordingState.state == .idle,
+              !recordingState.isStarting, !recordingState.isFinishing else {
+            await setMicrophoneTestRequested(false)
+            await setCameraPreviewRequested(false)
+            return
+        }
+        let token = deviceSettingsGeneration
+        if settings.microphone {
+            if !microphoneMonitor.owns(microphoneOwner), microphoneMonitor.canStartPassively(owner: microphoneOwner) {
+                await setMicrophoneTestRequested(true, requestPermission: requestMicrophonePermission)
+            }
+        } else if microphoneTestRequested { await setMicrophoneTestRequested(false) }
+        guard deviceSettingsGeneration == token, visibility.allowsPreview, !controller.isBusy,
+              recordingState.state == .idle, !recordingState.isStarting, !recordingState.isFinishing else { return }
+        if settings.camera.enabled, requestCameraPermission || operations.cameraAuthorized() {
+            if !cameraPreviewRequested {
+                await setCameraPreviewRequested(true, requestPermission: requestCameraPermission)
+            }
+        } else if cameraPreviewRequested { await setCameraPreviewRequested(false) }
     }
 
     func setSystemAudioTestRequested(_ requested: Bool) async {
@@ -341,8 +426,10 @@ final class StudioSession {
     }
 
     private func retireVisibleResources() {
+        deviceSettingsGeneration = UUID()
         sourceGeneration = UUID()
         isRefreshingSources = false
+        sourceThumbnails.update(choices: thumbnailChoices, visible: false)
         cameraIntentGeneration = UUID()
         microphoneIntentGeneration = UUID()
         cameraPreviewRequested = false
@@ -380,6 +467,7 @@ final class StudioSession {
     }
 
     private func recordingStateChanged() async {
+        await reconcileDevices()
         if recordingState.isStarting || recordingState.isFinishing {
             resetPreview()
             return
@@ -419,7 +507,7 @@ final class StudioSession {
             selectedSource = StudioSourceChoice(id: choice.id, title: choice.title, frame: choice.frame, pixelSize: size)
             let capture = operations.makePreview()
             capture.updateGain(settings.resolvedSystemAudioGainDB)
-            let capturesAudio = systemAudioTestRequested
+            let capturesAudio = settings.systemAudio || systemAudioTestRequested
             let installed = try await previewOwner.install(capture, generation: token) {
                 try await capture.start(target: target, canvasSize: size, capturesAudio: capturesAudio)
             }
@@ -455,7 +543,7 @@ final class StudioSession {
                             self.frameCameraContentRect = Self.mappedCameraContentRect(content, bufferSize: bufferSize, canvasSize: size)
                         }
                     }
-                    if self.systemAudioTestRequested {
+                    if self.settings.systemAudio || self.systemAudioTestRequested {
                         self.systemAudioLevels = captureStatus.levels
                     }
                     do { try await Task.sleep(for: .milliseconds(84)) } catch { return }
