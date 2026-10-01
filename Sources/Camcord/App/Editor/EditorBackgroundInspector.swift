@@ -69,7 +69,18 @@ private struct EditorBackgroundPreset: View {
     }
     @ViewBuilder private var previewBackground: some View {
         switch preset {
-        case .none: Theme.Palette.window.color
+        case .none:
+            Canvas { context, size in
+                let cell: CGFloat = 8
+                context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Color(white: 0.90)))
+                var squares = Path()
+                for row in 0..<Int(ceil(size.height / cell)) {
+                    for column in 0..<Int(ceil(size.width / cell)) where (row + column).isMultiple(of: 2) {
+                        squares.addRect(CGRect(x: CGFloat(column) * cell, y: CGFloat(row) * cell, width: cell, height: cell))
+                    }
+                }
+                context.fill(squares, with: .color(Color(white: 0.72)))
+            }
         case .paper: Color(cgColor: color.cgColor)
         case .graphite: Color(cgColor: Theme.Editor.backgroundGraphite.cgColor)
         case .gradient: LinearGradient(colors: [Color(cgColor: color.cgColor), Color(cgColor: Theme.Editor.backgroundGradientEnd.cgColor)], startPoint: .topLeading, endPoint: .bottomTrailing)
