@@ -21,11 +21,11 @@ enum SettingsGroup: String, CaseIterable, Identifiable, Codable {
     var symbol: String {
         switch self {
         case .general: "gearshape"
-        case .screenshot: "photo"
+        case .screenshot: "viewfinder"
         case .recording: "record.circle"
         case .camera: "video"
         case .input: "keyboard"
-        case .library: "photo.stack"
+        case .library: "rectangle.stack"
         case .permissions: "lock.shield"
         }
     }

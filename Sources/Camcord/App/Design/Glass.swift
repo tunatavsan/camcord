@@ -154,8 +154,9 @@ private struct WindowBackdropModifier: ViewModifier {
                     }
                 }
             }
-            // Under the transparent titlebar and toolbar too: the backdrop is the window's.
-            .ignoresSafeArea()
+            // Detail frost reaches the transparent titlebar, while preserving the native
+            // split view's horizontal sidebar reservation. Other sidebar clients keep their edges.
+            .ignoresSafeArea(edges: backdrop == .content ? [.top, .bottom] : .all)
         }
     }
 }

@@ -26,10 +26,10 @@ struct InkNavigationList<ID: Hashable, Content: View>: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: Theme.Navigation.rowSpacing) {
                 content($focused)
             }
-            .padding(.horizontal, Theme.Space.s + 2)
+            .padding(.horizontal, Theme.Space.s)
             .padding(.vertical, Theme.Space.xs)
         }
         .scrollIndicators(.never)
@@ -59,11 +59,11 @@ struct InkNavigationHeader: View {
     let title: LocalizedStringResource
 
     var body: some View {
-        // ink2, not ink3: on the frosted sidebar ink3 measures 3.6:1 (NOTE-2 asks 4.5).
         Text(title)
-            .font(Theme.Font.captionStrong)
-            .foregroundStyle(Theme.Palette.ink2.color)
-            .padding(.horizontal, Theme.Space.s + 2)
+            .font(Theme.Font.sidebarSection)
+            .tracking(Theme.Font.headerTracking)
+            .foregroundStyle(Theme.Palette.ink3.color)
+            .padding(.horizontal, Theme.Navigation.rowInset)
             .padding(.top, Theme.Space.m)
             .padding(.bottom, Theme.Space.xs)
             .accessibilityAddTraits(.isHeader)
@@ -78,7 +78,6 @@ struct InkNavigationRow<ID: Hashable, Label: View>: View {
     @ViewBuilder var label: Label
 
     @State private var hovering = false
-    @Environment(\.controlActiveState) private var activeState
 
     private var isSelected: Bool { selection == id }
 
@@ -89,13 +88,13 @@ struct InkNavigationRow<ID: Hashable, Label: View>: View {
         } label: {
             label
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, Theme.Space.s + 2)
-                .frame(minHeight: 30)
+                .font(Theme.Font.row)
+                .padding(.horizontal, Theme.Navigation.rowInset)
+                .frame(minHeight: Theme.Navigation.rowHeight)
                 .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
         }
         .buttonStyle(.plain)
-        // Every title in ink, as in the owner's reference; the capsule marks the selection.
-        .foregroundStyle(Theme.Palette.ink.color)
+        .foregroundStyle(isSelected || hovering ? Theme.Palette.ink.color : Theme.Palette.ink2.color)
         .background {
             RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                 .fill(fill)
@@ -106,9 +105,8 @@ struct InkNavigationRow<ID: Hashable, Label: View>: View {
 
     private var fill: Color {
         if isSelected {
-            // The lighter capsule while the window is key; quieter in an inactive window, like
-            // the system sidebar's own inactive highlight.
-            return activeState == .inactive ? Theme.Palette.selection.color : Theme.Palette.selectionStrong.color
+            // Navigation remains identifiable while Camcord is behind the owner's work.
+            return Theme.Palette.selectionStrong.color
         }
         return hovering ? Theme.Palette.hover.color : .clear
     }

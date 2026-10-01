@@ -22,6 +22,14 @@ struct LibraryView: View {
     @State private var navigationID: String?
     @FocusState private var hasFocus: Bool
 
+    private var inspectorPresentation: Binding<Bool> {
+        Binding(get: { !store.items.isEmpty && store.showsInspector }, set: { presented in
+            // An automatic empty-state dismissal must preserve the user's inspector intent.
+            guard !store.items.isEmpty else { return }
+            store.showsInspector = presented
+        })
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.l) {
             heading
@@ -46,7 +54,7 @@ struct LibraryView: View {
         .onExitCommand { quickLookURL = nil; store.selection.removeAll() }
         .onMoveCommand { direction in moveSelection(direction) }
         .quickLookPreview($quickLookURL, in: store.selectedItems.map(\.url))
-        .inspector(isPresented: $store.showsInspector) { inspector.frame(minWidth: 260, idealWidth: 300, maxWidth: 360) }
+        .inspector(isPresented: inspectorPresentation) { inspector.frame(minWidth: 260, idealWidth: 300, maxWidth: 360) }
         .sheet(isPresented: Binding(get: { renameID != nil }, set: { if !$0 { renameID = nil } })) { renameSheet }
         .confirmationDialog("Move selected captures to Trash?", isPresented: $confirmsTrash, titleVisibility: .visible) {
             Button("Move to Trash", role: .destructive) {
@@ -87,7 +95,9 @@ struct LibraryView: View {
             }.help(Text(store.usesGrid ? "List view" : "Grid view"))
                 .accessibilityLabel(Text(store.usesGrid ? "List view" : "Grid view"))
             Button { store.showsInspector.toggle() } label: { Image(systemName: "sidebar.right") }
-                .help(Text("Show inspector")).accessibilityLabel(Text("Show inspector"))
+                .disabled(store.items.isEmpty)
+                .help(Text(store.items.isEmpty ? "Select a capture to see its details." : "Show inspector"))
+                .accessibilityLabel(Text("Show inspector"))
             Button { Task { await store.refresh() } } label: { Image(systemName: "arrow.clockwise") }
                 .help(Text("Refresh Library")).accessibilityLabel(Text("Refresh Library"))
         }.buttonStyle(.borderless)

@@ -173,7 +173,7 @@ extension Theme {
                                              light: C(0x0E0F11, alpha: 0.72))
         /// The frost dials of the window backdrops (Glass.swift `WindowBackdrop`): a tint over a
         /// behind-window system material. Lower alpha = more desktop through (NOTE-2).
-        static let backdropContent = ThemeColor("backdropContent", dark: C(0x16181B, alpha: 0.80),
+        static let backdropContent = ThemeColor("backdropContent", dark: C(0x16181B, alpha: 0.994),
                                                 light: C(0xE3E6EA, alpha: 0.78),
                                                 highContrastDark: C(0x0E0F11, alpha: 0.92),
                                                 highContrastLight: C(0xEEF0F2, alpha: 0.92))
@@ -209,6 +209,9 @@ extension Theme {
         static let bodyStrong = SwiftUI.Font.system(size: Size.body, weight: .semibold)
         static let row = SwiftUI.Font.system(size: Size.row)
         static let rowStrong = SwiftUI.Font.system(size: Size.row, weight: .semibold)
+        static let sidebarSymbol = SwiftUI.Font.system(size: Navigation.symbolSize, weight: .regular)
+        static let sidebarBrand = SwiftUI.Font.system(size: Size.row, weight: .semibold)
+        static let sidebarSection = SwiftUI.Font.system(size: Size.caption, weight: .medium)
         static let title = SwiftUI.Font.system(size: Size.title, weight: .semibold)
         static let display = SwiftUI.Font.system(size: Size.display, weight: .semibold)
         static let timecode = SwiftUI.Font.system(size: Size.display, weight: .light, design: .monospaced).monospacedDigit()
@@ -259,6 +262,29 @@ extension Theme {
         static let l: CGFloat = 16
         static let xl: CGFloat = 24
         static let xxl: CGFloat = 32
+    }
+
+    /// The inspected Graphite II window shell (`index.html` 138–158).
+    enum Navigation {
+        // CSS's 236-point boundary includes the native sidebar's measured 8-point outer inset.
+        // navigationSplitViewColumnWidth sizes the content, rather than that outer boundary.
+        static let sidebarBoundary: CGFloat = 236
+        static let nativeSidebarInset: CGFloat = 8
+        static let sidebarWidth = sidebarBoundary - nativeSidebarInset
+        static let rowHeight: CGFloat = 32
+        static let rowInset: CGFloat = 10
+        static let rowSpacing: CGFloat = 2
+        static let contentSpacing: CGFloat = 10
+        static let symbolSize: CGFloat = 13
+        static let symbolSlotSize: CGFloat = 18
+        static let brandSize: CGFloat = 18
+        static let brandSlotSize: CGFloat = 20
+        static let brandTopInset: CGFloat = 6
+        static let brandBottomInset: CGFloat = 12
+        static let footerSpacing: CGFloat = 6
+        static let footerDotSize: CGFloat = 6
+        static let badgeHorizontalInset: CGFloat = 5
+        static let badgeVerticalInset: CGFloat = 1
     }
 
     /// One concentric family (K2.4): an inner corner is its outer corner minus the inset

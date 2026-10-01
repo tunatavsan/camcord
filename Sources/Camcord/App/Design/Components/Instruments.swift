@@ -168,8 +168,13 @@ struct SidebarRow: View {
     var key: String?
 
     var body: some View {
-        HStack(spacing: Theme.Space.s) {
-            Label { Text(title) } icon: { Image(systemName: symbol) }
+        HStack(spacing: Theme.Navigation.contentSpacing) {
+            Image(systemName: symbol)
+                .symbolRenderingMode(.monochrome)
+                .font(Theme.Font.sidebarSymbol)
+                .frame(width: Theme.Navigation.symbolSlotSize)
+                .accessibilityHidden(true)
+            Text(title).font(Theme.Font.row)
             Spacer(minLength: Theme.Space.xs)
             if let tag {
                 Text(tag)
@@ -180,11 +185,44 @@ struct SidebarRow: View {
                     .overlay(Capsule().strokeBorder(Theme.Palette.hairlineStrong.color))
             }
             if let key {
-                Text(verbatim: key)
-                    .font(Theme.Font.dataSmall)
-                    .foregroundStyle(Theme.Palette.ink2.color)
+                SidebarShortcutBadge(key: key)
             }
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// Compact SF shortcut chips shared by every module row.
+private struct SidebarShortcutBadge: View {
+    let key: String
+
+    var body: some View {
+        Text(verbatim: key)
+            .font(Theme.Font.caption.weight(.medium))
+            .tracking(Theme.Font.headerTracking)
+            .foregroundStyle(Theme.Palette.ink2.color)
+            .padding(.horizontal, Theme.Navigation.badgeHorizontalInset)
+            .padding(.vertical, Theme.Navigation.badgeVerticalInset)
+            .background(Theme.Palette.selection.color,
+                        in: RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous))
+    }
+}
+
+/// Both sidebar lists keep the same brand alignment below the native titlebar safe area.
+struct SidebarBrandHeader: View {
+    var body: some View {
+        HStack(spacing: Theme.Space.s) {
+            ViewfinderMarkView(dot: .plain)
+                .frame(width: Theme.Navigation.brandSize, height: Theme.Navigation.brandSize)
+                .frame(width: Theme.Navigation.brandSlotSize, height: Theme.Navigation.brandSlotSize)
+            Text(verbatim: "Camcord").font(Theme.Font.sidebarBrand)
+        }
+        .foregroundStyle(Theme.Palette.ink.color)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, Theme.Space.s + Theme.Navigation.rowInset)
+        .padding(.top, Theme.Navigation.brandTopInset)
+        .padding(.bottom, Theme.Navigation.brandBottomInset)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
     }
 }

@@ -251,6 +251,36 @@ struct MainWindowTests {
         #expect(ModuleSelection.load(from: defaults) == .library)
     }
 
+    @Test("native split view normalizes public visibility values and shares View menu intent")
+    func sidebarVisibility() throws {
+        let defaults = try freshDefaults()
+        defer { defaults.removePersistentDomain(forName: Self.suiteName) }
+        let model = MainWindowModel(defaults: defaults)
+        #expect(model.sidebarColumnVisibility == .all)
+        model.sidebarColumnVisibility = .detailOnly
+        #expect(!model.sidebarVisible)
+        model.sidebarColumnVisibility = .automatic
+        #expect(model.sidebarVisible && model.sidebarColumnVisibility == .all)
+        model.sidebarVisible.toggle()
+        #expect(model.sidebarColumnVisibility == .detailOnly)
+        model.sidebarColumnVisibility = .all
+        #expect(model.sidebarColumnVisibility == .all)
+        model.sidebarColumnVisibility = .detailOnly
+        model.sidebarColumnVisibility = .doubleColumn
+        #expect(model.sidebarVisible)
+        model.select(.settings)
+        #expect(model.sidebarColumnVisibility == .all)
+        model.leaveSettings()
+        #expect(model.sidebarVisible && model.selection == .library)
+    }
+
+    @Test("sidebar Library facts saturate known byte sizes and ignore unknown negative sizes")
+    func sidebarLibraryBytes() {
+        #expect(MainWindowLayout.totalKnownBytes([Int64]()) == 0)
+        #expect(MainWindowLayout.totalKnownBytes([-1, 10, 20]) == 30)
+        #expect(MainWindowLayout.totalKnownBytes([Int64.max - 1, 5]) == .max)
+    }
+
     @Test("the window model persists its selection, refuses an unavailable module, and show(module:) moves it")
     func modelSelection() throws {
         _ = NSApplication.shared

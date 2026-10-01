@@ -13,7 +13,7 @@ import SwiftUI
 struct LibraryModule: CamcordModule {
     let id = ModuleID.library
     let title = LocalizedStringResource("Library", comment: "Main window module")
-    let symbol = "photo.stack"
+    let symbol = "rectangle.stack"
     let section = ModuleSection.capture
     let isAvailable = true
 
@@ -87,7 +87,7 @@ private struct HotkeyTile: View {
 struct StudioModule: CamcordModule {
     let id = ModuleID.studio
     let title = LocalizedStringResource("Studio", comment: "Main window module")
-    let symbol = "video.badge.waveform"
+    let symbol = "video"
     let section = ModuleSection.capture
     let isAvailable = true
 

@@ -18,6 +18,16 @@ final class MainWindowModel {
     /// The sidebar is shown (the toolbar button and ⌃⌘S hide it).
     var sidebarVisible = true
 
+    /// The native split view and View menu mutate the same visibility value.
+    var sidebarColumnVisibility: NavigationSplitViewVisibility {
+        get { sidebarVisible ? .all : .detailOnly }
+        set {
+            // In this SwiftUI runtime, .automatic compares equal to .doubleColumn.
+            // Both resolve to the shown two-column shell; only .detailOnly hides it.
+            sidebarVisible = newValue != .detailOnly
+        }
+    }
+
     /// The Settings group on screen; while Settings is open the sidebar lists the groups (SPEC N3).
     var settingsGroup: SettingsGroup {
         didSet { defaults.set(settingsGroup.rawValue, forKey: SettingsGroup.defaultsKey) }
@@ -51,9 +61,8 @@ final class MainWindowLifecycle {
     }
 }
 
-/// The main window (docs/design/native/SPEC.md S1, the owner's reference): a whole-height,
-/// lighter frosted sidebar of modules beside a lightly frosted content area, both behind-window
-/// system materials so the desktop is faintly there (KARAR-2, NOTE-2); Record in the toolbar.
+/// The native inset sidebar and unified toolbar frame the module's lightly frosted content.
+/// Window chrome belongs to the split view; toolbar actions belong to the current module.
 struct MainWindowView: View {
     @Bindable var model: MainWindowModel
     let services: AppServices?
@@ -74,23 +83,23 @@ struct MainWindowView: View {
     private var module: any CamcordModule { ModuleRegistry.module(model.selection) ?? ModuleRegistry.all[0] }
 
     var body: some View {
-        HStack(spacing: 0) {
-            if model.sidebarVisible {
-                ZStack {
-                    if model.selection == .settings {
-                        SettingsSidebar(model: model)
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
-                    } else {
-                        MainWindowSidebar(selection: $model.selection)
-                            .transition(.move(edge: .leading).combined(with: .opacity))
-                    }
+        NavigationSplitView(columnVisibility: $model.sidebarColumnVisibility) {
+            ZStack {
+                if model.selection == .settings {
+                    SettingsSidebar(model: model)
+                        .transition(.opacity)
+                } else {
+                    MainWindowSidebar(selection: $model.selection)
+                        .transition(.opacity)
                 }
-                .animation(Theme.Motion.resolve(Theme.Motion.panel, reduceMotion: reduceMotion),
-                           value: model.selection == .settings)
-                .frame(width: MainWindowLayout.sidebarWidth)
-                    .windowBackdrop(.sidebar)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
             }
+            .animation(Theme.Motion.resolve(Theme.Motion.panel, reduceMotion: reduceMotion),
+                       value: model.selection == .settings)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if let library = services?.library { LibrarySidebarFooter(store: library) }
+            }
+            .navigationSplitViewColumnWidth(Theme.Navigation.sidebarWidth)
+        } detail: {
             ZStack {
                 module.makeView()
                     .id(model.selection)
@@ -99,10 +108,10 @@ struct MainWindowView: View {
             .animation(Theme.Motion.resolve(Theme.Motion.moduleSwitch, reduceMotion: reduceMotion), value: model.selection)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .windowBackdrop(.content)
+            .navigationTitle(Text(module.title))
         }
+        .navigationSplitViewStyle(.balanced)
         .animation(Theme.Motion.resolve(Theme.Motion.panel, reduceMotion: reduceMotion), value: model.sidebarVisible)
-        .navigationTitle(Text(module.title))
-        .toolbar { MainWindowToolbar(model: model, services: services) }
         .frame(minWidth: 880, minHeight: 560)
         .tint(Theme.Palette.ink.color)
         .environment(\.appServices, services)
@@ -123,7 +132,14 @@ extension EnvironmentValues {
 }
 
 enum MainWindowLayout {
-    static let sidebarWidth: CGFloat = 240
+    static let sidebarWidth = Theme.Navigation.sidebarWidth
+
+    static func totalKnownBytes(_ sizes: some Sequence<Int64>) -> Int64 {
+        sizes.reduce(Int64(0)) { total, size in
+            let (sum, overflow) = total.addingReportingOverflow(max(size, 0))
+            return overflow ? .max : sum
+        }
+    }
 }
 
 /// The sidebar: the mark, then the modules by section, each with its ⌘ key (K1), on its own
@@ -147,27 +163,70 @@ private struct MainWindowSidebar: View {
                 }
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) { SidebarHeader() }
+        .safeAreaInset(edge: .top, spacing: 0) { SidebarBrandHeader() }
         .accessibilityLabel(Text("Modules", comment: "Accessibility: the main window's sidebar"))
     }
 }
 
-/// The mark and the app's name at the top of the sidebar.
-private struct SidebarHeader: View {
+/// Reference shell facts come from the existing Library, without acquiring a watcher lease.
+private struct LibrarySidebarFooter: View {
+    @Bindable var store: LibraryStore
+
+    private var version: String? {
+        guard let value = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return value
+    }
+
     var body: some View {
-        HStack(spacing: Theme.Space.s) {
-            ViewfinderMarkView(dot: .plain)
-                .frame(width: 18, height: 18)
-            Text(verbatim: "Camcord")
-                .font(Theme.Font.rowStrong)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: Theme.Navigation.footerSpacing) {
+                decoration
+                if let version {
+                    Text(verbatim: version)
+                    separator
+                }
+                facts
+            }
+            .fixedSize(horizontal: true, vertical: false)
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                if let version {
+                    HStack(spacing: Theme.Navigation.footerSpacing) {
+                        decoration
+                        Text(verbatim: version)
+                    }
+                }
+                facts
+            }
         }
-        .foregroundStyle(Theme.Palette.ink.color)
+        .font(Theme.Font.dataSmall)
+        .foregroundStyle(Theme.Palette.ink2.color)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, Theme.Space.l)
-        .padding(.top, Theme.Space.xs)
-        .padding(.bottom, Theme.Space.s)
+        .padding(.leading, Theme.Space.s + Theme.Navigation.rowInset)
+        .padding(.trailing, Theme.Navigation.rowInset)
+        .padding(.top, Theme.Space.s)
+        .padding(.bottom, Theme.Space.m)
         .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
+    }
+
+    private var facts: some View {
+        HStack(spacing: Theme.Navigation.footerSpacing) {
+            Text("\(store.items.count) captures")
+            separator
+            Text(verbatim: ByteCountFormatter.string(
+                fromByteCount: MainWindowLayout.totalKnownBytes(store.items.map(\.byteSize)), countStyle: .file))
+        }
+    }
+
+    private var separator: some View {
+        Text(verbatim: "·").accessibilityHidden(true)
+    }
+
+    private var decoration: some View {
+        // Decorative punctuation, with no assertion about device/store health.
+        Circle().fill(Theme.Palette.ink2.color)
+            .frame(width: Theme.Navigation.footerDotSize, height: Theme.Navigation.footerDotSize)
+            .accessibilityHidden(true)
     }
 }
 
@@ -193,57 +252,6 @@ enum ModuleShortcut {
     }
 }
 
-/// The window's toolbar: the sidebar button by the window controls, Record trailing. The five
-/// capture keys are not here (KARAR-2): capturing is one hotkey or one panel key away, and each
-/// module adds its own actions.
-private struct MainWindowToolbar: ToolbarContent {
-    @Bindable var model: MainWindowModel
-    let services: AppServices?
-
-    var body: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
-            Button {
-                model.sidebarVisible.toggle()
-            } label: {
-                Label { Text("Toggle Sidebar", comment: "Shows or hides the main window's sidebar") } icon: {
-                    Image(systemName: "sidebar.left")
-                }
-            }
-            .help(Text("Toggle Sidebar", comment: "Shows or hides the main window's sidebar"))
-        }
-        ToolbarSpacer(.flexible)
-        ToolbarItem(placement: .automatic) {
-            ToolbarRecordButton(services: services)
-                .labelStyle(.titleAndIcon)
-        }
-    }
-}
-
-private struct ToolbarRecordButton: View {
-    let services: AppServices?
-
-    var body: some View {
-        if let services {
-            LiveRecordButton(state: services.recordingState) { services.toggleRecording() }
-        } else {
-            RecordButton(size: .toolbar) {}
-        }
-    }
-}
-
-/// Record / Stop, following the recording state.
-private struct LiveRecordButton: View {
-    @ObservedObject var state: RecordingStateModel
-    let action: () -> Void
-
-    var body: some View {
-        RecordButton(size: .toolbar,
-                     isRecording: state.state != .idle,
-                     isBusy: state.isStarting || state.isFinishing,
-                     action: action)
-    }
-}
-
 /// Owns the one main window. Closing it (⌘W or the red button) hides it and never quits;
 /// the menu-bar item stays. Its frame is autosaved.
 @MainActor
@@ -251,6 +259,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     static let frameAutosaveName = "CamcordMainWindow"
 
     private let defaults: UserDefaults
+    private let frameAutosaveKey: String?
     private let dock: DockController
     private let services: AppServices?
     let model: MainWindowModel
@@ -272,12 +281,14 @@ final class MainWindowController: NSObject, NSWindowDelegate {
              try await Task.sleep(for: .milliseconds(160))
          },
          defaults: UserDefaults = .standard, dock: DockController, services: AppServices? = nil,
+         frameAutosaveName: String? = MainWindowController.frameAutosaveName,
          present: (@MainActor (NSWindow) -> Void)? = nil) {
         self.windowFactory = windowFactory
         self.presentBackground = presentBackground ?? { $0.orderBack(nil) }
         self.isAppActive = isAppActive
         self.waitForRemoval = waitForRemoval
         self.defaults = defaults
+        self.frameAutosaveKey = frameAutosaveName
         self.dock = dock
         self.services = services
         self.model = MainWindowModel(defaults: defaults)
@@ -394,8 +405,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.toolbarStyle = .unified
-        // Behind-window transparency (K1): the window itself is clear, so the system sidebar's
-        // Liquid Glass shows the desktop through; the content paints its own opaque ground.
+        // The system sidebar and the detail's one behind-window backdrop sample the desktop.
         window.isOpaque = false
         window.backgroundColor = .clear
         window.isReleasedWhenClosed = false
@@ -404,9 +414,9 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         window.setContentSize(NSSize(width: 1180, height: 760))
         window.center()
         // After the first placement, so a saved frame wins over the centred default.
-        if windowFactory == nil {
-            window.setFrameAutosaveName(Self.frameAutosaveName)
-            window.setFrameUsingName(Self.frameAutosaveName)
+        if windowFactory == nil, let frameAutosaveKey {
+            window.setFrameAutosaveName(frameAutosaveKey)
+            window.setFrameUsingName(frameAutosaveKey)
         }
         return window
     }

@@ -26,28 +26,12 @@ struct SettingsSidebar: View {
             InkNavigationHeader(title: LocalizedStringResource("Settings", comment: "Main window module"))
             ForEach(SettingsGroup.allCases) { group in
                 InkNavigationRow(id: group, selection: $model.settingsGroup, focus: focus) {
-                    Label { Text(group.title) } icon: { Image(systemName: group.symbol) }
+                    SidebarRow(title: group.title, symbol: group.symbol)
                 }
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) { SettingsSidebarHeader() }
+        .safeAreaInset(edge: .top, spacing: 0) { SidebarBrandHeader().accessibilityHidden(true) }
         .onExitCommand { model.leaveSettings() }
         .accessibilityLabel(Text("Settings groups", comment: "Accessibility: the Settings sidebar"))
-    }
-}
-
-/// The same header as the app sidebar, so the switch reads as one sidebar changing its list.
-private struct SettingsSidebarHeader: View {
-    var body: some View {
-        HStack(spacing: Theme.Space.s) {
-            ViewfinderMarkView(dot: .plain).frame(width: 18, height: 18)
-            Text(verbatim: "Camcord").font(Theme.Font.rowStrong)
-        }
-        .foregroundStyle(Theme.Palette.ink.color)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, Theme.Space.l)
-        .padding(.top, Theme.Space.xs)
-        .padding(.bottom, Theme.Space.s)
-        .accessibilityHidden(true)
     }
 }
