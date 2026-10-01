@@ -436,7 +436,7 @@ private enum ShellCaptureImage {
 }
 
 /// Owned three-background raster samples exercise the actual export renderer, without a UI or owner data.
-private enum ShellAnnotationSheet {
+enum ShellAnnotationSheet {
     static func write(scale: Int, to url: URL, textBackgroundOnly: Bool = false) throws {
         let cell = CGSize(width: 280, height: 140), rowHeight = 180
         let tools: [EditorTool] = textBackgroundOnly ? [.text] : EditorTool.allCases
@@ -483,7 +483,7 @@ private enum ShellAnnotationSheet {
         let image = try #require(sheet.makeImage())
         try EditorRendered(image: image, pointSize: CGSize(width: width, height: height)).png.write(to: url)
     }
-    private static func background(kind: Int, scale: Int, size: CGSize) throws -> CGImage {
+    static func background(kind: Int, scale: Int, size: CGSize) throws -> CGImage {
         let context = try EditorRenderer.context(width: Int(size.width) * scale, height: Int(size.height) * scale)
         context.scaleBy(x: CGFloat(scale), y: CGFloat(scale))
         if kind == 2 {

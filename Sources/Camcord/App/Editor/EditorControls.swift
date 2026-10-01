@@ -196,9 +196,11 @@ struct EditorZoomCapsule: View {
     @Bindable var session: EditorSession
     var body: some View {
         HStack(spacing: Theme.Space.s) {
-            Image(systemName: "hand.draw")
-                .help("Drag edited image").accessibilityLabel("Drag edited image")
-                .onDrag { dragProvider() }
+            Button { session.fitZoom = true } label: {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+            }
+            .buttonStyle(.borderless).help("Fit").accessibilityLabel("Fit")
+            .onDrag { dragProvider() }
             Divider().frame(height: Theme.Space.l)
             Menu {
                 Button("Fit") { session.fitZoom = true }

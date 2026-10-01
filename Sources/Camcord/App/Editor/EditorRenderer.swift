@@ -177,11 +177,15 @@ enum EditorRenderer {
         for annotation in document.edits.annotations where ![.redact, .blur, .pixelate].contains(annotation.kind) {
             try Task.checkCancellation()
             var luminance = 1.0
-            if annotation.kind == .highlight,
+            var highlight = HighlightTreatment(blendMode: .multiply, opacity: 0.6)
+            if (annotation.kind == .highlight || annotation.kind == .text),
                let underlay = imageContext.makeImage()?.cropping(to: annotation.rect.intersection(crop).offsetBy(dx: -crop.minX, dy: -crop.minY)) {
                 luminance = try meanLuminance(underlay)
+                if annotation.kind == .highlight {
+                    highlight = try highlightTreatment(underlay, color: annotation.style.color, pixelScale: pixelScale)
+                }
             }
-            draw(annotation, context: imageContext, pixelScale: pixelScale, underlyingLuminance: luminance)
+            draw(annotation, context: imageContext, pixelScale: pixelScale, underlyingLuminance: luminance, highlightTreatment: highlight)
         }
         imageContext.restoreGState()
         guard let image = imageContext.makeImage() else { throw EditorError.render }
@@ -209,7 +213,7 @@ enum EditorRenderer {
     }
 
     /// All presentation widths/fonts/shadows are points; persistent rectangles remain source pixels.
-    static func draw(_ annotation: EditorAnnotation, context: CGContext, pixelScale: CGSize = CGSize(width: 1, height: 1), underlyingLuminance: Double = 1) {
+    static func draw(_ annotation: EditorAnnotation, context: CGContext, pixelScale: CGSize = CGSize(width: 1, height: 1), underlyingLuminance: Double = 1, highlightTreatment: HighlightTreatment = HighlightTreatment(blendMode: .multiply, opacity: 0.6)) {
         context.saveGState(); defer { context.restoreGState() }
         context.scaleBy(x: pixelScale.width, y: pixelScale.height)
         let source = annotation.rect
@@ -228,9 +232,9 @@ enum EditorRenderer {
             context.strokePath()
         case .highlight:
             context.setShadow(offset: .zero, blur: 0, color: nil)
-            context.setBlendMode(underlyingLuminance > 0.5 ? .multiply : .normal)
+            context.setBlendMode(highlightTreatment.blendMode)
             context.setFillColor(style.color.cgColor)
-            context.setAlpha(underlyingLuminance > 0.5 ? 1 : 0.32)
+            context.setAlpha(highlightTreatment.opacity)
             let radius = min(3, rect.height * 0.12)
             context.addPath(CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil))
             context.fillPath()
@@ -246,7 +250,7 @@ enum EditorRenderer {
                 context.setShadow(offset: .zero, blur: 0, color: nil)
                 drawText(annotation.text, rect: rect.insetBy(dx: 8, dy: 4), size: style.fontSize, color: CGColor(gray: 1, alpha: 1), context: context)
             } else {
-                drawText(annotation.text, rect: rect, size: style.fontSize, color: style.color.cgColor, context: context, outlined: true)
+                drawText(annotation.text, rect: rect, size: style.fontSize, color: style.color.cgColor, context: context, outlined: underlyingLuminance > 0.5)
             }
         case .step:
             let diameter = min(rect.width, rect.height)
@@ -344,6 +348,78 @@ enum EditorRenderer {
             sum += relativeLuminance(red: Double(data[offset]) / 255, green: Double(data[offset + 1]) / 255, blue: Double(data[offset + 2]) / 255)
         } }
         return sum / Double(sample.width * sample.height)
+    }
+
+    struct HighlightTreatment { let blendMode: CGBlendMode; let opacity: Double }
+    /// Histogram mode estimates the background; minority repeated extremes estimate core-ink polarity.
+    /// No text recognition or source-pixel replacement is involved.
+    static func highlightTreatment(_ image: CGImage, color: EditorColor, pixelScale: CGSize) throws -> HighlightTreatment {
+        let sample = try context(width: min(image.width, 512), height: min(image.height, 256))
+        sample.draw(image, in: CGRect(x: 0, y: 0, width: sample.width, height: sample.height))
+        guard let bytes = sample.data?.assumingMemoryBound(to: UInt8.self) else { throw EditorError.render }
+        struct Pixel { let rgb: [Double]; let luminance: Double; let key: Int }
+        var pixels: [Pixel] = [], frequency: [Int: Int] = [:], histogram = [Int](repeating: 0, count: 16)
+        for y in 0..<sample.height { for x in 0..<sample.width {
+            let offset = y * sample.bytesPerRow + x * 4
+            let rgb = (0..<3).map { Double(bytes[offset + $0]) / 255 }
+            let key = Int(bytes[offset]) << 16 | Int(bytes[offset + 1]) << 8 | Int(bytes[offset + 2])
+            let luminance = relativeLuminance(red: rgb[0], green: rgb[1], blue: rgb[2])
+            pixels.append(Pixel(rgb: rgb, luminance: luminance, key: key))
+            histogram[min(15, Int(luminance * 16))] += 1
+            frequency[key, default: 0] += 1
+        } }
+        let minimumCount = max(4, pixels.count / 512)
+        let modalBin = histogram.indices.max(by: { histogram[$0] < histogram[$1] }) ?? 0
+        let modalPixels = pixels.filter { min(15, Int($0.luminance * 16)) == modalBin }
+        let backgroundLuminance = modalPixels.reduce(0) { $0 + $1.luminance } / Double(max(1, modalPixels.count))
+        let backgroundIsUniform = (modalPixels.map { frequency[$0.key, default: 0] }.max() ?? 0) * 2 >= modalPixels.count
+        let repeated = pixels.filter { frequency[$0.key, default: 0] >= minimumCount && frequency[$0.key, default: 0] < pixels.count / 5 }
+        let dark = repeated.min(by: { $0.luminance < $1.luminance }).flatMap { $0.luminance < backgroundLuminance - 0.12 ? $0 : nil }
+        let light = repeated.max(by: { $0.luminance < $1.luminance }).flatMap { $0.luminance > backgroundLuminance + 0.12 ? $0 : nil }
+        var cores: Set<Int> = []
+        if let dark { cores.insert(dark.key) }; if let light { cores.insert(light.key) }
+        let darkCount = dark.map { frequency[$0.key, default: 0] } ?? 0
+        let lightCount = light.map { frequency[$0.key, default: 0] } ?? 0
+        let mode: CGBlendMode = lightCount > darkCount ? .normal : .multiply
+        let radiusX = max(2, Int((14 * pixelScale.width * CGFloat(sample.width) / CGFloat(image.width)).rounded()))
+        let radiusY = max(2, Int((14 * pixelScale.height * CGFloat(sample.height) / CGFloat(image.height)).rounded()))
+        let offsets = [(0, -radiusY), (0, radiusY), (-radiusX, 0), (radiusX, 0)]
+        let fill = [color.red, color.green, color.blue]
+        func contrast(_ a: Double, _ b: Double) -> Double { (max(a, b) + 0.05) / (min(a, b) + 0.05) }
+        func mixed(_ pixel: Pixel, alpha: Double) -> Double {
+            let amount = alpha * color.alpha
+            let rgb = (0..<3).map { pixel.rgb[$0] * (1 - amount) + (mode == .multiply ? pixel.rgb[$0] * fill[$0] : fill[$0]) * amount }
+            return relativeLuminance(red: rgb[0], green: rgb[1], blue: rgb[2])
+        }
+        var cap = cores.isEmpty ? 0.6 : (mode == .normal ? 0.32 : 1)
+        for y in 0..<sample.height { for x in 0..<sample.width {
+            let ink = pixels[y * sample.width + x]
+            guard cores.contains(ink.key) else { continue }
+            for (dx, dy) in offsets {
+                let bx = x + dx, by = y + dy
+                guard bx >= 0, bx < sample.width, by >= 0, by < sample.height else { continue }
+                let background = pixels[by * sample.width + bx]
+                // Reject neighboring ink/antialias samples; compare a core against background-mode pixels.
+                if mode == .multiply && !backgroundIsUniform {
+                    guard background.luminance > ink.luminance + 0.12 else { continue }
+                } else {
+                    guard abs(background.luminance - backgroundLuminance) <= 0.03125 else { continue }
+                }
+                let sourceContrast = contrast(ink.luminance, background.luminance)
+                if mode == .multiply && sourceContrast < 4.5 { continue }
+                let target = sourceContrast >= 4.5 ? min(sourceContrast, 4.55) : sourceContrast
+                guard contrast(mixed(ink, alpha: cap), mixed(background, alpha: cap)) < target else { continue }
+                var low = 0.0, high = cap
+                for _ in 0..<14 {
+                    let candidate = (low + high) / 2
+                    if contrast(mixed(ink, alpha: candidate), mixed(background, alpha: candidate)) >= target { low = candidate }
+                    else { high = candidate }
+                }
+                cap = low
+            }
+        } }
+        let opacity = mode == .multiply && dark != nil ? max(0.35, cap) : cap
+        return HighlightTreatment(blendMode: mode, opacity: opacity)
     }
 
     static func sample(_ image: CGImage, at point: CGPoint) throws -> String {

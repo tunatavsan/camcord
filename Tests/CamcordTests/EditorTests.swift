@@ -8,6 +8,60 @@ import Testing
 
 @Suite("Screenshot editor pixels and privacy")
 struct EditorRendererTests {
+    @Test("Default semibold text on an actual dark underlay has colored glyphs and no light contrast outline")
+    func darkTextWithoutOutline() throws {
+        let context = try EditorRenderer.context(width: 180, height: 80)
+        context.setFillColor(CGColor(gray: 0, alpha: 1)); context.fill(CGRect(x: 0, y: 0, width: 180, height: 80))
+        var document = try EditorDocument(source: #require(context.makeImage()))
+        document.edits.annotations = [EditorAnnotation(kind: .text, rect: CGRect(x: 8, y: 8, width: 164, height: 64), text: "Ready")]
+        let image = try EditorRenderer.render(document).image
+        let output = try EditorRenderer.context(width: 180, height: 80)
+        output.draw(image, in: CGRect(x: 0, y: 0, width: 180, height: 80))
+        let bytes = try #require(output.data?.assumingMemoryBound(to: UInt8.self))
+        var colored = 0, lightOutline = 0
+        for y in 0..<80 { for x in 0..<180 {
+            let offset = y * output.bytesPerRow + x * 4
+            if bytes[offset] > 120 && bytes[offset + 1] < 100 && bytes[offset + 2] < 100 { colored += 1 }
+            if min(bytes[offset], bytes[offset + 1], bytes[offset + 2]) > 120 { lightOutline += 1 }
+        } }
+        #expect(colored > 20 && lightOutline == 0)
+    }
+    @Test("Actual sheet light, dark and busy source glyph contrast survives Highlight at both densities", arguments: [0, 1, 2], [1, 2])
+    func sheetHighlightContrast(background: Int, scale: Int) throws {
+        let source = try ShellAnnotationSheet.background(kind: background, scale: scale, size: CGSize(width: 280, height: 140))
+        var document = try EditorDocument(source: source, pointSize: CGSize(width: 280, height: 140))
+        let rect = CGRect(x: 20 * scale, y: 54 * scale, width: 240 * scale, height: 27 * scale)
+        document.edits.annotations = [EditorAnnotation(kind: .highlight, rect: rect, style: EditorStyle(color: EditorRenderer.markerColor))]
+        let image = try EditorRenderer.render(document).image
+        let underlay = try #require(source.cropping(to: rect))
+        let treatment = try EditorRenderer.highlightTreatment(underlay, color: EditorRenderer.markerColor, pixelScale: CGSize(width: scale, height: scale))
+        func luminance(_ image: CGImage, _ x: Int, _ y: Int) throws -> Double {
+            let hex = try EditorRenderer.sample(image, at: CGPoint(x: x * scale, y: y * scale))
+            let channels = try [1, 3, 5].map { Double(try #require(Int(hex.dropFirst($0).prefix(2), radix: 16))) / 255 }
+            return EditorRenderer.relativeLuminance(red: channels[0], green: channels[1], blue: channels[2])
+        }
+        func contrast(_ a: Double, _ b: Double) -> Double { (max(a, b) + 0.05) / (min(a, b) + 0.05) }
+        let core = try EditorRenderer.sample(source, at: CGPoint(x: 110 * scale, y: 71 * scale))
+        var count = 0, qualifying = 0, floorExceptions = 0, lower = 0
+        var minimumQualifyingSource = Double.infinity, minimumQualifyingAfter = Double.infinity
+        for y in 65..<79 { for x in 20..<260 {
+            guard try EditorRenderer.sample(source, at: CGPoint(x: x * scale, y: y * scale)) == core else { continue }
+            let before = try contrast(luminance(source, x, y), luminance(source, x, 57))
+            let after = try contrast(luminance(image, x, y), luminance(image, x, 57))
+            count += 1
+            if before >= 4.5 {
+                qualifying += 1; minimumQualifyingSource = min(minimumQualifyingSource, before); minimumQualifyingAfter = min(minimumQualifyingAfter, after)
+                if after < 4.5 {
+                    floorExceptions += 1
+                    #expect(abs(treatment.opacity - 0.35) < 0.000001)
+                }
+            } else { lower += 1 }
+        } }
+        #expect(count > 20 && qualifying > 20)
+        if background != 2 { #expect(treatment.opacity >= 0.2) }
+        else { #expect(treatment.opacity >= 0.35) }
+        print("Editor actual sheet background \(background) at \(scale)x: corePairs=\(count), qualifying=\(qualifying), lower=\(lower), floorExceptions=\(floorExceptions), minQualifyingSource=\(minimumQualifyingSource), minQualifyingAfter=\(minimumQualifyingAfter), opacity=\(treatment.opacity), mode=\(treatment.blendMode.rawValue)")
+    }
     @Test("Multiply Highlight preserves the source red channel and dark text at real point density", arguments: [1, 2])
     func multiplyHighlight(scale: Int) throws {
         let context = try EditorRenderer.context(width: 80 * scale, height: 48 * scale)
