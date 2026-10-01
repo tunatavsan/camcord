@@ -13,6 +13,7 @@ struct EditorInteractionRenderTests {
     @Test("Responsive owned Editor workspace")
     func windowFixture() async throws {
         let env = ProcessInfo.processInfo.environment
+        let pacing = try EditorNativeEventPacing(rawValue:env["CAMCORD_EDITOR_EVENT_HZ"])
         let sentinel = URL(fileURLWithPath: try #require(env["CAMCORD_EDITOR_GUI_SENTINEL"]))
         let output = URL(fileURLWithPath: try #require(env["CAMCORD_EDITOR_OUTPUT"]), isDirectory: true)
         let repo = URL(fileURLWithPath:#filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -44,7 +45,7 @@ struct EditorInteractionRenderTests {
         defer { NSApp.mainMenu = originalMenu; session.stop(); window.orderOut(nil); window.close() }
         window.orderBack(nil); window.contentView?.layoutSubtreeIfNeeded(); window.displayIfNeeded()
         #expect(!window.isKeyWindow && !NSApp.isActive)
-        let playback = EditorNativeEventPlayback()
+        let playback = EditorNativeEventPlayback(pacing:pacing)
         var playbackTask: Task<Void,Never>?
         defer { playbackTask?.cancel() }
         let finish = output.appendingPathComponent("finish"), deadline = ContinuousClock.now.advanced(by:.seconds(180))
@@ -66,7 +67,7 @@ struct EditorInteractionRenderTests {
                 let clearance = (canvas.enclosingScrollView as? EditorScrollNSView)?.fitTopClearance ?? 0
                 let colorWells = findColorWells(window.contentView)
                 let controlMeasurements: [String:Any] = ["fitTopClearanceInClipPoints":clearance,"styleCapsuleMeasuredHeight":max(0,clearance-Theme.Space.m-Theme.Space.s),"fitTopInsetInSourcePoints":canvas.fitTopInset,"nativeCustomColorWellFramesInWindow":colorWells.map { values($0.convert($0.bounds,to:nil)) },"nativeCustomColorWellIntrinsicSizes":colorWells.map { [$0.intrinsicContentSize.width,$0.intrinsicContentSize.height] }]
-                try JSONSerialization.data(withJSONObject:state.merging(clipboardState) { _,new in new }.merging(controlMeasurements) { _,new in new },options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("ready.json"),options:.atomic)
+                try JSONSerialization.data(withJSONObject:state.merging(clipboardState) { _,new in new }.merging(controlMeasurements) { _,new in new }.merging(playback.pacingMetadata) { _,new in new },options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("ready.json"),options:.atomic)
                 let windows: [[String:Any]] = [["primaryID":window.windowNumber,"windowID":window.windowNumber,"pid":Int(ProcessInfo.processInfo.processIdentifier),"frame":values(window.frame),"key":window.isKeyWindow,"visible":window.isVisible,"title":window.title,"role":"primary"]]
                 try JSONSerialization.data(withJSONObject:windows,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("windows.json"),options:.atomic)
             }
@@ -159,26 +160,164 @@ struct EditorFixturePublicationTests {
     }
 }
 
+@MainActor private struct EditorNativeEventPacing {
+    enum Failure: Error, CustomStringConvertible {
+        case unsupportedRate(String)
+        case overrun(step:Int,lateness:Duration)
+        case timeout
+        nonisolated var description: String {
+            switch self {
+            case .unsupportedRate(let value): "Unsupported CAMCORD_EDITOR_EVENT_HZ=\(value); expected 60 or 120"
+            case .overrun(let step,let lateness): "Invalid 120Hz stimulus: pacing-overrun at step \(step), lateness \(EditorNativeEventPacing.seconds(lateness))s; no catch-up delivery"
+            case .timeout: "Invalid 120Hz stimulus: playback exceeded 30 seconds"
+            }
+        }
+    }
+    let eventHz: Int
+    init(rawValue:String?) throws {
+        switch rawValue {
+        case nil,"60": eventHz = 60
+        case "120": eventHz = 120
+        case let value?: throw Failure.unsupportedRate(value)
+        }
+    }
+    nonisolated static func seconds(_ duration:Duration) -> Double {
+        let parts = duration.components
+        return Double(parts.seconds) + Double(parts.attoseconds)/1_000_000_000_000_000_000
+    }
+    func checkPlayback(now:ContinuousClock.Instant,deadline:ContinuousClock.Instant?) throws {
+        if let deadline, now >= deadline { throw Failure.timeout }
+    }
+    func runAbsoluteSteps(start:ContinuousClock.Instant,
+                          now:@MainActor () -> ContinuousClock.Instant = { .now },
+                          sleepUntil:@MainActor (ContinuousClock.Instant) async throws -> Void = { try await Task.sleep(until:$0,tolerance:.zero,clock:.continuous) },
+                          beforeWait:@MainActor (Int,ContinuousClock.Instant) throws -> Void = { _,_ in },
+                          deliver:@MainActor (Int) throws -> Void) async throws {
+        precondition(eventHz == 120)
+        let interval = Duration.nanoseconds(1_000_000_000/120)
+        for step in 1...120 {
+            let deadline = start.advanced(by:.nanoseconds(Int64(step)*1_000_000_000/120))
+            try beforeWait(step,deadline)
+            // An entire missed slot invalidates the stimulus. Never replay
+            // overdue events in a burst or skip to a synthetic later position.
+            let beforeSleep = deadline.duration(to:now())
+            guard beforeSleep < interval else { throw Failure.overrun(step:step,lateness:beforeSleep) }
+            try await sleepUntil(deadline)
+            let lateness = deadline.duration(to:now())
+            guard lateness < interval else { throw Failure.overrun(step:step,lateness:lateness) }
+            try deliver(step)
+        }
+    }
+}
+
+@MainActor @Suite("Editor native event pacing", .serialized)
+struct EditorNativeEventPacingTests {
+    @Test("Only an explicit 120 enables absolute pacing; absent and 60 preserve the legacy rate")
+    func rateConfiguration() throws {
+        #expect(try EditorNativeEventPacing(rawValue:nil).eventHz == 60)
+        #expect(try EditorNativeEventPacing(rawValue:"60").eventHz == 60)
+        #expect(try EditorNativeEventPacing(rawValue:"120").eventHz == 120)
+        for invalid in ["","30","61","120.0"," 120"] {
+            #expect(throws:EditorNativeEventPacing.Failure.self) { try EditorNativeEventPacing(rawValue:invalid) }
+        }
+    }
+    @Test("Absolute 120 scheduler delivers every step once through 1s without relative sleep drift")
+    func absoluteSteps() async throws {
+        let pacing = try EditorNativeEventPacing(rawValue:"120")
+        let start = ContinuousClock.now
+        var current = start, deadlines:[ContinuousClock.Instant] = [], delivered:[Int] = []
+        try await pacing.runAbsoluteSteps(start:start,now:{ current },sleepUntil:{ deadline in
+            deadlines.append(deadline); current = deadline
+        },deliver:{ step in
+            delivered.append(step)
+            // Handler work consumes 2ms but does not shift the next deadline.
+            current = current.advanced(by:.milliseconds(2))
+        })
+        #expect(delivered == Array(1...120))
+        #expect(deadlines.count == 120)
+        #expect(start.duration(to:try #require(deadlines.last)) == .seconds(1))
+        #expect(zip(deadlines,deadlines.dropFirst()).allSatisfy { $0 < $1 })
+    }
+    @Test("A missed slot stops before the overdue event; no skips or catch-up deliveries follow", arguments:[false,true])
+    func missedDeadline(overdueBeforeWait:Bool) async throws {
+        let pacing = try EditorNativeEventPacing(rawValue:"120")
+        let start = ContinuousClock.now
+        var current = start, waits = 0, delivered:[Int] = []
+        do {
+            try await pacing.runAbsoluteSteps(start:start,now:{ current },sleepUntil:{ deadline in
+                waits += 1
+                current = deadline.advanced(by:!overdueBeforeWait && waits == 37 ? .milliseconds(10) : .zero)
+            },deliver:{ step in
+                delivered.append(step)
+                if overdueBeforeWait && step == 36 { current = current.advanced(by:.milliseconds(20)) }
+            })
+            Issue.record("A missed 120Hz deadline must invalidate the stimulus")
+        } catch EditorNativeEventPacing.Failure.overrun(let step,let lateness) {
+            #expect(step == 37 && lateness >= .milliseconds(10))
+        }
+        #expect(waits == (overdueBeforeWait ? 36 : 37) && delivered == Array(1...36))
+        try pacing.checkPlayback(now:start.advanced(by:.seconds(29)),deadline:start.advanced(by:.seconds(30)))
+        #expect(throws:EditorNativeEventPacing.Failure.self) {
+            try pacing.checkPlayback(now:start.advanced(by:.seconds(30)),deadline:start.advanced(by:.seconds(30)))
+        }
+    }
+}
+
 /// Optional video stimulus through real production event handlers. These are
 /// native-event fixture actions, not a customer CUA tour or model mutations.
 @MainActor private final class EditorNativeEventPlayback {
+    let pacing: EditorNativeEventPacing
     var phase = "idle"
     var error = ""
     private var sequence = 0
+    private var stepIndex = 0
+    private var deliveredSteps = 0
+    private var dragStartClock: ContinuousClock.Instant?
+    private var dragStartHostClockSeconds: Double?
+    private var stepDeadline: ContinuousClock.Instant?
+    private var observedDeadlineLateness: Duration?
+    private var playbackDeadline: ContinuousClock.Instant?
+    init(pacing:EditorNativeEventPacing) { self.pacing = pacing }
+    var pacingMetadata: [String:Any] {
+        var metadata: [String:Any] = ["eventHz":pacing.eventHz,"expectedSteps":pacing.eventHz,"expectedStepsScope":"per drag","deliveredSteps":deliveredSteps,"deliveredStepsScope":"production mouseDragged calls returned; no frame acknowledgement","eventPacing":pacing.eventHz == 120 ? "absolute ContinuousClock deadlines" : "original 60 steps and 16ms relative pauses"]
+        if stepIndex > 0 { metadata["stepIndex"] = stepIndex }
+        if let dragStartHostClockSeconds { metadata["dragStartHostClockSeconds"] = dragStartHostClockSeconds }
+        if let dragStartClock, let stepDeadline, let dragStartHostClockSeconds {
+            let offset = EditorNativeEventPacing.seconds(dragStartClock.duration(to:stepDeadline))
+            metadata["deadlineOffsetSeconds"] = offset
+            metadata["deadlineHostClockSeconds"] = dragStartHostClockSeconds + offset
+            metadata["deadlineHostClockMapping"] = "paired CMClock anchor; scheduling and lateness use ContinuousClock"
+            if let observedDeadlineLateness { metadata["deadlineLatenessSeconds"] = EditorNativeEventPacing.seconds(observedDeadlineLateness) }
+            metadata["deadlineLatenessScope"] = "last actual event/delivery observation; ready snapshots retain it"
+        }
+        if playbackDeadline != nil { metadata["maxPlaybackSeconds"] = 30 }
+        return metadata
+    }
     func run<V: View>(canvas:EditorCanvasNSView, host:EditorUndoHostingController<V>, window:NSWindow, output:URL, sentinel:URL) async throws {
         let events = output.appendingPathComponent("native-events.jsonl")
         _ = FileManager.default.createFile(atPath:events.path,contents:nil)
         let log = try FileHandle(forWritingTo:events); defer { try? log.close() }
         func record(_ event:NSEvent?, _ kind:String) throws {
+            if let stepDeadline, event?.type == .leftMouseDragged || kind == "state-after-delivery" || kind == "first-drag-delivered" || kind == "pacing-overrun-invalid-stimulus" {
+                observedDeadlineLateness = stepDeadline.duration(to:.now)
+            }
             let hostClockSeconds = CMClockGetTime(CMClockGetHostTimeClock()).seconds
             let state:[String:Any] = ["hostClockSeconds":hostClockSeconds,"hostClock":"CMClockGetHostTimeClock","wallTime":Date().timeIntervalSince1970,"uptime":ProcessInfo.processInfo.systemUptime,"phase":phase,"kind":kind,"snapshotTiming":kind == "state-after-delivery" ? "after-delivery" : "before-delivery","eventType":event.map { Int($0.type.rawValue) } ?? -1,"eventTimestamp":event?.timestamp ?? 0,"windowID":window.windowNumber,"windowPoint":event.map { [$0.locationInWindow.x,$0.locationInWindow.y] } ?? [],"keyCode":event.flatMap { $0.type == .keyDown || $0.type == .keyUp ? Int($0.keyCode) : nil } ?? -1,"characters":event.flatMap { $0.type == .keyDown || $0.type == .keyUp ? $0.charactersIgnoringModifiers : nil } ?? "","modifiers":event?.modifierFlags.rawValue ?? 0,"revision":canvas.session?.revision ?? -1,"tool":canvas.session?.tool.rawValue ?? "","candidate":canvas.candidateAnnotation?.kind.rawValue ?? "none","baseGeneration":canvas.session?.displayBaseGeneration ?? -1,"displayRasterRequests":canvas.session?.displayRasterRequests ?? -1,"privacyDisplayFrames":canvas.privacyDisplayFrames,"privacyPatchComputations":canvas.privacyPatchComputations,"annotationCount":canvas.session?.document?.edits.annotations.count ?? -1,"canUndo":canvas.session?.canUndo ?? false,"canRedo":canvas.session?.canRedo ?? false,"appActive":NSApp.isActive,"keyWindow":window.isKeyWindow]
-            try log.write(contentsOf:JSONSerialization.data(withJSONObject:state,options:[.sortedKeys])+Data([10]))
+            try log.write(contentsOf:JSONSerialization.data(withJSONObject:state.merging(pacingMetadata) { _,new in new },options:[.sortedKeys])+Data([10]))
         }
         func active() throws {
             try Task.checkCancellation()
             guard FileManager.default.fileExists(atPath:sentinel.path), !FileManager.default.fileExists(atPath:output.appendingPathComponent("finish").path), !NSApp.isActive else { throw CocoaError(.userCancelled) }
+            do { try pacing.checkPlayback(now:.now,deadline:playbackDeadline) }
+            catch { try record(nil,"pacing-timeout-invalid-stimulus"); throw error }
         }
-        func pause(_ milliseconds:Int) async throws { try active(); try await Task.sleep(for:.milliseconds(milliseconds)); try active() }
+        func pause(_ milliseconds:Int) async throws {
+            try active()
+            if let playbackDeadline {
+                try await Task.sleep(until:min(ContinuousClock.now.advanced(by:.milliseconds(milliseconds)),playbackDeadline),tolerance:.zero,clock:.continuous)
+            } else { try await Task.sleep(for:.milliseconds(milliseconds)) }
+            try active()
+        }
         func key(_ characters:String,code:UInt16,modifiers:NSEvent.ModifierFlags = []) throws -> NSEvent {
             try active()
             let event = try #require(NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:modifiers,timestamp:ProcessInfo.processInfo.systemUptime,windowNumber:window.windowNumber,context:nil,characters:characters,charactersIgnoringModifiers:characters,isARepeat:false,keyCode:code))
@@ -191,13 +330,40 @@ struct EditorFixturePublicationTests {
         }
         func view(_ point:CGPoint) -> CGPoint { canvas.viewRect(CGRect(origin:point,size:.zero)).origin }
         func drag(_ from:CGPoint,_ to:CGPoint,_ name:String,commit:Bool = true) async throws {
+            stepIndex = 0; deliveredSteps = 0; stepDeadline = nil; observedDeadlineLateness = nil; dragStartClock = nil; dragStartHostClockSeconds = nil
             phase = name; canvas.mouseDown(with:try mouse(.leftMouseDown,from))
             try record(nil,"mouse-down-delivered")
-            for frame in 1...60 {
-                let t = CGFloat(frame)/60
-                canvas.mouseDragged(with:try mouse(.leftMouseDragged,CGPoint(x:from.x+(to.x-from.x)*t,y:from.y+(to.y-from.y)*t)))
-                if frame == 1 { try record(nil,"first-drag-delivered") }
-                try record(nil,"state-after-delivery"); window.displayIfNeeded(); try await pause(16)
+            if pacing.eventHz == 60 {
+                for frame in 1...60 {
+                    stepIndex = frame
+                    let t = CGFloat(frame)/60
+                    canvas.mouseDragged(with:try mouse(.leftMouseDragged,CGPoint(x:from.x+(to.x-from.x)*t,y:from.y+(to.y-from.y)*t)))
+                    deliveredSteps += 1
+                    if frame == 1 { try record(nil,"first-drag-delivered") }
+                    try record(nil,"state-after-delivery"); window.displayIfNeeded(); try await pause(16)
+                }
+            } else {
+                let start = ContinuousClock.now
+                dragStartClock = start; dragStartHostClockSeconds = CMClockGetTime(CMClockGetHostTimeClock()).seconds
+                do {
+                    try await pacing.runAbsoluteSteps(start:start,beforeWait:{ frame,deadline in
+                        try active(); stepIndex = frame; stepDeadline = deadline; observedDeadlineLateness = nil
+                    },deliver:{ frame in
+                        try active()
+                        let t = CGFloat(frame)/120
+                        canvas.mouseDragged(with:try mouse(.leftMouseDragged,CGPoint(x:from.x+(to.x-from.x)*t,y:from.y+(to.y-from.y)*t)))
+                        deliveredSteps += 1
+                        if frame == 1 { try record(nil,"first-drag-delivered") }
+                        try record(nil,"state-after-delivery"); window.displayIfNeeded()
+                    })
+                } catch let failure as EditorNativeEventPacing.Failure {
+                    switch failure {
+                    case .overrun: try record(nil,"pacing-overrun-invalid-stimulus")
+                    case .timeout: try record(nil,"pacing-timeout-invalid-stimulus")
+                    case .unsupportedRate: try record(nil,"pacing-configuration-invalid-stimulus")
+                    }
+                    throw failure
+                }
             }
             if commit { canvas.mouseUp(with:try mouse(.leftMouseUp,to)); try record(nil,"mouse-up-delivered") }
             try await pause(400)
@@ -206,6 +372,7 @@ struct EditorFixturePublicationTests {
         phase = "actual100-awaiting-native-events-start"
         try Data("Clean source at Actual pixels; record window before touching native-events-start.\n".utf8).write(to:output.appendingPathComponent("native-events-ready"),options:.atomic)
         while !FileManager.default.fileExists(atPath:output.appendingPathComponent("native-events-start").path) { try await pause(100) }
+        if pacing.eventHz == 120 { playbackDeadline = ContinuousClock.now.advanced(by:.seconds(30)) }
         try await drag(view(CGPoint(x:90,y:170)),view(CGPoint(x:700,y:300)),"create-arrow-live")
         canvas.keyDown(with:try key("t",code:17)); try await pause(250)
         let middle = view(CGPoint(x:395,y:235))
