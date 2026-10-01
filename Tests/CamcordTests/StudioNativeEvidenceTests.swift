@@ -33,6 +33,35 @@ private enum StudioEvidenceFailure: Error {
     case forbiddenResource, deadline, recordingFailed, invalidOutput, decoderFailed
 }
 
+private struct StudioEvidenceOwnerPolicy: Sendable {
+    let allowActiveOwner: Bool
+    init(environment: [String: String]) {
+        allowActiveOwner = environment["CAMCORD_STUDIO_ALLOW_ACTIVE_OWNER"] == "1"
+    }
+    func permitsIdle(_ seconds: Double) -> Bool { allowActiveOwner || seconds >= 600 }
+    func permitsActivity(idleSeconds: Double, frontmostUnchanged: Bool, cursorUnchanged: Bool) -> Bool {
+        permitsIdle(idleSeconds) && (allowActiveOwner || (frontmostUnchanged && cursorUnchanged))
+    }
+}
+
+@Suite("Native Studio owner activity policy")
+struct StudioNativeEvidenceOwnerPolicyTests {
+    @Test("Active owner allowance requires the exact opt-in and preserves the strict default")
+    func explicitAllowance() {
+        for value in [nil, "0", "true"] as [String?] {
+            let policy = StudioEvidenceOwnerPolicy(environment: value.map { ["CAMCORD_STUDIO_ALLOW_ACTIVE_OWNER": $0] } ?? [:])
+            #expect(!policy.allowActiveOwner)
+            #expect(!policy.permitsActivity(idleSeconds: 599, frontmostUnchanged: true, cursorUnchanged: true))
+            #expect(!policy.permitsActivity(idleSeconds: 600, frontmostUnchanged: false, cursorUnchanged: true))
+            #expect(!policy.permitsActivity(idleSeconds: 600, frontmostUnchanged: true, cursorUnchanged: false))
+            #expect(policy.permitsActivity(idleSeconds: 600, frontmostUnchanged: true, cursorUnchanged: true))
+        }
+        let authorized = StudioEvidenceOwnerPolicy(environment: ["CAMCORD_STUDIO_ALLOW_ACTIVE_OWNER": "1"])
+        #expect(authorized.allowActiveOwner)
+        #expect(authorized.permitsActivity(idleSeconds: 0, frontmostUnchanged: false, cursorUnchanged: false))
+    }
+}
+
 private final class StudioEvidenceDiagnostics: Sendable {
     private let lines = Mutex<[String]>([])
     func append(_ line: String) { lines.withLock { $0.append(line) } }
@@ -43,6 +72,7 @@ private final class StudioEvidenceDiagnostics: Sendable {
     private let output: URL
     private let commandURL: URL
     private let sentinel: URL
+    private let ownerPolicy: StudioEvidenceOwnerPolicy
     private let nonce = UUID().uuidString
     private let baselineFrontmost: pid_t
     private let baselineCursor: CGPoint
@@ -70,6 +100,7 @@ private final class StudioEvidenceDiagnostics: Sendable {
 
     init() throws {
         let env = ProcessInfo.processInfo.environment
+        ownerPolicy = StudioEvidenceOwnerPolicy(environment: env)
         guard let sentinelPath = env["CAMCORD_STUDIO_GUI_SENTINEL"], sentinelPath.hasPrefix("/"),
               let outputPath = env["CAMCORD_STUDIO_OUTPUT"], outputPath.hasPrefix("/"),
               let commandPath = env["CAMCORD_STUDIO_PHASE_COMMAND"], commandPath.hasPrefix("/") else {
@@ -86,7 +117,7 @@ private final class StudioEvidenceDiagnostics: Sendable {
               try FileManager.default.contentsOfDirectory(atPath: output.path).isEmpty else {
             throw StudioEvidenceFailure.unsafePath
         }
-        try Self.preflight(sentinel: sentinel)
+        try Self.preflight(sentinel: sentinel, ownerPolicy: ownerPolicy)
         baselineFrontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
         baselineCursor = CGEvent(source: nil)?.location ?? .zero
         _ = NSApplication.shared
@@ -127,6 +158,7 @@ private final class StudioEvidenceDiagnostics: Sendable {
         let exactSourceID = CGWindowID(sourceWindowID)
         let exactPID = ProcessInfo.processInfo.processIdentifier
         let guardSentinel = sentinel
+        let guardOwnerPolicy = ownerPolicy
         let microphone = MicrophoneMonitor(operations: .init(authorize: { false }))
         let camera = CameraPreviewMonitor(operations: .init(authorize: { _ in false }, start: { _, _, _ in
             throw StudioEvidenceFailure.forbiddenResource
@@ -134,9 +166,9 @@ private final class StudioEvidenceDiagnostics: Sendable {
         session = StudioSession(defaults: isolated, controller: controller, recordingState: state, coordinator: coordinator,
             microphoneMonitor: microphone, cameraMonitor: camera,
             operations: .init(screenCaptureAuthorized: { CGPreflightScreenCaptureAccess() }, content: { _ in
-                try Self.preflight(sentinel: guardSentinel)
+                try Self.preflight(sentinel: guardSentinel, ownerPolicy: guardOwnerPolicy)
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-                try Self.preflight(sentinel: guardSentinel)
+                try Self.preflight(sentinel: guardSentinel, ownerPolicy: guardOwnerPolicy)
                 guard content.windows.contains(where: { $0.windowID == exactSourceID && $0.owningApplication?.processID == exactPID }) else {
                     throw StudioEvidenceFailure.sourceLost
                 }
@@ -157,10 +189,10 @@ private final class StudioEvidenceDiagnostics: Sendable {
         try publish()
     }
 
-    private static func preflight(sentinel: URL) throws {
+    private static func preflight(sentinel: URL, ownerPolicy: StudioEvidenceOwnerPolicy) throws {
         let facts = try sentinel.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
         guard facts.isRegularFile == true, facts.isSymbolicLink != true,
-              CGPreflightScreenCaptureAccess(), idleSeconds >= 600, !Task.isCancelled else {
+              CGPreflightScreenCaptureAccess(), ownerPolicy.permitsIdle(idleSeconds), !Task.isCancelled else {
             throw StudioEvidenceFailure.unsafeEnvironment
         }
     }
@@ -171,11 +203,12 @@ private final class StudioEvidenceDiagnostics: Sendable {
     }
 
     private func checkEnvironment() throws {
-        try Self.preflight(sentinel: sentinel)
+        try Self.preflight(sentinel: sentinel, ownerPolicy: ownerPolicy)
         guard output.path == LibraryFiles.physicalPath(output),
               !NSApp.isActive, !sourceWindow.isKeyWindow, !studioWindow.isKeyWindow,
-              (NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0) == baselineFrontmost,
-              CGEvent(source: nil)?.location == baselineCursor,
+              ownerPolicy.permitsActivity(idleSeconds: Self.idleSeconds,
+                frontmostUnchanged: (NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0) == baselineFrontmost,
+                cursorUnchanged: CGEvent(source: nil)?.location == baselineCursor),
               sourceWindow.isVisible, studioWindow.isVisible else { throw StudioEvidenceFailure.unsafeEnvironment }
         for window in [sourceWindow, studioWindow] {
             guard let rows = CGWindowListCopyWindowInfo([.optionIncludingWindow, .excludeDesktopElements], CGWindowID(window.windowNumber)) as? [[String: Any]],
@@ -314,8 +347,19 @@ private final class StudioEvidenceDiagnostics: Sendable {
     }
 
     private func note(_ event: String, facts: [String: Any] = [:]) {
-        chronology.append(facts.merging(["event": event, "phase": phase, "hostClockSeconds": CMClockGetTime(CMClockGetHostTimeClock()).seconds,
+        chronology.append(facts.merging(activityFacts) { _, current in current }.merging(["event": event, "phase": phase, "hostClockSeconds": CMClockGetTime(CMClockGetHostTimeClock()).seconds,
             "uptime": ProcessInfo.processInfo.systemUptime]) { _, new in new })
+    }
+
+    private var activityFacts: [String: Any] {
+        let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
+        let cursor = CGEvent(source: nil)?.location
+        return ["allowActiveOwner": ownerPolicy.allowActiveOwner,
+            "ownerActivityMode": ownerPolicy.allowActiveOwner ? "authorized-active-owner" : "strict-idle",
+            "idleSeconds": Self.idleSeconds, "frontmostPID": frontmost,
+            "cursor": cursor.map { [$0.x, $0.y] as Any } ?? NSNull(),
+            "frontmostUnchanged": frontmost == baselineFrontmost,
+            "cursorUnchanged": cursor == baselineCursor]
     }
 
     private func sampleCPU() {
@@ -344,18 +388,17 @@ private final class StudioEvidenceDiagnostics: Sendable {
             "sourceMarkerBits": 16, "sourceMarkerEncoding": "white=1/black=0, little-endian sequence, red/blue guard stripe",
             "sourceDisplayTicks": source.ticks, "sourcePaints": source.paints,
             "screenMaximumFramesPerSecond": studioWindow.screen?.maximumFramesPerSecond ?? 0,
-            "backingScale": studioWindow.backingScaleFactor, "idleSeconds": Self.idleSeconds,
+            "backingScale": studioWindow.backingScaleFactor,
             "previewHasFrame": session.previewHasFrame, "previewState": String(describing: session.previewState),
             "selectedSource": String(describing: session.selectedSource?.id), "nativeHostPresent": native != nil,
             "capturePreflight": CGPreflightScreenCaptureAccess(), "appActive": NSApp.isActive,
             "sourceKey": sourceWindow.isKeyWindow, "studioKey": studioWindow.isKeyWindow,
-            "frontmostPID": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0,
-            "cursor": [baselineCursor.x, baselineCursor.y], "recordingFile": finishedURL.map { $0.path as Any } ?? NSNull(),
+            "recordingFile": finishedURL.map { $0.path as Any } ?? NSNull(),
             "acceptedSourceBundle": acceptedSourceBundle.map { $0 as Any } ?? NSNull(),
             "finalRecordingHealth": controller.finalRecordingHealth.map(Self.finalHealth) ?? ["available": false],
             "actualVisualFPS": "UNMEASURED: external exact-owned-window video decoder required",
             "fileFacts": try fileFacts.map { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) } ?? NSNull()]
-        try Self.writeJSON(data, to: output.appendingPathComponent("ready.json"))
+        try Self.writeJSON(data.merging(activityFacts) { _, current in current }, to: output.appendingPathComponent("ready.json"))
         try Self.writeJSON(chronology, to: output.appendingPathComponent("chronology.json"))
         try Self.writeJSON(cpuSamples, to: output.appendingPathComponent("cpu.json"))
         try Self.writeJSON(diagnostics.snapshot(), to: output.appendingPathComponent("diagnostics.json"))

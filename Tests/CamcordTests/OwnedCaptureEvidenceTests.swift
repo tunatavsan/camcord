@@ -22,8 +22,9 @@ struct OwnedCaptureEvidenceTests {
         }
         if !NSRunningApplication.current.isFinishedLaunching { NSApp.finishLaunching() }
         let baseline = OwnedCaptureEnvironment()
-        guard baseline.frontmostPID == beforeApplication.frontmostPID,
-              baseline.mouse == beforeApplication.mouse else { throw OwnedCaptureFailure.environmentChanged }
+        guard configuration.ownerPolicy.permitsBaseline(
+            frontmostUnchanged: baseline.frontmostPID == beforeApplication.frontmostPID,
+            mouseUnchanged: baseline.mouse == beforeApplication.mouse) else { throw OwnedCaptureFailure.environmentChanged }
         try configuration.check(baseline: baseline)
 
         let suite = "camcord.owned-capture." + UUID().uuidString
@@ -56,6 +57,7 @@ struct OwnedCaptureEvidenceTests {
                 "executablePath": configuration.executable, "bundleIdentifier": Bundle.main.bundleIdentifier ?? "",
                 "beforeApplication": beforeApplication.json, "baseline": baseline.json,
                 "beforeCreate": beforeCreate.json, "beforeClose": beforeClose.json, "afterClose": afterClose.json,
+                "ownerActivity": configuration.activityFacts(baseline: baseline, current: afterClose),
                 "focusRepairAttempted": false,
             ], name: "closed.json")
         }
@@ -111,13 +113,15 @@ struct OwnedCaptureEvidenceTests {
         }
 
         func metadata() -> [String: Any] {
-            ["phase": phase, "pid": Int(configuration.pid), "windowID": windowID,
+            let current = OwnedCaptureEnvironment()
+            return ["phase": phase, "pid": Int(configuration.pid), "windowID": windowID,
              "executablePath": configuration.executable, "bundleIdentifier": Bundle.main.bundleIdentifier ?? "",
              "windowFrameCG": OwnedCaptureConfiguration.values(originalFrame),
              "windowFrameAppKit": OwnedCaptureConfiguration.values(window.frame),
              "visible": window.isVisible, "key": window.isKeyWindow,
              "beforeCreate": beforeCreate.json, "afterCreate": afterCreate.json, "afterPresent": afterPresent.json,
-             "baseline": baseline.json, "currentEnvironment": OwnedCaptureEnvironment().json,
+             "baseline": baseline.json, "currentEnvironment": current.json,
+             "ownerActivity": configuration.activityFacts(baseline: baseline, current: current),
              "activationPolicy": NSApp.activationPolicy().rawValue,
              "pasteboardName": board.name.rawValue, "saveToDisk": false, "deliveries": deliveries,
              "capturePNG": configuration.output.appendingPathComponent("capture.png").path,
@@ -198,6 +202,37 @@ private enum OwnedCaptureFailure: Error {
     case insufficientIdle, missingPermission, unsupportedCapture, startTimedOut, finishTimedOut
 }
 
+private struct OwnedCaptureOwnerPolicy: Sendable {
+    let allowActiveOwner: Bool
+    init(environment: [String: String]) {
+        allowActiveOwner = environment["CAMCORD_CAPTURE_ALLOW_ACTIVE_OWNER"] == "1"
+    }
+    func permitsBaseline(frontmostUnchanged: Bool, mouseUnchanged: Bool) -> Bool {
+        allowActiveOwner || (frontmostUnchanged && mouseUnchanged)
+    }
+    func permitsIdle(_ seconds: Double) -> Bool { allowActiveOwner || seconds >= 600 }
+}
+
+@Suite("Owned capture owner activity policy")
+struct OwnedCaptureEvidenceOwnerPolicyTests {
+    @Test("Only the explicit allowance bypasses owner activity checks")
+    func explicitAllowance() {
+        for value in [nil, "0", "true"] as [String?] {
+            let policy = OwnedCaptureOwnerPolicy(environment: value.map { ["CAMCORD_CAPTURE_ALLOW_ACTIVE_OWNER": $0] } ?? [:])
+            #expect(!policy.allowActiveOwner)
+            #expect(!policy.permitsIdle(599))
+            #expect(policy.permitsIdle(600))
+            #expect(!policy.permitsBaseline(frontmostUnchanged: false, mouseUnchanged: true))
+            #expect(!policy.permitsBaseline(frontmostUnchanged: true, mouseUnchanged: false))
+            #expect(policy.permitsBaseline(frontmostUnchanged: true, mouseUnchanged: true))
+        }
+        let authorized = OwnedCaptureOwnerPolicy(environment: ["CAMCORD_CAPTURE_ALLOW_ACTIVE_OWNER": "1"])
+        #expect(authorized.allowActiveOwner)
+        #expect(authorized.permitsIdle(0))
+        #expect(authorized.permitsBaseline(frontmostUnchanged: false, mouseUnchanged: false))
+    }
+}
+
 @MainActor private struct OwnedCaptureEnvironment {
     let mouse = NSEvent.mouseLocation
     let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1
@@ -213,6 +248,7 @@ private enum OwnedCaptureFailure: Error {
 @MainActor private struct OwnedCaptureConfiguration {
     let output: URL
     let sentinel: URL
+    let ownerPolicy: OwnedCaptureOwnerPolicy
     let pid = ProcessInfo.processInfo.processIdentifier
     let executable = Bundle.main.executableURL?.path ?? ""
     var startExists: Bool { (try? regular(output.appendingPathComponent("capture-start"))) == true }
@@ -220,6 +256,7 @@ private enum OwnedCaptureFailure: Error {
 
     init() throws {
         let environment = ProcessInfo.processInfo.environment
+        ownerPolicy = OwnedCaptureOwnerPolicy(environment: environment)
         let outputPath = try #require(environment["CAMCORD_CAPTURE_OUTPUT"])
         let sentinelPath = try #require(environment["CAMCORD_CAPTURE_GUI_SENTINEL"])
         guard outputPath.hasPrefix("/"), sentinelPath.hasPrefix("/") else { throw OwnedCaptureFailure.unsafePath }
@@ -246,9 +283,12 @@ private enum OwnedCaptureFailure: Error {
         guard (try? regular(sentinel)) == true else { throw OwnedCaptureFailure.inactiveSentinel }
         guard !NSApp.isActive, NSApp.activationPolicy() == .prohibited else { throw OwnedCaptureFailure.activeApplication }
         let current = OwnedCaptureEnvironment()
-        guard current.frontmostPID == baseline.frontmostPID, current.mouse == baseline.mouse,
+        guard ownerPolicy.permitsBaseline(frontmostUnchanged: current.frontmostPID == baseline.frontmostPID,
+                                         mouseUnchanged: current.mouse == baseline.mouse),
               Bundle.main.executableURL?.path == executable else { throw OwnedCaptureFailure.environmentChanged }
-        guard try hidIdleSeconds() >= 600 else { throw OwnedCaptureFailure.insufficientIdle }
+        if !ownerPolicy.allowActiveOwner {
+            guard try ownerPolicy.permitsIdle(hidIdleSeconds()) else { throw OwnedCaptureFailure.insufficientIdle }
+        }
         guard CGPreflightScreenCaptureAccess() else { throw OwnedCaptureFailure.missingPermission }
         if requireStart, !startExists { throw OwnedCaptureFailure.inactiveSentinel }
         if let window, let id {
@@ -279,6 +319,15 @@ private enum OwnedCaptureFailure: Error {
             throw OwnedCaptureFailure.insufficientIdle
         }
         return value.doubleValue / 1_000_000_000
+    }
+
+    func activityFacts(baseline: OwnedCaptureEnvironment, current: OwnedCaptureEnvironment) -> [String: Any] {
+        ["allowActiveOwner": ownerPolicy.allowActiveOwner,
+         "mode": ownerPolicy.allowActiveOwner ? "authorized-active-owner" : "strict-idle",
+         "hidIdleSeconds": (try? hidIdleSeconds()).map { $0 as Any } ?? NSNull(),
+         "frontmostPID": Int(current.frontmostPID), "mouseAppKit": [current.mouse.x, current.mouse.y],
+         "frontmostUnchanged": current.frontmostPID == baseline.frontmostPID,
+         "mouseUnchanged": current.mouse == baseline.mouse]
     }
 
     func write(_ value: [String: Any], name: String) throws {
