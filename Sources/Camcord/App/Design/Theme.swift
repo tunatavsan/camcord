@@ -9,6 +9,30 @@ import SwiftUI
 enum Theme {}
 
 extension Theme {
+    /// Opaque Settings forms from Graphite II; shared module chrome is unchanged.
+    enum Settings {
+        static let maximumWidth: CGFloat = 620
+        static let titleGap: CGFloat = 18
+        static let cardGap: CGFloat = 22
+        static let rowMinimum: CGFloat = 44
+        static let rowHorizontal: CGFloat = 14
+        static let rowVertical: CGFloat = 8
+        static let rowGap: CGFloat = 14
+        static let popupHeight: CGFloat = 26
+        static let popupRadius: CGFloat = 6
+        static let popupLeading: CGFloat = 10
+        static let popupTrailing: CGFloat = 8
+        static let popupGap: CGFloat = 6
+        static let popupMaximumWidth: CGFloat = 300
+        static let disabledOpacity: Double = 0.45
+        static let sliderWidth: CGFloat = 180
+        static let sliderHeight: CGFloat = 14
+        static let valueWidth: CGFloat = 64
+        static let permissionSymbol: CGFloat = 12
+    }
+}
+
+extension Theme {
     /// Library content geometry; chrome and materials remain system-owned.
     enum Library {
         static let badgeInk = SwiftUI.Color(nsColor: ThemeColor.RGBA(0xE8EAED).nsColor)

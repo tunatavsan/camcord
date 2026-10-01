@@ -11,15 +11,15 @@ struct FormPage<Content: View>: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: Theme.Space.xl) {
+            VStack(alignment: .leading, spacing: Theme.Settings.titleGap) {
                 Text(title)
                     .font(Theme.Font.display)
                     .tracking(Theme.Font.displayTracking)
                     .foregroundStyle(Theme.Palette.ink.color)
                     .accessibilityAddTraits(.isHeader)
-                content
+                VStack(alignment: .leading, spacing: Theme.Settings.cardGap) { content }
             }
-            .frame(maxWidth: 640, alignment: .leading)
+            .frame(maxWidth: Theme.Settings.maximumWidth, alignment: .leading)
             .padding(.horizontal, Theme.Space.xxl)
             .padding(.top, Theme.Space.l)
             .padding(.bottom, Theme.Space.xxl)
@@ -34,6 +34,7 @@ struct FormCard<Content: View>: View {
     var title: LocalizedStringResource?
     var footnote: LocalizedStringResource?
     @ViewBuilder var content: Content
+    @Environment(\.displayScale) private var displayScale
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -41,8 +42,7 @@ struct FormCard<Content: View>: View {
                 Text(title)
                     .font(Theme.Font.captionStrong)
                     .tracking(Theme.Font.headerTracking)
-                    .foregroundStyle(Theme.Palette.ink2.color)
-                    .padding(.leading, Theme.Space.xs)
+                    .foregroundStyle(Theme.Palette.ink3.color)
                     .accessibilityAddTraits(.isHeader)
             }
             VStack(spacing: 0) {
@@ -50,11 +50,11 @@ struct FormCard<Content: View>: View {
             }
             .background(Theme.Palette.surface.color, in: RoundedRectangle(cornerRadius: Theme.Radius.box, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: Theme.Radius.box, style: .continuous)
-                .strokeBorder(Theme.Palette.hairline.color))
+                .strokeBorder(Theme.Palette.hairline.color, lineWidth: 1 / max(1, displayScale)))
             if let footnote {
                 Text(footnote)
                     .font(Theme.Font.caption)
-                    .foregroundStyle(Theme.Palette.ink2.color)
+                    .foregroundStyle(Theme.Palette.ink3.color)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, Theme.Space.xs)
             }
@@ -69,14 +69,14 @@ struct FormRow<Control: View>: View {
     var note: LocalizedStringResource?
     var isFirst = false
     @ViewBuilder var control: Control
+    @Environment(\.displayScale) private var displayScale
 
     var body: some View {
         VStack(spacing: 0) {
             if !isFirst {
-                Rectangle().fill(Theme.Palette.hairline.color).frame(height: 1)
-                    .padding(.leading, Theme.Space.l)
+                Rectangle().fill(Theme.Palette.hairline.color).frame(height: 1 / max(1, displayScale))
             }
-            HStack(alignment: .center, spacing: Theme.Space.l) {
+            HStack(alignment: .center, spacing: Theme.Settings.rowGap) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(label)
                         .font(Theme.Font.body)
@@ -84,16 +84,15 @@ struct FormRow<Control: View>: View {
                     if let note {
                         Text(note)
                             .font(Theme.Font.caption)
-                            .foregroundStyle(Theme.Palette.ink2.color)
+                            .foregroundStyle(Theme.Palette.ink3.color)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                }
-                Spacer(minLength: Theme.Space.m)
-                control
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                control.layoutPriority(1)
             }
-            .padding(.horizontal, Theme.Space.l)
-            .padding(.vertical, Theme.Space.s + 2)
-            .frame(minHeight: 44)
+            .padding(.horizontal, Theme.Settings.rowHorizontal)
+            .padding(.vertical, Theme.Settings.rowVertical)
+            .frame(minHeight: Theme.Settings.rowMinimum)
         }
     }
 }

@@ -258,15 +258,21 @@ struct ValueSlider: View {
 
     var body: some View {
         HStack(spacing: Theme.Space.m) {
-            Slider(value: $value, in: range, step: step)
-                .frame(width: 180)
-                .accessibilityLabel(Text(label))
-                .accessibilityValue(Text(verbatim: format(value)))
+            SettingsNativeValueSlider(value: steppedValue, range: range, label: label, format: format)
+                .frame(width: Theme.Settings.sliderWidth, height: Theme.Settings.sliderHeight)
             Text(verbatim: format(value))
                 .font(Theme.Font.data)
                 .foregroundStyle(Theme.Palette.ink2.color)
-                .frame(minWidth: 64, alignment: .trailing)
+                .frame(minWidth: Theme.Settings.valueWidth, alignment: .trailing)
+                .accessibilityHidden(true)
         }
+    }
+
+    private var steppedValue: Binding<Double> {
+        Binding(get: { value }, set: { incoming in
+            let rounded = range.lowerBound + ((incoming - range.lowerBound) / step).rounded() * step
+            value = min(range.upperBound, max(range.lowerBound, rounded))
+        })
     }
 }
 

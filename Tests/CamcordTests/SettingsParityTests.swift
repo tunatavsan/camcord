@@ -14,6 +14,53 @@ import Testing
 struct SettingsParityTests {
     private static let suiteName = "camcord.settings.parity.test"
 
+    @Test("value sliders retain native callbacks, lower-origin steps and untouched stored values")
+    func nativeValueSlider() throws {
+        let cases: [(range: ClosedRange<Double>, step: Double, stored: Double, input: Double, expected: Double)] = [
+            (0...200, 5, 12.6, 12.6, 15),
+            (-60...12, 1, -7.6, -7.6, -8),
+            (0.08...0.60, 0.01, 0.197, 0.197, 0.20),
+            (0.13...0.43, 0.05, 0.204, 0.204, 0.18),
+            (0.13...0.43, 0.05, 0.2, -10, 0.13),
+            (0.13...0.43, 0.05, 0.2, 10, 0.43)
+        ]
+        for test in cases {
+            var value = test.stored
+            let binding = Binding(get: { value }, set: { value = $0 })
+            let host = NSHostingView(rootView: ValueSlider(value: binding, range: test.range, step: test.step,
+                format: { "Value \($0)" }, label: "Bit rate"))
+            host.frame = CGRect(x: 0, y: 0, width: 280, height: 44)
+            host.layoutSubtreeIfNeeded()
+            let slider = try #require(Self.nativeSliders(in: host).first)
+            #expect(value == test.stored, "rendering must not rewrite an existing non-lattice value")
+            #expect(slider.isEnabled && slider.isContinuous)
+            #expect(slider.numberOfTickMarks == 0 && !slider.allowsTickMarkValuesOnly)
+            #expect(slider.accessibilityRole() == .slider)
+            #expect(slider.accessibilityLabel() == "Bit rate")
+            #expect(slider.accessibilityValueDescription() == "Value \(test.stored)")
+            let target = try #require(slider.target as? NSObject)
+            let action = try #require(slider.action)
+            slider.doubleValue = test.input
+            _ = target.perform(action, with: slider)
+            #expect(abs(value - test.expected) < 0.000_001)
+        }
+        var disabledValue = 0.197
+        let disabled = NSHostingView(rootView: ValueSlider(
+            value: Binding(get: { disabledValue }, set: { disabledValue = $0 }), range: 0.08...0.60, step: 0.01,
+            format: { "\(Int(($0 * 100).rounded())) %" }, label: "Size").disabled(true))
+        disabled.frame = CGRect(x: 0, y: 0, width: 280, height: 44)
+        disabled.layoutSubtreeIfNeeded()
+        let slider = try #require(Self.nativeSliders(in: disabled).first)
+        #expect(!slider.isEnabled)
+        #expect(slider.accessibilityLabel() == "Size")
+        #expect(slider.accessibilityValueDescription() == "20 %")
+        #expect(disabledValue == 0.197)
+    }
+
+    private static func nativeSliders(in view: NSView) -> [NSSlider] {
+        (view as? NSSlider).map { [$0] } ?? view.subviews.flatMap(nativeSliders)
+    }
+
     /// Fields that are persisted but set by dragging on screen, never by a Settings control.
     static let draggedNotSet: Set<String> = ["recordingSettings.hubDock", "recordingSettings.camera.position"]
 
