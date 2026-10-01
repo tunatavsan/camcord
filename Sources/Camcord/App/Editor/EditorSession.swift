@@ -24,11 +24,23 @@ final class EditorSession {
     private(set) var pixelHex: String?
     private(set) var pixelLocation: CGPoint?
     var selectedID: UUID?
-    var tool = EditorTool.select
+    var tool = EditorTool.select {
+        didSet {
+            if !hasChosenLineWidth && (tool == .arrow || tool == .rectangle) {
+                style.lineWidth = tool == .arrow ? 6 : 4
+            }
+            if tool == .highlight && oldValue != .highlight && !hasChosenColor && style.color == .ink {
+                style.color = EditorRenderer.markerColor
+            }
+        }
+    }
     var style = EditorStyle()
-    @ObservationIgnored var canvasZoom: CGFloat = 1
+    private var hasChosenColor = false
+    private var hasChosenLineWidth = false
+    private(set) var canvasZoom: CGFloat = 1
     var zoom: CGFloat = 1
     var fitZoom = true
+    var showsBackgroundInspector = false
     var error: String?
     var pendingCapture: CapturedScreenshot?
     private(set) var pendingURL: URL?
@@ -57,7 +69,7 @@ final class EditorSession {
         self.defaults = defaults; self.worker = worker; self.temporaryExports = temporaryExports; self.pins = pins; self.clipboard = clipboard
         pins.claimClipboardPublication = { [weak self] in self?.claimPublication() ?? { false } }
         if let data = defaults?.data(forKey: "editor.backgroundStyle"), let value = try? JSONDecoder().decode(EditorBackground.self, from: data), value.valid { rememberedBackground = value }
-        if let data = defaults?.data(forKey: "editor.toolStyle"), let value = try? JSONDecoder().decode(EditorStyle.self, from: data), value.valid { style = value }
+        if let data = defaults?.data(forKey: "editor.toolStyle"), let value = try? JSONDecoder().decode(EditorStyle.self, from: data), value.valid { style = value; hasChosenColor = true; hasChosenLineWidth = true }
     }
     @discardableResult func open(_ capture: CapturedScreenshot) -> Bool {
         loadGeneration += 1; isLoading = false
@@ -68,7 +80,8 @@ final class EditorSession {
     }
     enum OpenOutcome: Equatable { case accepted, requiresDecision, superseded, failed(String) }
     @discardableResult func open(url: URL) async -> Bool { await requestOpen(url: url) == .accepted }
-    func requestOpen(url: URL) async -> OpenOutcome {
+    func requestOpen(url: URL, onlyIfEmpty: Bool = false) async -> OpenOutcome {
+        if onlyIfEmpty && document != nil { return .superseded }
         loadGeneration += 1; let generation = loadGeneration
         if hasUnsavedEdits { isLoading = false; pendingURL = url; pendingCapture = nil; error = EditorError.unsaved.localizedDescription; return .requiresDecision }
         let startingRevision = revision; isLoading = true
@@ -76,6 +89,7 @@ final class EditorSession {
             let value = try await worker.decode(url)
             guard generation == loadGeneration else { return .superseded }
             try Task.checkCancellation()
+            if onlyIfEmpty && document != nil { isLoading = false; return .superseded }
             if revision != startingRevision && hasUnsavedEdits {
                 pendingURL = url; self.error = EditorError.unsaved.localizedDescription; isLoading = false; return .requiresDecision
             }
@@ -177,7 +191,14 @@ final class EditorSession {
         setSelectionRect(rect)
     }
     func deleteSelected() { guard let selectedID else { return }; edit { $0.annotations.removeAll { $0.id == selectedID } }; self.selectedID = nil }
+    func chooseColor(_ color: EditorColor) { hasChosenColor = true; style.color = color }
+    func chooseLineWidth(_ width: Double) { hasChosenLineWidth = true; style.lineWidth = width }
     func rememberStyle() { guard style.valid, let data = try? JSONEncoder().encode(style) else { return }; defaults?.set(data, forKey: "editor.toolStyle") }
+    func reportCanvasZoom(_ value: CGFloat) {
+        guard value.isFinite, abs(canvasZoom - value) > 0.0001 else { return }
+        canvasZoom = value
+    }
+    func changeZoom(by factor: CGFloat) { fitZoom = false; zoom = min(16, max(0.02, canvasZoom * factor)) }
     func findSensitiveText() {
         guard let document else { return }
         ocrTask?.cancel(); hasScannedSensitiveText = false; suggestions = []; selectedSuggestions = []; isFindingText = true
@@ -199,6 +220,7 @@ final class EditorSession {
         let accepted = suggestions.filter { selectedSuggestions.contains($0.id) }
         edit { edits in edits.annotations += accepted.map { EditorAnnotation(kind: .redact, rect: $0.rect, style: EditorStyle(color: .black)) } }
     }
+    func dismissSuggestions() { suggestions = []; selectedSuggestions = []; hasScannedSensitiveText = false }
     func flattened() async throws -> EditorRendered {
         guard let document else { throw EditorError.invalidImage }
         let currentRevision = revision

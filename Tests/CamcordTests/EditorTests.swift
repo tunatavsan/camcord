@@ -1,12 +1,126 @@
 import AppKit
 import CoreGraphics
 import ImageIO
+import CoreImage
 import UniformTypeIdentifiers
 import Testing
 @testable import Camcord
 
 @Suite("Screenshot editor pixels and privacy")
 struct EditorRendererTests {
+    @Test("Multiply Highlight preserves the source red channel and dark text at real point density", arguments: [1, 2])
+    func multiplyHighlight(scale: Int) throws {
+        let context = try EditorRenderer.context(width: 80 * scale, height: 48 * scale)
+        context.setFillColor(CGColor(red: 249.0 / 255, green: 249.0 / 255, blue: 249.0 / 255, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 80 * scale, height: 48 * scale))
+        context.setFillColor(CGColor(gray: 0, alpha: 1))
+        context.fill(CGRect(x: 20 * scale, y: 20 * scale, width: 8 * scale, height: 8 * scale))
+        for color in [EditorRenderer.markerColor, EditorColor(red: 1, green: 0.5, blue: 0.2, alpha: 0.5)] {
+            var document = try EditorDocument(source: #require(context.makeImage()), pointSize: CGSize(width: 80, height: 48))
+            document.edits.annotations = [EditorAnnotation(kind: .highlight,
+                rect: CGRect(x: 4 * scale, y: 4 * scale, width: 72 * scale, height: 40 * scale), style: EditorStyle(color: color))]
+            let image = try EditorRenderer.render(document).image
+            let sample = try EditorRenderer.sample(image, at: CGPoint(x: 40 * scale, y: 24 * scale))
+            let red = try #require(Int(sample.dropFirst().prefix(2), radix: 16))
+            let green = try #require(Int(sample.dropFirst(3).prefix(2), radix: 16))
+            let blue = try #require(Int(sample.dropFirst(5).prefix(2), radix: 16))
+            let alpha = color.alpha
+            #expect(abs(red - 249) <= 1)
+            #expect(abs(green - Int((249 * (1 - alpha + alpha * color.green)).rounded())) <= 2)
+            #expect(abs(blue - Int((249 * (1 - alpha + alpha * color.blue)).rounded())) <= 2)
+            #expect(try EditorRenderer.sample(image, at: CGPoint(x: 24 * scale, y: 24 * scale)) == "#000000")
+        }
+    }
+    @Test("Arrow fill tapers into its head without a round shaft cap beyond the tip; Retina preserves point weight")
+    func arrowHeadAndPointWeight() throws {
+        func rendered(scale: Int) throws -> EditorRendered {
+            let source = try EditorRenderer.context(width: 160 * scale, height: 80 * scale)
+            source.setFillColor(CGColor(gray: 1, alpha: 1)); source.fill(CGRect(x: 0, y: 0, width: 160 * scale, height: 80 * scale))
+            var document = try EditorDocument(source: #require(source.makeImage()), pointSize: CGSize(width: 160, height: 80))
+            document.edits.annotations = [EditorAnnotation(kind: .arrow,
+                rect: CGRect(x: 20 * scale, y: 40 * scale, width: 100 * scale, height: scale), horizontalArrow: true)]
+            return try EditorRenderer.render(document)
+        }
+        func redPixels(_ image: CGImage) throws -> [CGPoint] {
+            let bitmap = try EditorRenderer.context(width: image.width, height: image.height)
+            bitmap.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            let data = try #require(bitmap.data?.assumingMemoryBound(to: UInt8.self))
+            return (0..<image.height).flatMap { y in
+                (0..<image.width).compactMap { x in
+                    let offset = y * bitmap.bytesPerRow + x * 4
+                    return data[offset] > 150 && data[offset + 1] < 100 && data[offset + 2] < 120
+                        ? CGPoint(x: x, y: y) : nil
+                }
+            }
+        }
+        let one = try redPixels(rendered(scale: 1).image), two = try redPixels(rendered(scale: 2).image)
+        #expect(!one.isEmpty && !two.isEmpty)
+        #expect(one.allSatisfy { $0.x < 120 })
+        #expect(two.allSatisfy { $0.x < 240 })
+        let oneWeight = one.filter { $0.x == 70 }.count, twoWeight = two.filter { $0.x == 140 }.count
+        #expect(oneWeight >= 2)
+        #expect(twoWeight >= oneWeight * 2 - 2)
+        let head = EditorRenderer.arrowPath(from: CGPoint(x: 20, y: 40), to: CGPoint(x: 120, y: 40), width: 4)
+        #expect(head.boundingBox.maxX <= 120)
+        #expect(head.boundingBox.height >= 14 && head.boundingBox.height < 16)
+        #expect(head.contains(CGPoint(x: 112, y: 40)))
+    }
+    @Test("Dark Highlight uses actual underlay luminance and keeps neutral source text above 4.5 contrast", arguments: [1, 2])
+    func darkHighlightContrast(scale: Int) throws {
+        let context = try EditorRenderer.context(width: 80 * scale, height: 48 * scale)
+        context.setFillColor(CGColor(srgbRed: 0.1, green: 0.1, blue: 0.1, alpha: 1)); context.fill(CGRect(x: 0, y: 0, width: 80 * scale, height: 48 * scale))
+        context.setFillColor(CGColor(gray: 0.94, alpha: 1)); context.fill(CGRect(x: 20 * scale, y: 20 * scale, width: 8 * scale, height: 8 * scale))
+        var document = try EditorDocument(source: #require(context.makeImage()), pointSize: CGSize(width: 80, height: 48))
+        document.edits.annotations = [EditorAnnotation(kind: .highlight, rect: CGRect(x: 4 * scale, y: 4 * scale, width: 72 * scale, height: 40 * scale), style: EditorStyle(color: EditorRenderer.markerColor))]
+        let image = try EditorRenderer.render(document).image
+        func channels(_ point: CGPoint) throws -> [Double] {
+            let hex = try EditorRenderer.sample(image, at: point)
+            return try [1, 3, 5].map { Double(try #require(Int(hex.dropFirst($0).prefix(2), radix: 16))) / 255 }
+        }
+        let background = try channels(CGPoint(x: 40 * scale, y: 24 * scale)), text = try channels(CGPoint(x: 24 * scale, y: 24 * scale))
+        let backgroundL = EditorRenderer.relativeLuminance(red: background[0], green: background[1], blue: background[2])
+        let textL = EditorRenderer.relativeLuminance(red: text[0], green: text[1], blue: text[2])
+        let contrast = (textL + 0.05) / (backgroundL + 0.05)
+        #expect(contrast >= 4.5)
+        print("Editor Highlight measured neutral-source contrast at \(scale)x: \(contrast)")
+        #expect(background[0] > 0.3 && background[1] > 0.25)
+        #expect(abs(background[0] - (0.1 * 0.68 + 0.32)) < 0.02)
+    }
+    @Test("Point-size effect parameters preserve actual blur and pixel-block footprint at Retina density", arguments: [EditorTool.blur, .pixelate])
+    func effectPointDensity(tool: EditorTool) throws {
+        if tool == .pixelate, let center = CIFilter(name: "CIPixellate")?.value(forKey: kCIInputCenterKey) as? CIVector {
+            print("Editor current CoreImage pixelate default center: \(center.x), \(center.y)")
+        }
+        func rendered(scale: Int) throws -> CGImage {
+            let context = try EditorRenderer.context(width: 96 * scale, height: 64 * scale)
+            context.setFillColor(CGColor(gray: 0, alpha: 1)); context.fill(CGRect(x: 0, y: 0, width: 96 * scale, height: 64 * scale))
+            if tool == .pixelate {
+                for x in 0..<96 {
+                    let gray = Double(x) / 95
+                    context.setFillColor(CGColor(srgbRed: gray, green: gray, blue: gray, alpha: 1))
+                    context.fill(CGRect(x: x * scale, y: 0, width: scale, height: 64 * scale))
+                }
+            } else {
+                context.setFillColor(CGColor(gray: 1, alpha: 1)); context.fill(CGRect(x: 32 * scale, y: 0, width: 32 * scale, height: 64 * scale))
+            }
+            var document = try EditorDocument(source: #require(context.makeImage()), pointSize: CGSize(width: 96, height: 64))
+            document.edits.annotations = [EditorAnnotation(kind: tool, rect: document.bounds, style: EditorStyle(effectSize: 12))]
+            return try EditorRenderer.render(document).image
+        }
+        let one = try rendered(scale: 1), two = try rendered(scale: 2)
+        let normalized = try EditorRenderer.context(width: 96, height: 64); normalized.interpolationQuality = .high
+        normalized.draw(two, in: CGRect(x: 0, y: 0, width: 96, height: 64))
+        let normalizedImage = try #require(normalized.makeImage())
+        var error = 0
+        for x in 8..<88 {
+            let a = try #require(Int(try EditorRenderer.sample(one, at: CGPoint(x: x, y: 32)).dropFirst().prefix(2), radix: 16))
+            let b = try #require(Int(try EditorRenderer.sample(normalizedImage, at: CGPoint(x: x, y: 32)).dropFirst().prefix(2), radix: 16))
+            error += abs(a - b)
+        }
+        let meanError = Double(error) / 80
+        print("Editor \(tool) actual normalized 1x/2x raster mean channel error: \(meanError)")
+        #expect(meanError < 4)
+    }
     static func image(width: Int = 16, height: Int = 12, secret: UInt8 = 255) throws -> CGImage {
         var bytes = [UInt8](repeating: 0, count: width * height * 4)
         for y in 0..<height { for x in 0..<width {
@@ -201,6 +315,51 @@ struct EditorSessionTests {
     private func capture() throws -> CapturedScreenshot {
         CapturedScreenshot(id: UUID(), image: try EditorRendererTests.image(), pointSize: CGSize(width: 8, height: 6), kind: .screenshot, saveToDiskRequested: false)
     }
+    @Test("Native scroll magnification keeps crop and background coordinates single-scaled and presentation clean")
+    func nativeCanvasMagnification() async throws {
+        let session = EditorSession()
+        session.open(try capture())
+        let cleanRevision = session.revision
+        session.fitZoom = false; session.zoom = 2
+        session.showsBackgroundInspector = true
+        session.style.lineWidth = 8
+        session.tool = .highlight
+        #expect(session.style.color == EditorRenderer.markerColor)
+        #expect(!session.hasUnsavedEdits)
+        #expect(session.revision == cleanRevision)
+        session.chooseColor(.ink)
+        session.tool = .select; session.tool = .highlight
+        session.add(tool: .highlight, from: .zero, to: CGPoint(x: 4, y: 4))
+        #expect(session.document?.edits.annotations.last?.style.color == .ink)
+        session.undo()
+        #expect(!session.hasUnsavedEdits)
+        #expect(session.revision > cleanRevision)
+        session.edit { $0.crop = CGRect(x: 2, y: 3, width: 10, height: 7); $0.background.preset = .paper; $0.background.padding = 12; $0.background.frameWidth = 1 }
+        await session.waitForRendering()
+        let scroll = EditorScrollNSView(frame: CGRect(x: 0, y: 0, width: 300, height: 240))
+        scroll.allowsMagnification = true; scroll.minMagnification = 0.02; scroll.maxMagnification = 16
+        let canvas = EditorCanvasNSView(); canvas.session = session; scroll.documentView = canvas
+        scroll.synchronize(viewport: scroll.contentSize)
+        #expect(scroll.magnification == 2)
+        #expect(canvas.zoom == 1)
+        let source = CGPoint(x: 6, y: 5)
+        let mapped = canvas.viewRect(CGRect(origin: source, size: CGSize(width: 1, height: 1)))
+        let clipPoint = scroll.contentView.convert(mapped.origin, from: canvas)
+        let documentPoint = canvas.convert(clipPoint, from: scroll.contentView)
+        let actual = try #require(canvas.sourcePoint(documentPoint))
+        #expect(abs(actual.x - source.x) < 0.0001 && abs(actual.y - source.y) < 0.0001)
+        #expect(abs(scroll.convert(mapped, from: canvas).width - 2) < 0.0001)
+        session.fitZoom = true
+        scroll.synchronize(viewport: scroll.contentSize)
+        let imageRect = canvas.viewRect(session.document!.edits.crop)
+        let fullImageWidth = canvas.imageSize.width * scroll.magnification
+        let fullImageHeight = canvas.imageSize.height * scroll.magnification
+        #expect(fullImageWidth <= scroll.contentSize.width - Theme.Editor.canvasMargin * 2 + 0.001)
+        #expect(fullImageHeight <= scroll.contentSize.height - Theme.Editor.canvasMargin * 2 + 0.001)
+        #expect(imageRect.width == 10)
+        session.undo(); #expect(!session.hasUnsavedEdits)
+        session.stop()
+    }
     @Test("Canvas accessibility edit actions reject missing selection and unchanged boundary edits")
     func accessibilitySelectionActions() throws {
         let canvas = EditorCanvasNSView()
@@ -295,7 +454,33 @@ struct EditorSessionTests {
         session.edit { $0.background.preset = .gradient; $0.background.padding = 28 }
         let second = EditorSession(defaults: defaults); second.open(try capture())
         #expect(second.style.lineWidth == 8); #expect(second.document?.edits.background.preset == .gradient); #expect(second.document?.edits.background.padding == 28)
+        second.tool = .highlight
+        #expect(second.style.color == session.style.color)
+        second.tool = .arrow; #expect(second.style.lineWidth == 8)
         session.stop(); second.stop()
+    }
+    @Test("Old tool styles retain values and new text capsule survives editing, undo and flattened export")
+    func compatibleTextBackground() async throws {
+        let legacy = Data(#"{"color":{"red":0.92,"green":0.18,"blue":0.22,"alpha":1},"lineWidth":4,"fontSize":28,"effectSize":12}"#.utf8)
+        let old = try JSONDecoder().decode(EditorStyle.self, from: legacy)
+        #expect(old.lineWidth == 4 && old.fontSize == 28 && old.effectSize == 12 && !old.textBackground)
+        let session = EditorSession(); session.open(try capture())
+        session.tool = .arrow; #expect(session.style.lineWidth == 6)
+        session.tool = .rectangle; #expect(session.style.lineWidth == 4)
+        session.chooseLineWidth(10); session.tool = .arrow; #expect(session.style.lineWidth == 10)
+        session.add(tool: .text, from: .zero, to: CGPoint(x: 10, y: 8))
+        let baseline = try await session.flattened().png
+        session.updateSelected { $0.style.textBackground = true }
+        #expect(session.hasUnsavedEdits)
+        let style = try #require(session.selectedAnnotation?.style)
+        #expect(try JSONDecoder().decode(EditorStyle.self, from: JSONEncoder().encode(style)) == style)
+        let changed = try await session.flattened().png
+        #expect(changed != baseline)
+        session.undo(); #expect(session.document?.edits.annotations.last?.style.textBackground == false)
+        #expect(try await session.flattened().png == baseline)
+        session.redo(); #expect(session.document?.edits.annotations.last?.style.textBackground == true)
+        #expect(try await session.flattened().png == changed)
+        session.stop()
     }
     @Test("Original-file aliases cannot be overwritten through export")
     func exportAliasGuard() async throws {
@@ -375,6 +560,27 @@ private actor EditorTestGate {
 
 @Suite("Screenshot editor asynchronous identity guards") @MainActor
 struct EditorIdentityTests {
+    @Test("Default latest load leaves existing clean or dirty documents untouched and loses delayed decode races")
+    func defaultEmptyOnly() async throws {
+        let gate = EditorTestGate(), delayed = try EditorDocument(source: EditorRendererTests.image())
+        let session = EditorSession(worker: EditorWorker(decoder: { _ in await gate.suspend(); return delayed }))
+        let url = URL(fileURLWithPath: "/unused-latest.png")
+        let loading = Task { await session.requestOpen(url: url, onlyIfEmpty: true) }
+        await gate.waitForStart()
+        let capture = CapturedScreenshot(id: UUID(), image: try EditorRendererTests.image(secret: 7), pointSize: CGSize(width: 8, height: 6), kind: .screenshot, saveToDiskRequested: false)
+        session.open(capture)
+        await gate.resume()
+        #expect(await loading.value == .superseded)
+        #expect(session.document?.id == capture.id)
+        #expect(session.pendingURL == nil && session.error == nil && !session.hasUnsavedEdits)
+        let revision = session.revision
+        #expect(await session.requestOpen(url: url, onlyIfEmpty: true) == .superseded)
+        #expect(session.revision == revision)
+        session.add(tool: .rectangle, from: .zero, to: CGPoint(x: 4, y: 4))
+        #expect(await session.requestOpen(url: url, onlyIfEmpty: true) == .superseded)
+        #expect(session.hasUnsavedEdits && session.pendingURL == nil && session.error == nil)
+        session.stop()
+    }
     @Test("Library validation order across open and drop rejects stale callbacks and stale errors", arguments: [true, false])
     func libraryOpenOrder(olderValid: Bool) async throws {
         let suite = "editor-library-open-" + UUID().uuidString

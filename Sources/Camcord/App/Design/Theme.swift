@@ -308,6 +308,33 @@ extension Theme {
         static let tileRadius: CGFloat = 14
         static let tileOffsetY: CGFloat = -6
     }
+
+    /// Editor chrome follows Graphite's 32-point keys and 4/8/12/16 spacing.
+    enum Editor {
+        static let toolWidth: CGFloat = 30
+        static let toolHeight: CGFloat = 32
+        static let symbol = SwiftUI.Font.system(size: 15, weight: .regular)
+        static let inspectorWidth: CGFloat = 280
+        static let swatchSize: CGFloat = 16
+        static let hitSize: CGFloat = 28
+        static let presetHeight: CGFloat = 28
+        static let thumbnailHeight: CGFloat = 68
+        static let canvasMargin: CGFloat = 32
+        static let shadowRadius: CGFloat = 12
+        static let shadowY: CGFloat = 4
+        static let shadowColor = ThemeColor("editorImageShadow", dark: C(0x000000, alpha: 0.18), light: C(0x000000, alpha: 0.12))
+        static let lineWidths: [Double] = [2, 4, 8]
+        static let arrowWidths: [Double] = [4, 6, 10]
+        static let textSizes: [Double] = [18, 28, 42]
+        static let effectSizes: [Double] = [6, 12, 24]
+        static let backgroundGraphite = EditorColor(red: 0.10, green: 0.11, blue: 0.13)
+        static let backgroundGradientEnd = EditorColor(red: 0.60, green: 0.67, blue: 0.79)
+        static let swatches: [EditorColor] = [.ink, .black, .paper,
+            EditorRenderer.markerColor,
+            EditorColor(red: 0.384, green: 0.706, blue: 0.549),
+            EditorColor(red: 0.298, green: 0.510, blue: 0.851),
+            EditorColor(red: 0.541, green: 0.420, blue: 0.867)]
+    }
 }
 
 // MARK: - Motion

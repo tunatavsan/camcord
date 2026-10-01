@@ -52,6 +52,13 @@ final class AppServices {
     lazy var studioPicker = StudioSourcePicker(session: studioSession, coordinator: coordinator,
                                               mainWindow: { [weak self] in self?.mainWindow })
 
+    /// Presentation-time convenience only; delayed decoding never replaces an existing document.
+    func openLatestEditorCaptureIfEmpty() async {
+        guard editor.document == nil, !Task.isCancelled else { return }
+        guard let item = library.items.first(where: { $0.kind != .recording }) else { return }
+        _ = await editor.requestOpen(url: item.url, onlyIfEmpty: true)
+    }
+
     /// Starts a capture from the main window: the window steps aside, the capture runs through
     /// the coordinator's own entry point, the window comes back.
     func capture(_ kind: CaptureKind) {

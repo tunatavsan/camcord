@@ -27,6 +27,19 @@ struct EditorStyle: Codable, Equatable, Sendable {
     var lineWidth: Double = 4
     var fontSize: Double = 28
     var effectSize: Double = 12
+    var textBackground = false
+    private enum CodingKeys: String, CodingKey { case color, lineWidth, fontSize, effectSize, textBackground }
+    init(color: EditorColor = .ink, lineWidth: Double = 4, fontSize: Double = 28, effectSize: Double = 12, textBackground: Bool = false) {
+        self.color = color; self.lineWidth = lineWidth; self.fontSize = fontSize; self.effectSize = effectSize; self.textBackground = textBackground
+    }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        color = try values.decode(EditorColor.self, forKey: .color)
+        lineWidth = try values.decode(Double.self, forKey: .lineWidth)
+        fontSize = try values.decode(Double.self, forKey: .fontSize)
+        effectSize = try values.decode(Double.self, forKey: .effectSize)
+        textBackground = try values.decodeIfPresent(Bool.self, forKey: .textBackground) ?? false
+    }
     var valid: Bool { color.valid && lineWidth.isFinite && (1...100).contains(lineWidth) && fontSize.isFinite && (8...400).contains(fontSize) && effectSize.isFinite && (2...100).contains(effectSize) }
 }
 

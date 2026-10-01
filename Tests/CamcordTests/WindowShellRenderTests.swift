@@ -43,6 +43,8 @@ private struct ShellConfiguration {
     let appearance: NSAppearance.Name
     let module: ModuleID
     let emptyLibrary: Bool
+    let editorState: String
+    let editorSampleSheet: Bool
     var finish: URL { output.appendingPathComponent("finish") }
     var isAuthorized: Bool { FileManager.default.fileExists(atPath: sentinel.path) }
 
@@ -61,8 +63,11 @@ private struct ShellConfiguration {
         size = environment["CAMCORD_SHELL_SIZE"] == "small"
             ? CGSize(width: 980, height: 640) : CGSize(width: 1180, height: 772)
         appearance = environment["CAMCORD_SHELL_APPEARANCE"] == "light" ? .aqua : .darkAqua
-        module = environment["CAMCORD_SHELL_MODULE"] == "settings" ? .settings : .library
-        emptyLibrary = environment["CAMCORD_SHELL_LIBRARY"] == "empty"
+        module = environment["CAMCORD_SHELL_MODULE"] == "edit" ? .edit
+            : environment["CAMCORD_SHELL_MODULE"] == "settings" ? .settings : .library
+        editorState = environment["CAMCORD_EDITOR_STATE"] ?? "loaded"
+        editorSampleSheet = environment["CAMCORD_EDITOR_SAMPLE_SHEET"] == "1"
+        emptyLibrary = environment["CAMCORD_SHELL_LIBRARY"] == "empty" || module == .edit && editorState == "empty"
     }
 }
 
@@ -97,6 +102,12 @@ private final class ShellFixture {
             }
         }
         ownedImages = images
+        if configuration.module == .edit && configuration.editorSampleSheet {
+            try ShellAnnotationSheet.write(scale: 1, to: configuration.output.appendingPathComponent("annotations-1x.png"))
+            try ShellAnnotationSheet.write(scale: 2, to: configuration.output.appendingPathComponent("annotations-2x.png"))
+            try ShellAnnotationSheet.write(scale: 1, to: configuration.output.appendingPathComponent("text-background-1x.png"), textBackgroundOnly: true)
+            try ShellAnnotationSheet.write(scale: 2, to: configuration.output.appendingPathComponent("text-background-2x.png"), textBackgroundOnly: true)
+        }
         var screenshot = ScreenshotSettings()
         screenshot.saveDirectoryPath = captures.path
         screenshot.save(to: defaults)
@@ -138,6 +149,29 @@ private final class ShellFixture {
             Issue.record("Shell evidence must not discover screen sources"); throw CocoaError(.featureUnsupported)
         }))
         let editor = EditorSession(defaults: defaults)
+        if configuration.module == .edit && configuration.editorState != "empty" && configuration.editorState != "recent" {
+            let url = configuration.output.appendingPathComponent("Editor reference.png")
+            try ShellCaptureImage.write(index: 0, title: "Screenshot review", to: url)
+            #expect(await editor.open(url: url))
+            editor.tool = .arrow
+            editor.add(tool: .arrow, from: CGPoint(x: 160, y: 160), to: CGPoint(x: 320, y: 220))
+            editor.tool = .step
+            editor.add(tool: .step, from: CGPoint(x: 430, y: 180), to: CGPoint(x: 478, y: 228))
+            editor.add(tool: .text, from: CGPoint(x: 100, y: 430), to: CGPoint(x: 450, y: 478))
+            editor.updateSelected { $0.text = "Ready for review" }
+            editor.add(tool: .redact, from: CGPoint(x: 560, y: 300), to: CGPoint(x: 760, y: 332))
+            editor.selectedID = nil
+            editor.tool = configuration.editorState == "style" ? .arrow : .select
+            if configuration.editorState == "background" {
+                editor.edit { $0.background.preset = .gradient; $0.background.padding = 32 }
+                editor.showsBackgroundInspector = true
+            }
+            _ = try await editor.flattened()
+            // Wait for the same revision-owned preview used by the product canvas.
+            let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+            while editor.preview == nil && ContinuousClock.now < deadline { await Task.yield() }
+            _ = try #require(editor.preview)
+        }
         let eventTap = EventTapEngine(coordinator: coordinator, recordingController: recordingController,
                                      buttonIsDown: { _ in false }, monitorsLifecycle: false)
         services = AppServices(defaults: defaults, coordinator: coordinator, recordingController: recordingController,
@@ -258,6 +292,18 @@ private final class ShellFixture {
             "sidebarContentWidth": Theme.Navigation.sidebarWidth,
             "referenceSidebarBoundary": Theme.Navigation.sidebarBoundary,
             "measuredNativeSidebarInset": Theme.Navigation.nativeSidebarInset
+            , "editorState": configuration.editorState,
+            "editorDimensions": services.editor.document.map { [$0.source.width, $0.source.height] } ?? [],
+            "editorAnnotations": services.editor.document?.edits.annotations.count ?? 0,
+            "editorZoom": services.editor.canvasZoom,
+            "editorDirty": services.editor.hasUnsavedEdits,
+            "nativeDocumentEdited": window.isDocumentEdited
+            , "annotationSampleSheets": configuration.editorSampleSheet ? [
+                ["file": "annotations-1x.png", "physicalSize": [940, 1840], "pointSize": [940, 1840], "scale": 1],
+                ["file": "annotations-2x.png", "physicalSize": [1880, 3680], "pointSize": [940, 1840], "scale": 2],
+                ["file": "text-background-1x.png", "physicalSize": [940, 220], "pointSize": [940, 220], "scale": 1],
+                ["file": "text-background-2x.png", "physicalSize": [1880, 440], "pointSize": [940, 220], "scale": 2]
+            ] : []
         ]
         try write(metadata, to: "state.json")
         if let root = window.contentView?.superview ?? window.contentView {
@@ -386,5 +432,86 @@ private enum ShellCaptureImage {
         let destination = try #require(CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil))
         CGImageDestinationAddImage(destination, image, nil)
         #expect(CGImageDestinationFinalize(destination))
+    }
+}
+
+/// Owned three-background raster samples exercise the actual export renderer, without a UI or owner data.
+private enum ShellAnnotationSheet {
+    static func write(scale: Int, to url: URL, textBackgroundOnly: Bool = false) throws {
+        let cell = CGSize(width: 280, height: 140), rowHeight = 180
+        let tools: [EditorTool] = textBackgroundOnly ? [.text] : EditorTool.allCases
+        let width = 940, height = 40 + tools.count * rowHeight
+        let sheet = try EditorRenderer.context(width: width * scale, height: height * scale)
+        sheet.scaleBy(x: CGFloat(scale), y: CGFloat(scale))
+        sheet.setFillColor(CGColor(gray: 0.94, alpha: 1))
+        sheet.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        for (column, title) in ["Light UI", "Dark UI", "Busy neutral fixture"].enumerated() {
+            label(title, at: CGPoint(x: 20 + column * 310, y: height - 24), context: sheet)
+        }
+        for (row, tool) in tools.enumerated() {
+            let bottom = height - 40 - (row + 1) * rowHeight
+            for column in 0..<3 {
+                let source = try background(kind: column, scale: scale, size: cell)
+                var document = try EditorDocument(source: source, pointSize: cell)
+                let factor = CGFloat(scale)
+                func scaled(_ rect: CGRect) -> CGRect {
+                    CGRect(x: rect.minX * factor, y: rect.minY * factor, width: rect.width * factor, height: rect.height * factor)
+                }
+                let rect: CGRect
+                switch tool {
+                case .arrow: rect = CGRect(x: 24, y: 40, width: 220, height: 55)
+                case .text: rect = CGRect(x: 20, y: 25, width: 245, height: 90)
+                case .step: rect = CGRect(x: 116, y: 46, width: 48, height: 48)
+                case .highlight: rect = CGRect(x: 20, y: 54, width: 240, height: 27)
+                case .redact: rect = CGRect(x: 40, y: 67, width: 200, height: 24)
+                default: rect = CGRect(x: 30, y: 28, width: 220, height: 88)
+                }
+                if tool == .crop { document.edits.crop = scaled(CGRect(x: 20, y: 20, width: 240, height: 100)) }
+                else if tool != .select {
+                    document.edits.annotations = [EditorAnnotation(kind: tool, rect: scaled(rect),
+                        style: EditorStyle(color: tool == .highlight ? EditorRenderer.markerColor : .ink, lineWidth: tool == .arrow ? 6 : 4, textBackground: textBackgroundOnly),
+                        text: "Ready to share\nMake the point clear", stepNumber: 3, reversedY: true)]
+                }
+                let rendered = try EditorRenderer.render(document)
+                let fit = min(cell.width / rendered.pointSize.width, cell.height / rendered.pointSize.height)
+                let display = CGSize(width: rendered.pointSize.width * fit, height: rendered.pointSize.height * fit)
+                sheet.draw(rendered.image, in: CGRect(x: CGFloat(20 + column * 310) + (cell.width - display.width) / 2,
+                    y: CGFloat(bottom + 26) + (cell.height - display.height) / 2, width: display.width, height: display.height))
+                label(tool.rawValue + " · " + String(scale) + "×", at: CGPoint(x: 20 + column * 310, y: bottom + 6), context: sheet)
+            }
+        }
+        let image = try #require(sheet.makeImage())
+        try EditorRendered(image: image, pointSize: CGSize(width: width, height: height)).png.write(to: url)
+    }
+    private static func background(kind: Int, scale: Int, size: CGSize) throws -> CGImage {
+        let context = try EditorRenderer.context(width: Int(size.width) * scale, height: Int(size.height) * scale)
+        context.scaleBy(x: CGFloat(scale), y: CGFloat(scale))
+        if kind == 2 {
+            let colors = [CGColor(srgbRed: 0.34, green: 0.54, blue: 0.63, alpha: 1),
+                          CGColor(srgbRed: 0.82, green: 0.62, blue: 0.46, alpha: 1)]
+            let gradient = try #require(CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: colors as CFArray, locations: [0, 1]))
+            context.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: size.width, y: size.height), options: [])
+            for i in 0..<12 {
+                context.setFillColor(CGColor(gray: i.isMultiple(of: 2) ? 0.95 : 0.12, alpha: 0.22))
+                context.fillEllipse(in: CGRect(x: i * 24 - 10, y: (i % 3) * 45 - 14, width: 90, height: 80))
+            }
+        } else {
+            context.setFillColor(CGColor(gray: kind == 0 ? 0.97 : 0.10, alpha: 1))
+            context.fill(CGRect(origin: .zero, size: size))
+        }
+        context.setFillColor(CGColor(gray: kind == 1 ? 0.38 : 0.84, alpha: 1))
+        context.fill(CGRect(x: 12, y: 108, width: 256, height: 20))
+        label("Review screenshot", at: CGPoint(x: 20, y: 86), context: context, light: kind == 1)
+        label("Visible source text stays clear", at: CGPoint(x: 20, y: 63), context: context, light: kind == 1)
+        label("Shared with the team", at: CGPoint(x: 20, y: 40), context: context, light: kind == 1)
+        return try #require(context.makeImage())
+    }
+    private static func label(_ text: String, at point: CGPoint, context: CGContext, light: Bool = false) {
+        let font = CTFontCreateUIFontForLanguage(.system, 13, nil)!
+        let string = NSAttributedString(string: text, attributes: [
+            NSAttributedString.Key(kCTFontAttributeName as String): font,
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: light ? 0.9 : 0.15, alpha: 1)])
+        context.textPosition = point
+        CTLineDraw(CTLineCreateWithAttributedString(string), context)
     }
 }

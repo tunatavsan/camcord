@@ -122,6 +122,24 @@ struct MainWindowView: View {
         .modifier(EditorOpeningConfirmationModifier(session: services?.editor))
         .environment(\.mainWindowModel, model)
         .environment(\.mainWindowLifecycle, lifecycle)
+        .background(EditorDocumentEditedBridge(edited: services?.editor.hasUnsavedEdits == true)
+            .frame(width: 0, height: 0))
+    }
+}
+
+private struct EditorDocumentEditedBridge: NSViewRepresentable {
+    let edited: Bool
+    func makeNSView(context: Context) -> EditedDocumentView { EditedDocumentView() }
+    func updateNSView(_ view: EditedDocumentView, context: Context) {
+        view.edited = edited
+        view.window?.isDocumentEdited = edited
+    }
+    final class EditedDocumentView: NSView {
+        var edited = false
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            window?.isDocumentEdited = edited
+        }
     }
 }
 

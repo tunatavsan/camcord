@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import CoreImage
 import CoreText
@@ -64,6 +65,7 @@ struct EditorRendered: Sendable {
 
 /// System-only, off-main renderer. Sanitization precedes cropping and every derived effect.
 enum EditorRenderer {
+    static let markerColor = EditorColor(red: 1, green: 224.0 / 255, blue: 58.0 / 255)
     static func isSourceDestination(_ destination: URL, source: URL?) -> Bool {
         guard let source else { return false }
         if destination.standardizedFileURL == source.standardizedFileURL { return true }
@@ -128,6 +130,8 @@ enum EditorRenderer {
         guard document.edits.valid else { throw EditorError.invalidEdits }
         try EditorGeometry.validateDimensions(width: document.source.width, height: document.source.height, pixels: 50_000_000)
         let bounds = document.bounds
+        let pixelScale = CGSize(width: CGFloat(document.source.width) / document.pointSize.width, height: CGFloat(document.source.height) / document.pointSize.height)
+        let effectScale = sqrt(pixelScale.width * pixelScale.height)
         let crop = EditorGeometry.pixelRect(document.edits.crop, bounds: bounds)
         guard !crop.isNull, !crop.isEmpty else { throw EditorError.invalidEdits }
         let background = document.edits.background
@@ -158,7 +162,11 @@ enum EditorRenderer {
             let input = CIImage(cgImage: cropped)
             let name = annotation.kind == .blur ? "CIGaussianBlur" : "CIPixellate"
             let key = annotation.kind == .blur ? kCIInputRadiusKey : kCIInputScaleKey
-            let filtered = input.clampedToExtent().applyingFilter(name, parameters: [key: annotation.style.effectSize]).cropped(to: input.extent)
+            var parameters: [String: Any] = [key: annotation.style.effectSize * effectScale]
+            if annotation.kind == .pixelate, let center = CIFilter(name: name)?.value(forKey: kCIInputCenterKey) as? CIVector {
+                parameters[kCIInputCenterKey] = CIVector(x: center.x * pixelScale.width, y: center.y * pixelScale.height)
+            }
+            let filtered = input.clampedToExtent().applyingFilter(name, parameters: parameters).cropped(to: input.extent)
             let effectBounds = rect.integral.intersection(input.extent)
             guard let image = ciContext.createCGImage(filtered, from: effectBounds) else { throw EditorError.render }
             imageContext.saveGState(); imageContext.clip(to: rect)
@@ -168,7 +176,12 @@ enum EditorRenderer {
         imageContext.saveGState(); imageContext.translateBy(x: -crop.minX, y: crop.height + crop.minY); imageContext.scaleBy(x: 1, y: -1)
         for annotation in document.edits.annotations where ![.redact, .blur, .pixelate].contains(annotation.kind) {
             try Task.checkCancellation()
-            draw(annotation, context: imageContext)
+            var luminance = 1.0
+            if annotation.kind == .highlight,
+               let underlay = imageContext.makeImage()?.cropping(to: annotation.rect.intersection(crop).offsetBy(dx: -crop.minX, dy: -crop.minY)) {
+                luminance = try meanLuminance(underlay)
+            }
+            draw(annotation, context: imageContext, pixelScale: pixelScale, underlyingLuminance: luminance)
         }
         imageContext.restoreGState()
         guard let image = imageContext.makeImage() else { throw EditorError.render }
@@ -195,33 +208,142 @@ enum EditorRenderer {
         return EditorRendered(image: result, pointSize: CGSize(width: CGFloat(width) * scaleX, height: CGFloat(height) * scaleY))
     }
 
-    private static func draw(_ annotation: EditorAnnotation, context: CGContext) {
+    /// All presentation widths/fonts/shadows are points; persistent rectangles remain source pixels.
+    static func draw(_ annotation: EditorAnnotation, context: CGContext, pixelScale: CGSize = CGSize(width: 1, height: 1), underlyingLuminance: Double = 1) {
         context.saveGState(); defer { context.restoreGState() }
-        let rect = annotation.rect, style = annotation.style
-        context.setStrokeColor(style.color.cgColor); context.setFillColor(style.color.cgColor); context.setLineWidth(style.lineWidth); context.setLineCap(.round); context.setLineJoin(.round)
+        context.scaleBy(x: pixelScale.width, y: pixelScale.height)
+        let source = annotation.rect
+        let rect = CGRect(x: source.minX / pixelScale.width, y: source.minY / pixelScale.height,
+                          width: source.width / pixelScale.width, height: source.height / pixelScale.height)
+        let style = annotation.style, width = CGFloat(style.lineWidth)
+        context.setStrokeColor(style.color.cgColor); context.setFillColor(style.color.cgColor)
+        context.setLineWidth(width); context.setLineCap(.round); context.setLineJoin(.round)
+        // Quartz shadows use base-space distances, independent of the drawing CTM.
+        context.setShadow(offset: CGSize(width: 0, height: pixelScale.height), blur: 3 * sqrt(pixelScale.width * pixelScale.height),
+                          color: CGColor(gray: 0, alpha: 0.28))
         switch annotation.kind {
-        case .rectangle: context.stroke(rect)
-        case .highlight: context.setAlpha(0.30 * style.color.alpha); context.fill(rect)
+        case .rectangle:
+            let radius = min(width * 1.5, min(rect.width, rect.height) / 2)
+            context.addPath(CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil))
+            context.strokePath()
+        case .highlight:
+            context.setShadow(offset: .zero, blur: 0, color: nil)
+            context.setBlendMode(underlyingLuminance > 0.5 ? .multiply : .normal)
+            context.setFillColor(style.color.cgColor)
+            context.setAlpha(underlyingLuminance > 0.5 ? 1 : 0.32)
+            let radius = min(3, rect.height * 0.12)
+            context.addPath(CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil))
+            context.fillPath()
         case .arrow:
             let start = CGPoint(x: annotation.verticalArrow ? rect.midX : (annotation.reversedX ? rect.maxX : rect.minX), y: annotation.horizontalArrow ? rect.midY : (annotation.reversedY ? rect.maxY : rect.minY))
             let end = CGPoint(x: annotation.verticalArrow ? rect.midX : (annotation.reversedX ? rect.minX : rect.maxX), y: annotation.horizontalArrow ? rect.midY : (annotation.reversedY ? rect.minY : rect.maxY))
-            let angle = atan2(end.y - start.y, end.x - start.x), size = max(12, style.lineWidth * 4)
-            context.move(to: start); context.addLine(to: end); context.strokePath()
-            context.move(to: end); context.addLine(to: CGPoint(x: end.x - cos(angle - .pi / 6) * size, y: end.y - sin(angle - .pi / 6) * size)); context.addLine(to: CGPoint(x: end.x - cos(angle + .pi / 6) * size, y: end.y - sin(angle + .pi / 6) * size)); context.closePath(); context.fillPath()
-        case .text: drawText(annotation.text, rect: rect, size: style.fontSize, color: style.color.cgColor, context: context)
+            context.addPath(arrowPath(from: start, to: end, width: width))
+            context.fillPath()
+        case .text:
+            context.setShadow(offset: CGSize(width: 0, height: pixelScale.height), blur: 2 * sqrt(pixelScale.width * pixelScale.height), color: CGColor(gray: 0, alpha: 0.35))
+            if style.textBackground {
+                context.addPath(CGPath(roundedRect: rect, cornerWidth: 6, cornerHeight: 6, transform: nil)); context.fillPath()
+                context.setShadow(offset: .zero, blur: 0, color: nil)
+                drawText(annotation.text, rect: rect.insetBy(dx: 8, dy: 4), size: style.fontSize, color: CGColor(gray: 1, alpha: 1), context: context)
+            } else {
+                drawText(annotation.text, rect: rect, size: style.fontSize, color: style.color.cgColor, context: context, outlined: true)
+            }
         case .step:
-            context.fillEllipse(in: rect)
-            drawText(String(annotation.stepNumber), rect: rect, size: min(rect.height * 0.65, style.fontSize), color: EditorColor.paper.cgColor, context: context, centered: true)
+            let diameter = min(rect.width, rect.height)
+            let circle = CGRect(x: rect.midX - diameter / 2, y: rect.midY - diameter / 2, width: diameter, height: diameter)
+            context.fillEllipse(in: circle)
+            context.setShadow(offset: .zero, blur: 0)
+            context.setStrokeColor(CGColor(gray: 1, alpha: 1)); context.setLineWidth(2)
+            context.strokeEllipse(in: circle.insetBy(dx: 1, dy: 1))
+            drawText(String(annotation.stepNumber), rect: circle,
+                     size: min(diameter * 0.65, style.fontSize), color: CGColor(gray: 1, alpha: 1),
+                     context: context, centered: true)
         default: break
         }
     }
-    private static func drawText(_ text: String, rect: CGRect, size: CGFloat, color: CGColor, context: CGContext, centered: Bool = false) {
-        let font = CTFontCreateWithName("Helvetica" as CFString, size, nil)
-        let string = NSAttributedString(string: text, attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font, NSAttributedString.Key(kCTForegroundColorAttributeName as String): color])
-        let line = CTLineCreateWithAttributedString(string)
-        let width = CTLineGetTypographicBounds(line, nil, nil, nil)
-        context.saveGState(); context.translateBy(x: rect.minX, y: rect.minY + (centered ? (rect.height + size * 0.7) / 2 : size)); context.scaleBy(x: 1, y: -1)
-        context.textPosition = CGPoint(x: centered ? (rect.width - width) / 2 : 0, y: 0); CTLineDraw(line, context); context.restoreGState()
+
+    /// A single rounded filled silhouette: the shaft joins the head base and never reaches the tip.
+    static func arrowPath(from start: CGPoint, to end: CGPoint, width: CGFloat) -> CGPath {
+        let dx = end.x - start.x, dy = end.y - start.y, length = hypot(dx, dy)
+        guard length > 0, width > 0 else { return CGMutablePath() }
+        let u = CGPoint(x: dx / length, y: dy / length), n = CGPoint(x: -u.y, y: u.x)
+        let headHalf = min(width * 1.85, length * 0.35)
+        let headLength = min(width * 3, length * 0.65)
+        let base = CGPoint(x: end.x - u.x * headLength, y: end.y - u.y * headLength)
+        func offset(_ p: CGPoint, _ d: CGFloat) -> CGPoint { CGPoint(x: p.x + n.x * d, y: p.y + n.y * d) }
+        let points = [offset(start, width * 0.2), offset(base, width * 0.5), offset(base, headHalf), end,
+                      offset(base, -headHalf), offset(base, -width * 0.5), offset(start, -width * 0.2)]
+        let path = CGMutablePath()
+        let round = min(width * 0.16, length * 0.02)
+        func corner(_ index: Int) -> (CGPoint, CGPoint) {
+            let p = points[index], before = points[(index + points.count - 1) % points.count], after = points[(index + 1) % points.count]
+            func toward(_ q: CGPoint) -> CGPoint {
+                let distance = hypot(q.x - p.x, q.y - p.y), amount = min(round, distance / 3)
+                return CGPoint(x: p.x + (q.x - p.x) * amount / max(distance, 0.0001),
+                               y: p.y + (q.y - p.y) * amount / max(distance, 0.0001))
+            }
+            return (toward(before), toward(after))
+        }
+        path.move(to: corner(0).1)
+        for index in 1...points.count {
+            let i = index % points.count, c = corner(i)
+            path.addLine(to: c.0); path.addQuadCurve(to: c.1, control: points[i])
+        }
+        path.closeSubpath()
+        return path
+    }
+
+    private static func drawText(_ text: String, rect: CGRect, size: CGFloat, color: CGColor,
+                                 context: CGContext, centered: Bool = false, outlined: Bool = false) {
+        let system = NSFont.systemFont(ofSize: size, weight: centered ? .bold : .semibold)
+        let font = centered ? NSFont(descriptor: system.fontDescriptor.withDesign(.rounded) ?? system.fontDescriptor, size: size) ?? system : system
+        let attributes: [NSAttributedString.Key: Any] = [
+            NSAttributedString.Key(kCTFontAttributeName as String): font,
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): color
+        ]
+        context.saveGState(); defer { context.restoreGState() }
+        // CoreText is y-up; the editor vectors are top-left, y-down.
+        context.translateBy(x: rect.minX, y: rect.maxY); context.scaleBy(x: 1, y: -1)
+        context.textMatrix = .identity
+        if centered {
+            let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: attributes))
+            let glyphs = CTLineGetBoundsWithOptions(line, [.useGlyphPathBounds])
+            context.textPosition = CGPoint(x: (rect.width - glyphs.width) / 2 - glyphs.minX,
+                                           y: (rect.height - glyphs.height) / 2 - glyphs.minY)
+            CTLineDraw(line, context)
+        } else {
+            let string = NSAttributedString(string: text, attributes: attributes)
+            let setter = CTFramesetterCreateWithAttributedString(string)
+            let path = CGPath(rect: CGRect(origin: .zero, size: rect.size), transform: nil)
+            if outlined {
+                let components = color.components ?? [1, 1, 1, 1]
+                let light = components.prefix(3).reduce(0, +) / 3 > 0.5
+                var outlineAttributes = attributes
+                outlineAttributes[NSAttributedString.Key(kCTStrokeWidthAttributeName as String)] = 75 / size
+                outlineAttributes[NSAttributedString.Key(kCTStrokeColorAttributeName as String)] = CGColor(gray: light ? 0 : 1, alpha: 0.95)
+                let outline = CTFramesetterCreateWithAttributedString(NSAttributedString(string: text, attributes: outlineAttributes))
+                context.saveGState(); context.setShadow(offset: .zero, blur: 0, color: nil)
+                CTFrameDraw(CTFramesetterCreateFrame(outline, CFRange(), path, nil), context)
+                context.restoreGState()
+            }
+            CTFrameDraw(CTFramesetterCreateFrame(setter, CFRange(), path, nil), context)
+        }
+    }
+
+    static func relativeLuminance(red: Double, green: Double, blue: Double) -> Double {
+        func linear(_ value: Double) -> Double { value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4) }
+        return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+    }
+    private static func meanLuminance(_ image: CGImage) throws -> Double {
+        let sample = try context(width: min(image.width, 64), height: min(image.height, 64))
+        sample.draw(image, in: CGRect(x: 0, y: 0, width: sample.width, height: sample.height))
+        guard let data = sample.data?.assumingMemoryBound(to: UInt8.self) else { throw EditorError.render }
+        var sum = 0.0
+        for y in 0..<sample.height { for x in 0..<sample.width {
+            let offset = y * sample.bytesPerRow + x * 4
+            sum += relativeLuminance(red: Double(data[offset]) / 255, green: Double(data[offset + 1]) / 255, blue: Double(data[offset + 2]) / 255)
+        } }
+        return sum / Double(sample.width * sample.height)
     }
 
     static func sample(_ image: CGImage, at point: CGPoint) throws -> String {
