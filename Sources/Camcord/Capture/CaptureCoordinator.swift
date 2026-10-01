@@ -12,6 +12,10 @@ final class CaptureCoordinator {
         var screenCaptureAuthorized: () -> Bool = { CGPreflightScreenCaptureAccess() }
         var screenshotSettings: () -> ScreenshotSettings = { ScreenshotSettings.load(from: .standard) }
         var fullScreen: (() async throws -> (image: CGImage, pointSize: CGSize))?
+        var fullScreenDisplayID: () -> CGDirectDisplayID? = {
+            let mouse = NSEvent.mouseLocation
+            return (NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main)?.cgDirectDisplayID
+        }
         var captureFrozenDesktop: (ResolutionScale, CGPoint) async throws -> FrozenDesktopSnapshot = { scale, anchor in
             try await ScreenshotService.captureFrozenDesktop(resolutionScale: scale, atCGPoint: anchor)
         }
@@ -203,7 +207,8 @@ final class CaptureCoordinator {
                 case .region(let cgRect):
                     await performFrozenScreenshot(snapshot, cgRect: cgRect, acceptedToken: acceptedToken)
                 case .window(let window):
-                    await performWindowCapture(window, acceptedToken: acceptedToken)
+                    let origin = Self.originDisplayID(for: window.frame, displays: Self.currentDisplayFrames())
+                    await performWindowCapture(window, originDisplayID: origin, acceptedToken: acceptedToken)
                 }
             case .text:
                 let cgRect: CGRect
@@ -285,6 +290,9 @@ final class CaptureCoordinator {
             return
         }
 
+        // This is the display bound to the actual scroll sourceRect. Preserve its identity
+        // before the session or output scaling can suspend and the cursor can move.
+        let originDisplayID = display.displayID
         let scrollResult = await ScrollingCaptureSession(region: clampedRegion, display: display).run()
         let image: CGImage
         var notice: ScrollingCaptureSession.Notice?
@@ -320,7 +328,8 @@ final class CaptureCoordinator {
             }
             outputImage = scaled
         }
-        guard let copied = await copyScreenshot(outputImage, pointSize: pointSize, acceptedToken: acceptedToken, kind: .scrollCapture) else { return }
+        guard let copied = await copyScreenshot(outputImage, pointSize: pointSize, acceptedToken: acceptedToken,
+                                               kind: .scrollCapture, originDisplayID: originDisplayID) else { return }
         guard copied else {
             fail("Scroll capture: clipboard write failed")
             return
@@ -609,6 +618,13 @@ final class CaptureCoordinator {
             Geometry.appKitToCG($0.frame, primaryScreenHeight: primaryHeight)
         }
         let ordered = WindowSnapper.currentCandidates()
+        let originFrames = Self.currentDisplayFrames()
+        // Cache enumeration may suspend or refresh. Source geometry comes from the same
+        // trigger-time WindowServer candidates used to choose both the preferred and fallback
+        // target, so a later cursor movement or hotplug cannot reassign this request.
+        let originIDs = Dictionary(ordered.map {
+            ($0.windowID, Self.originDisplayID(for: $0.bounds, displays: originFrames))
+        }, uniquingKeysWith: { first, _ in first })
         let preferredID = WindowSnapper.activeWindowID(
             ordered: ordered,
             frontmostPID: frontmost?.processIdentifier,
@@ -640,7 +656,8 @@ final class CaptureCoordinator {
                 fail("captureActiveWindow: no eligible on-screen window found")
                 return
             }
-            await performWindowCapture(window, acceptedToken: acceptedToken)
+            await performWindowCapture(window, originDisplayID: originIDs[window.windowID] ?? nil,
+                                       acceptedToken: acceptedToken)
         } catch {
             fail("captureActiveWindow: failed to fetch shareable content: \(error)")
         }
@@ -655,10 +672,12 @@ final class CaptureCoordinator {
         guard preflightScreenCapture("captureFullScreen") else { return }
         let acceptedToken = clipboardRequests.begin()
         if let capture = operations.fullScreen {
+            let originDisplayID = operations.fullScreenDisplayID()
             do {
                 let pixels = try await capture()
                 guard !Task.isCancelled else { return }
-                guard let copied = await copyScreenshot(pixels.image, pointSize: pixels.pointSize, acceptedToken: acceptedToken) else { return }
+                guard let copied = await copyScreenshot(pixels.image, pointSize: pixels.pointSize, acceptedToken: acceptedToken,
+                                                       originDisplayID: originDisplayID) else { return }
                 if copied { succeeded(.fullScreenShot) }
                 else { fail("captureFullScreen: clipboard write failed") }
             } catch { fail("captureFullScreen: capture failed: \(error)") }
@@ -684,7 +703,8 @@ final class CaptureCoordinator {
                 display,
                 resolutionScale: settings.resolutionScale
             )
-            guard let copied = await copyScreenshot(image, pointSize: screen.frame.size, acceptedToken: acceptedToken) else { return }
+            guard let copied = await copyScreenshot(image, pointSize: screen.frame.size, acceptedToken: acceptedToken,
+                                                   originDisplayID: displayID) else { return }
             guard copied else {
                 fail("captureFullScreen: clipboard write failed")
                 return
@@ -699,9 +719,11 @@ final class CaptureCoordinator {
 
     private func performRegionScreenshot(_ cgRect: CGRect, acceptedToken: UInt64? = nil) async {
         let token = acceptedToken ?? clipboardRequests.begin()
+        let originDisplayID = Self.originDisplayID(for: cgRect, displays: Self.currentDisplayFrames())
         do {
             let image = try await ScreenshotService.captureRegion(cgRect: cgRect)
-            guard let copied = await copyScreenshot(image, pointSize: cgRect.size, acceptedToken: token) else { return }
+            guard let copied = await copyScreenshot(image, pointSize: cgRect.size, acceptedToken: token,
+                                                   originDisplayID: originDisplayID) else { return }
             guard copied else {
                 fail("Region capture: clipboard write failed")
                 return
@@ -719,12 +741,14 @@ final class CaptureCoordinator {
         acceptedToken: UInt64? = nil
     ) async {
         let acceptedToken = acceptedToken ?? clipboardRequests.begin()
+        let originDisplayID = snapshot.displays.first?.id
         let cropped = await Task.detached(priority: .userInitiated) { snapshot.crop(cgRect: cgRect) }.value
         guard let crop = cropped else {
             fail("Frozen region capture: selection did not intersect a display")
             return
         }
-        guard let copied = await copyScreenshot(crop.image, pointSize: crop.pointSize, acceptedToken: acceptedToken) else { return }
+        guard let copied = await copyScreenshot(crop.image, pointSize: crop.pointSize, acceptedToken: acceptedToken,
+                                               originDisplayID: originDisplayID) else { return }
         guard copied else {
             fail("Frozen region capture: clipboard write failed")
             return
@@ -758,7 +782,8 @@ final class CaptureCoordinator {
         }
     }
 
-    private func performWindowCapture(_ window: SCWindow, acceptedToken: UInt64? = nil) async {
+    private func performWindowCapture(_ window: SCWindow, originDisplayID: CGDirectDisplayID?,
+                                      acceptedToken: UInt64? = nil) async {
         let token = acceptedToken ?? clipboardRequests.begin()
         do {
             let settings = operations.screenshotSettings()
@@ -766,7 +791,8 @@ final class CaptureCoordinator {
                 window,
                 resolutionScale: settings.resolutionScale
             )
-            guard let copied = await copyScreenshot(image, pointSize: window.frame.size, acceptedToken: token) else { return }
+            guard let copied = await copyScreenshot(image, pointSize: window.frame.size, acceptedToken: token,
+                                                   originDisplayID: originDisplayID) else { return }
             guard copied else {
                 fail("Window capture: clipboard write failed")
                 return
@@ -845,11 +871,13 @@ final class CaptureCoordinator {
 
     /// nil means a newer accepted result superseded this clipboard publication.
     private func copyScreenshot(_ image: CGImage, pointSize: CGSize, acceptedToken: UInt64,
-                                kind: CaptureItem.Kind = .screenshot) async -> Bool? {
+                                kind: CaptureItem.Kind = .screenshot,
+                                originDisplayID: CGDirectDisplayID? = nil) async -> Bool? {
         let token = acceptedToken
         let settings = operations.screenshotSettings()
         let delivery = CapturedScreenshot(id: UUID(), image: image, pointSize: pointSize,
-                                           kind: kind, saveToDiskRequested: settings.saveToDisk)
+                                           kind: kind, saveToDiskRequested: settings.saveToDisk,
+                                           originDisplayID: originDisplayID)
         let tagScrollCapture = operations.tagScrollCapture
         let copied = await operations.copyPNG(
             image, pointSize, settings,
@@ -909,8 +937,39 @@ final class CaptureCoordinator {
     }
 
     func deliverScreenshotForTesting(_ image: CGImage, pointSize: CGSize,
-                                     kind: CaptureItem.Kind = .screenshot) async -> Bool? {
-        await copyScreenshot(image, pointSize: pointSize, acceptedToken: clipboardRequests.begin(), kind: kind)
+                                     kind: CaptureItem.Kind = .screenshot,
+                                     originDisplayID: CGDirectDisplayID? = nil) async -> Bool? {
+        await copyScreenshot(image, pointSize: pointSize, acceptedToken: clipboardRequests.begin(),
+                             kind: kind, originDisplayID: originDisplayID)
+    }
+
+    private static func currentDisplayFrames() -> [(id: CGDirectDisplayID, frame: CGRect)] {
+        NSScreen.screens.compactMap { screen in
+            guard let id = screen.cgDirectDisplayID else { return nil }
+            return (id, CGDisplayBounds(id))
+        }
+    }
+
+    /// Cross-display source rectangles belong to the display containing the most source area.
+    /// CG coordinates preserve displays above or left of the primary screen. Equal areas choose
+    /// the lowest display ID, so enumeration order cannot change the result.
+    nonisolated static func originDisplayID(for sourceRect: CGRect,
+                                           displays: [(id: CGDirectDisplayID, frame: CGRect)]) -> CGDirectDisplayID? {
+        guard !sourceRect.isNull, !sourceRect.isInfinite,
+              [sourceRect.minX, sourceRect.minY, sourceRect.width, sourceRect.height].allSatisfy(\.isFinite),
+              sourceRect.width > 0, sourceRect.height > 0 else { return nil }
+        var selectedID: CGDirectDisplayID?
+        var selectedArea: CGFloat = 0
+        for display in displays {
+            let intersection = sourceRect.intersection(display.frame)
+            let area = intersection.width * intersection.height
+            guard !intersection.isNull, area.isFinite, area > 0 else { continue }
+            if area > selectedArea || (area == selectedArea && display.id < (selectedID ?? .max)) {
+                selectedID = display.id
+                selectedArea = area
+            }
+        }
+        return selectedID
     }
 
     /// Success feedback: the action's distinct sound + a brief status-glyph flash, plus

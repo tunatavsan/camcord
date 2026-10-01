@@ -103,7 +103,7 @@ struct CapturePublicationTests {
         }
         let coordinator = CaptureCoordinator(operations: operations)
         coordinator.onScreenshotDelivery = { events.append($0) }
-        #expect(await coordinator.deliverScreenshotForTesting(pixels, pointSize: size) == true)
+        #expect(await coordinator.deliverScreenshotForTesting(pixels, pointSize: size, originDisplayID: 71) == true)
         if !savedBeforeReady { onSave?(.success(url)) }
         #expect(loads == 1 && receivedSettings?.saveToDisk == true)
         #expect(events.count == 2)
@@ -115,6 +115,7 @@ struct CapturePublicationTests {
         #expect(Set(deliveries.map(\.id)).count == 1)
         #expect(deliveries.allSatisfy { $0.pointSize == size && $0.kind == .screenshot && $0.saveToDiskRequested })
         #expect(deliveries.allSatisfy { $0.image === pixels })
+        #expect(deliveries.allSatisfy { $0.originDisplayID == 71 })
         if savedBeforeReady {
             guard case .saved(_, let savedURL) = events.first else { Issue.record("Save may finish before ready"); return }
             #expect(savedURL == url)
@@ -137,7 +138,7 @@ struct CapturePublicationTests {
         operations.publishText = { textPublications.append($0); return true }
         let coordinator = CaptureCoordinator(operations: operations)
         coordinator.onScreenshotDelivery = { events.append($0) }
-        let older = Task { await coordinator.deliverScreenshotForTesting(image(), pointSize: CGSize(width: 4, height: 3)) }
+        let older = Task { await coordinator.deliverScreenshotForTesting(image(), pointSize: CGSize(width: 4, height: 3), originDisplayID: 81) }
         await waitUntil { pending.continuation != nil }
         coordinator.captureTextFromImage(image())
         await waitUntil { !textPublications.isEmpty }
@@ -155,7 +156,8 @@ struct CapturePublicationTests {
         switch events.first {
         case .saved(let value, let savedURL):
             #expect(!saveFails && savedURL == url && value.saveToDiskRequested && value.pointSize == CGSize(width: 4, height: 3))
-        case .saveFailed(let value): #expect(saveFails && value.saveToDiskRequested)
+            #expect(value.originDisplayID == 81)
+        case .saveFailed(let value): #expect(saveFails && value.saveToDiskRequested && value.originDisplayID == 81)
         default: Issue.record("Actual disk outcome must be reported even after supersession")
         }
     }
@@ -173,12 +175,13 @@ struct CapturePublicationTests {
         let coordinator = CaptureCoordinator(operations: operations)
         defer { withExtendedLifetime(coordinator) {} }
         coordinator.onScreenshotDelivery = { events.append($0) }
-        #expect(await coordinator.deliverScreenshotForTesting(image(), pointSize: CGSize(width: 4, height: 3), kind: .scrollCapture) == true)
+        #expect(await coordinator.deliverScreenshotForTesting(image(), pointSize: CGSize(width: 4, height: 3), kind: .scrollCapture, originDisplayID: 91) == true)
         await waitUntil { events.count == 2 }
         let values = events.map { event -> CapturedScreenshot in
             switch event { case .ready(let value), .saved(let value, _), .saveFailed(let value): return value }
         }
         #expect(values.allSatisfy { $0.kind == .scrollCapture })
+        #expect(values.allSatisfy { $0.originDisplayID == 91 })
         #expect(Set(values.map(\.id)).count == 1)
         #expect(CaptureFileRules.kind(of: url, tag: CaptureFileRules.readTag(url)) == .scrollCapture)
     }
@@ -222,12 +225,71 @@ struct CapturePublicationTests {
         operations.copyPNG = { _, _, _, publish, callback in callback(.failure(DiskFailure.unavailable)); return publish() }
         let coordinator = CaptureCoordinator(operations: operations)
         coordinator.onScreenshotDelivery = { events.append($0) }
-        #expect(await coordinator.deliverScreenshotForTesting(image(), pointSize: CGSize(width: 4, height: 3)) == true)
+        #expect(await coordinator.deliverScreenshotForTesting(image(), pointSize: CGSize(width: 4, height: 3), originDisplayID: 101) == true)
         #expect(events.count == 2)
         guard case .saveFailed(let failed) = events.first, case .ready(let ready) = events.last else {
             Issue.record("Only actual failure emits saveFailed, followed by successful ready"); return
         }
         #expect(failed.id == ready.id && failed.saveToDiskRequested && ready.saveToDiskRequested)
+        #expect(failed.originDisplayID == 101 && ready.originDisplayID == 101)
+    }
+
+    @Test("fullscreen freezes its selected display before capture suspension and retains it across cursor changes or hotplug",
+          arguments: [false, true])
+    func fullScreenOriginIsRequestScoped(hotplug: Bool) async throws {
+        let pending = PendingCapture()
+        var selectedDisplayID: CGDirectDisplayID? = 17
+        var displaySelections = 0
+        var onSave: (@MainActor (Result<URL, Error>) -> Void)?
+        var events: [ScreenshotDeliveryEvent] = []
+        var operations = CaptureCoordinator.Operations()
+        operations.feedback = false
+        operations.screenCaptureAuthorized = { true }
+        operations.screenshotSettings = { ScreenshotSettings(saveToDisk: true) }
+        operations.fullScreenDisplayID = { displaySelections += 1; return selectedDisplayID }
+        operations.fullScreen = { await pending.capture() }
+        operations.copyPNG = { _, _, _, publish, callback in onSave = callback; return publish() }
+        let coordinator = CaptureCoordinator(operations: operations)
+        coordinator.onScreenshotDelivery = { events.append($0) }
+        let first = Task { await coordinator.captureFullScreen() }
+        await waitUntil { pending.continuation != nil }
+        #expect(displaySelections == 1)
+        selectedDisplayID = hotplug ? nil : 29
+        pending.continuation?.resume(returning: (image(), CGSize(width: 4, height: 3)))
+        pending.continuation = nil
+        await first.value
+        onSave?(.success(URL(fileURLWithPath: "/private/origin-fixture.png")))
+        #expect(events.count == 2 && displaySelections == 1)
+        guard case .ready(let ready) = events.first, case .saved(let saved, _) = events.last else {
+            Issue.record("The captured request must emit ready and its actual disk result"); return
+        }
+        #expect(ready.id == saved.id && ready.originDisplayID == 17 && saved.originDisplayID == 17)
+
+        let second = Task { await coordinator.captureFullScreen() }
+        await waitUntil { pending.continuation != nil }
+        pending.continuation?.resume(returning: (image(), CGSize(width: 4, height: 3)))
+        await second.value
+        guard case .ready(let next) = events.last else { Issue.record("The next request must publish independently"); return }
+        #expect(displaySelections == 2 && next.id != ready.id)
+        #expect(next.originDisplayID == selectedDisplayID)
+    }
+
+    @Test("source rectangles choose the largest CG intersection including displays left of or above the primary screen")
+    func originBySourceIntersection() {
+        let displays: [(id: CGDirectDisplayID, frame: CGRect)] = [
+            (30, CGRect(x: -1600, y: 0, width: 1600, height: 1000)),
+            (20, CGRect(x: 0, y: 0, width: 1200, height: 1000)),
+            (10, CGRect(x: 0, y: -900, width: 1200, height: 900)),
+        ]
+        #expect(CaptureCoordinator.originDisplayID(for: CGRect(x: -500, y: 200, width: 800, height: 200), displays: displays) == 30)
+        #expect(CaptureCoordinator.originDisplayID(for: CGRect(x: 100, y: -600, width: 200, height: 700), displays: displays) == 10)
+        let tied = CGRect(x: -200, y: 200, width: 400, height: 100)
+        #expect(CaptureCoordinator.originDisplayID(for: tied, displays: displays) == 20)
+        #expect(CaptureCoordinator.originDisplayID(for: tied, displays: Array(displays.reversed())) == 20)
+        #expect(CaptureCoordinator.originDisplayID(for: CGRect(x: 2000, y: 2000, width: 10, height: 10), displays: displays) == nil)
+        #expect(CaptureCoordinator.originDisplayID(for: .zero, displays: displays) == nil)
+        #expect(CaptureCoordinator.originDisplayID(for: .null, displays: displays) == nil)
+        #expect(CaptureCoordinator.originDisplayID(for: .infinite, displays: displays) == nil)
     }
 
     @Test("1× scroll raster planning bounds wide, tall and overflowing inputs before allocation")

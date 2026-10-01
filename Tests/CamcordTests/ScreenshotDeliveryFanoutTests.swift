@@ -5,28 +5,42 @@ import Testing
 
 @Suite("Typed screenshot delivery routing")
 @MainActor struct ScreenshotDeliveryFanoutTests {
-    private func capture(id: UUID = UUID()) throws -> CapturedScreenshot {
+    private func capture(id: UUID = UUID(), originDisplayID: CGDirectDisplayID? = nil) throws -> CapturedScreenshot {
         let context = try #require(CGContext(data: nil, width: 2, height: 2, bitsPerComponent: 8, bytesPerRow: 8,
             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
-        return CapturedScreenshot(id: id, image: try #require(context.makeImage()), pointSize: CGSize(width: 1, height: 1), kind: .screenshot, saveToDiskRequested: true)
+        return CapturedScreenshot(id: id, image: try #require(context.makeImage()), pointSize: CGSize(width: 1, height: 1), kind: .screenshot, saveToDiskRequested: true, originDisplayID: originDisplayID)
     }
     @Test("Library observes every event before the corresponding card action and early save replays after ready")
     func orderAndReplay() throws {
-        let capture = try capture(), url = URL(fileURLWithPath: "/private/shot.png")
+        let capture = try capture(originDisplayID: 47), url = URL(fileURLWithPath: "/private/shot.png")
         var log: [String] = []
         var imageIdentity: CGImage?
+        var libraryOrigins: [CGDirectDisplayID?] = []
+        var cardOrigin: CGDirectDisplayID?
         let fanout = ScreenshotDeliveryFanout(ingest: { event in
+            switch event {
+            case .ready(let value), .saved(let value, _), .saveFailed(let value): libraryOrigins.append(value.originDisplayID)
+            }
             switch event { case .ready: log.append("library ready"); case .saved: log.append("library saved"); case .saveFailed: log.append("library failed") }
-        }, ready: { value in imageIdentity = value.image; log.append("card ready") },
+        }, ready: { value in imageIdentity = value.image; cardOrigin = value.originDisplayID; log.append("card ready") },
         saved: { id, value in #expect(id == capture.id); #expect(value == url); log.append("card saved") },
         saveFailed: { _ in log.append("card failed") })
         fanout.receive(.saved(capture, url))
         #expect(fanout.pendingSaveCount == 1)
         fanout.receive(.ready(capture))
         #expect(imageIdentity === capture.image)
+        #expect(cardOrigin == 47)
         #expect(fanout.pendingSaveCount == 0)
         fanout.receive(.saveFailed(capture))
+        #expect(libraryOrigins == [47, 47, 47])
         #expect(log == ["library saved", "card saved", "library ready", "card ready", "card saved", "library failed", "card failed"])
+    }
+    @Test("older screenshot construction leaves origin unknown without deriving a display from point size")
+    func legacyOriginIsUnknown() throws {
+        let value = try capture()
+        let legacy = CapturedScreenshot(id: value.id, image: value.image, pointSize: value.pointSize,
+                                        kind: value.kind, saveToDiskRequested: value.saveToDiskRequested)
+        #expect(legacy.originDisplayID == nil)
     }
     @Test("the insertion-order limit evicts only replay state and never drops Library saves")
     func boundedReplay() throws {
