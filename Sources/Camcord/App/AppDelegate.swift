@@ -192,7 +192,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSUpdateDynamicServices()
 
         let panelActions = makePanelActions(coordinator: coordinator, recordingController: recordingController)
-        let panelController = PanelController(model: recordingStateModel, actions: panelActions)
+        let panelController = PanelController(model: recordingStateModel, actions: panelActions,
+                                              library: services.library, defaults: services.defaults)
         self.panelController = panelController
 
         statusItemController.onOpenMainWindow = { [weak self] in self?.showMainWindow() }

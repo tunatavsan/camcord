@@ -10,15 +10,32 @@ import Testing
 @Suite("Panel layout")
 @MainActor
 struct PanelLayoutTests {
+    @Test("last capture dates preserve past/future direction in English and Turkish")
+    func relativeCaptureDate() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let past = now.addingTimeInterval(-60), future = now.addingTimeInterval(60)
+        let english = Locale(identifier: "en_US"), turkish = Locale(identifier: "tr_TR")
+        let pastEnglish = PanelRelativeDate.string(for: past, relativeTo: now, locale: english)
+        let futureEnglish = PanelRelativeDate.string(for: future, relativeTo: now, locale: english)
+        let pastTurkish = PanelRelativeDate.string(for: past, relativeTo: now, locale: turkish)
+        let futureTurkish = PanelRelativeDate.string(for: future, relativeTo: now, locale: turkish)
+        #expect(pastEnglish.contains("ago"))
+        #expect(futureEnglish.hasPrefix("in "))
+        #expect(pastTurkish.contains("önce"))
+        #expect(futureTurkish.contains("sonra"))
+        #expect(pastEnglish != pastTurkish && futureEnglish != futureTurkish)
+        #expect(!pastEnglish.contains("sec") && !pastTurkish.contains("sn"))
+    }
+
     @Test("the capture palette stays compact in every recording state")
     func sizeTable() {
         #expect(CapturePanelView.panelWidth == 320)
-        #expect(CapturePanelView.panelHeight == 428)
+        #expect(CapturePanelView.panelHeight == 370)
         // Recording status uses the same compact palette footprint as idle capture.
         #expect(CapturePanelView.activeHeight == CapturePanelView.panelHeight)
         for height in [CapturePanelView.panelHeight, CapturePanelView.activeHeight,
                        CapturePanelView.finishingHeight, CapturePanelView.finishedHeight] {
-            #expect(height <= CapturePanelView.panelHeight)
+            #expect(height <= CapturePanelView.finishedHeight)
         }
 
     }
@@ -184,5 +201,173 @@ struct PanelLayoutTests {
                 try png.write(to: URL(fileURLWithPath: "\(shots)/panel-\(name).png"))
             }
         }
+    }
+}
+
+@Suite("Panel actual Library context", .serialized, .timeLimit(.minutes(1))) @MainActor
+struct PanelContextTests {
+    @Test("last capture uses canonical newest despite the Library's filter and opens its existing route")
+    func canonicalNewestAndOpen() async throws {
+        let f = try PanelContextFixture(); defer { f.close() }
+        let old = try f.png("old.png"), newest = try f.png("new.png")
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 10)], ofItemAtPath: old.path)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 20)], ofItemAtPath: newest.path)
+        var opened: URL?
+        let store = f.store(); store.onOpenScreenshot = { opened = $0 }
+        await store.refresh(); store.search = "not a capture"; store.filter = .recording
+        let context = PanelPresentation(library: store, defaults: f.defaults)
+        context.synchronize(visible: true, reloadSettings: true)
+        let item = try #require(context.latest)
+        #expect(item.url == newest)
+        #expect(store.filteredItems.isEmpty)
+        await context.open(item)
+        #expect(opened == newest)
+        #expect(store.selection.isEmpty)
+        context.synchronize(visible: false)
+    }
+
+    @Test("panel visibility leases once, releases while retained, and reloads supplied saved intent")
+    func visibleLifetime() async throws {
+        let f = try PanelContextFixture(); defer { f.close() }
+        _ = try f.png("capture.png")
+        let store = f.store(); await store.refresh()
+        let context = PanelPresentation(library: store, defaults: f.defaults)
+        #expect(store.watcherCount == 0)
+        context.synchronize(visible: true, reloadSettings: true)
+        context.synchronize(visible: true)
+        #expect(store.watcherCount == 2)
+        var settings = RecordingSettings(); settings.microphone = true; settings.camera.enabled = true
+        settings.save(to: f.defaults)
+        context.synchronize(visible: false)
+        #expect(store.watcherCount == 0)
+        #expect(context.thumbnail == nil)
+        context.synchronize(visible: true, reloadSettings: true)
+        #expect(context.settings?.microphone == true)
+        #expect(context.settings?.camera.enabled == true)
+        context.synchronize(visible: false)
+        #expect(store.watcherCount == 0)
+        let absent = PanelPresentation(library: nil, defaults: nil)
+        absent.synchronize(visible: true, reloadSettings: true)
+        #expect(absent.latest == nil && absent.settings == nil)
+    }
+
+    @Test("a late thumbnail from a hidden lifetime never enters the retained panel")
+    func lateThumbnail() async throws {
+        let f = try PanelContextFixture(); defer { f.close() }
+        _ = try f.png("capture.png")
+        let store = f.store(); await store.refresh()
+        let gate = PanelThumbnailGate()
+        let context = PanelPresentation(library: store, defaults: f.defaults, loadThumbnail: { _ in await gate.wait() })
+        context.synchronize(visible: true)
+        while !gate.started { try Task.checkCancellation(); await Task.yield() }
+        context.synchronize(visible: false)
+        gate.resume(try f.image())
+        for _ in 0..<20 { await Task.yield() }
+        #expect(context.thumbnail == nil)
+        #expect(store.watcherCount == 0)
+    }
+
+    @Test("a superseded thumbnail cannot replace the new canonical capture")
+    func supersededThumbnail() async throws {
+        let f = try PanelContextFixture(); defer { f.close() }
+        _ = try f.png("old.png")
+        let store = f.store(); await store.refresh()
+        let old = try #require(store.items.first)
+        let gate = PanelThumbnailGate(), fresh = try f.image()
+        let context = PanelPresentation(library: store, defaults: f.defaults, loadThumbnail: { item in
+            item.id == old.id ? await gate.wait() : fresh
+        })
+        context.synchronize(visible: true)
+        while !gate.started { try Task.checkCancellation(); await Task.yield() }
+        let newest = try f.png("new.png")
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(60)], ofItemAtPath: newest.path)
+        await store.refresh()
+        context.synchronize(visible: true)
+        while context.thumbnail == nil { try Task.checkCancellation(); await Task.yield() }
+        #expect(context.latest?.url == newest)
+        gate.resume(try f.image())
+        for _ in 0..<20 { await Task.yield() }
+        #expect(context.thumbnail === fresh)
+        context.synchronize(visible: false)
+    }
+
+    @Test("registered drag provider validates its frozen URL when the consumer requests it")
+    func requestedDragValidation() async throws {
+        let f = try PanelContextFixture(); defer { f.close() }
+        let source = try f.png("capture.png")
+        let store = f.store(); await store.refresh()
+        let item = try #require(store.items.first)
+        let drag = try #require(PanelCaptureDrag(item: item))
+        let provider = drag.provider(), secondProvider = drag.provider()
+        #expect(provider.suggestedName == "capture.png")
+        #expect(provider.hasItemConformingToTypeIdentifier(drag.type.identifier))
+        try FileManager.default.removeItem(at: source)
+        let result = await withCheckedContinuation { (continuation: CheckedContinuation<(URL?, Bool), Never>) in
+            provider.loadInPlaceFileRepresentation(forTypeIdentifier: drag.type.identifier) { url, _, error in
+                continuation.resume(returning: (url, error != nil))
+            }
+        }
+        #expect(result.0 == nil && result.1)
+        let other = try f.png("other.png", directory: f.root)
+        try FileManager.default.createSymbolicLink(at: source, withDestinationURL: other)
+        let replacement = await withCheckedContinuation { (continuation: CheckedContinuation<(URL?, Bool), Never>) in
+            secondProvider.loadInPlaceFileRepresentation(forTypeIdentifier: drag.type.identifier) { url, _, error in
+                continuation.resume(returning: (url, error != nil))
+            }
+        }
+        #expect(replacement.0 == nil && replacement.1)
+    }
+
+    @Test("immutable drag requests reject a deleted file or replacement symlink")
+    func validatedDrag() async throws {
+        let f = try PanelContextFixture(); defer { f.close() }
+        let source = try f.png("capture.png"), other = try f.png("outside.png", directory: f.root)
+        let store = f.store(); await store.refresh()
+        let item = try #require(store.items.first)
+        let drag = try #require(PanelCaptureDrag(item: item))
+        #expect(try drag.validatedURL() == source)
+        try FileManager.default.removeItem(at: source)
+        #expect(throws: (any Error).self) { try drag.validatedURL() }
+        try FileManager.default.createSymbolicLink(at: source, withDestinationURL: other)
+        #expect(throws: (any Error).self) { try drag.validatedURL() }
+        #expect(drag.url == source)
+        #expect(drag.type.identifier == "public.png")
+    }
+}
+
+@MainActor private final class PanelThumbnailGate {
+    var started = false
+    var continuation: CheckedContinuation<CGImage?, Never>?
+    func wait() async -> CGImage? {
+        await withCheckedContinuation { continuation = $0; started = true }
+    }
+    func resume(_ image: CGImage) { continuation?.resume(returning: image); continuation = nil }
+}
+
+@MainActor private struct PanelContextFixture {
+    let root: URL, saved: URL, cache: URL
+    let suite = "camcord.panel-context." + UUID().uuidString
+    let defaults: UserDefaults
+    init() throws {
+        defaults = try #require(UserDefaults(suiteName: suite))
+        let raw = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: raw, withIntermediateDirectories: true)
+        root = URL(fileURLWithPath: try #require(LibraryFiles.physicalPath(raw)))
+        saved = root.appendingPathComponent("saved"); cache = root.appendingPathComponent("cache")
+        try FileManager.default.createDirectory(at: saved, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+    }
+    func close() { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
+    func store() -> LibraryStore { LibraryStore(defaults: defaults, roots: [.init(url: saved, origin: .savedFile)], cacheDirectory: cache) }
+    func image() throws -> CGImage {
+        let context = try #require(CGContext(data: nil, width: 16, height: 8, bitsPerComponent: 8, bytesPerRow: 64,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(CGColor(gray: 0.6, alpha: 1)); context.fill(CGRect(x: 0, y: 0, width: 16, height: 8))
+        return try #require(context.makeImage())
+    }
+    func png(_ name: String, directory: URL? = nil) throws -> URL {
+        let url = (directory ?? saved).appendingPathComponent(name)
+        try EditorRendered(image: image(), pointSize: CGSize(width: 16, height: 8)).png.write(to: url)
+        return url
     }
 }

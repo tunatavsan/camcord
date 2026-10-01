@@ -44,6 +44,8 @@ final class PanelController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     init(
         model: RecordingStateModel,
         actions: PanelActions,
+        library: LibraryStore? = nil,
+        defaults: UserDefaults? = nil,
         detachedPanelPresenter: DetachedPanelPresenter? = nil
     ) {
         self.model = model
@@ -55,7 +57,7 @@ final class PanelController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             }
             return panel.isVisible
         }
-        hostingController = NSHostingController(rootView: CapturePanelView(model: model, actions: actions))
+        hostingController = NSHostingController(rootView: CapturePanelView(model: model, actions: actions, library: library, defaults: defaults))
         super.init()
         popover.behavior = .transient
         popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion

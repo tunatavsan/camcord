@@ -360,6 +360,35 @@ extension Theme {
     }
 }
 
+// MARK: - Menu panel
+
+extension Theme {
+    enum Menu {
+        /// Panel float tint from Graphite II; real system glass supplies the material.
+        static let glassTint = ThemeColor("menuGlassTint", dark: C(0x16181C, alpha: 0.70), light: C(0xF0F2F5, alpha: 0.76),
+                                          highContrastDark: C(0x1E2125), highContrastLight: C(0xECEEF1))
+        static let inset = ThemeColor("menuInset", dark: C(0x000000, alpha: 0.24), light: C(0x14181E, alpha: 0.05))
+        static let line = ThemeColor("menuLine", dark: C(0xFFFFFF, alpha: 0.08), light: C(0x14181E, alpha: 0.10))
+        static let headerHeight: CGFloat = 20
+        static let sectionHeight: CGFloat = 11
+        static let mark: CGFloat = 17
+        static let keyHeight: CGFloat = 58
+        static let keySymbol: CGFloat = 20
+        static let keySymbolFont: CGFloat = 18
+        static let chipHeight: CGFloat = 32
+        static let actionHeight: CGFloat = 40
+        static let lastHeight: CGFloat = 54
+        static let thumbnail = CGSize(width: 64, height: 42)
+        static let footerHeight: CGFloat = 28
+        static let pillHeight: CGFloat = 22
+        static let pillDot: CGFloat = 8
+        static let pillGap: CGFloat = 6
+        static let pillLeading: CGFloat = 6
+        static let pillTrailing: CGFloat = 8
+        static var pillFont: NSFont { NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold) }
+    }
+}
+
 // MARK: - Motion
 
 extension Theme {

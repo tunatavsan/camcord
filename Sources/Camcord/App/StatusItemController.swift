@@ -62,8 +62,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         super.init()
 
         if let button = statusItem.button {
-            let image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Camcord")
-            image?.isTemplate = true
+            let image = ViewfinderMarkView.templateImage(size: 17)
             button.image = image
             // Left-click -> panel, right-click -> context menu. The menu is NOT
             // permanently assigned to the status item (that would hijack all clicks);
@@ -336,8 +335,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         lastElapsed = elapsed
         switch state {
         case .idle:
-            let image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Camcord")
-            image?.isTemplate = true
+            let image = ViewfinderMarkView.templateImage(size: 17)
             button.image = image
             button.contentTintColor = nil
             button.attributedTitle = NSAttributedString(string: "")
@@ -345,12 +343,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             button.title = ""
             button.contentTintColor = nil
             button.imagePosition = .imageOnly
-            button.image = Self.indicatorImage(elapsed: elapsed ?? "0:00", color: Theme.Palette.record.ns, paused: false)
+            button.image = Self.indicatorImage(elapsed: elapsed ?? "—", color: Theme.Palette.record.ns, paused: false)
         case .paused:
             button.title = ""
             button.contentTintColor = nil
             button.imagePosition = .imageOnly
-            button.image = Self.indicatorImage(elapsed: elapsed ?? "0:00", color: Theme.Palette.ink.ns, paused: true)
+            button.image = Self.indicatorImage(elapsed: elapsed ?? "—", color: Theme.Palette.ink.ns, paused: true)
         }
 
         if stateChanged {
@@ -360,8 +358,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     /// A highly visible "recording pill": solid color background, white dot, white text.
     /// Rendered as a non-template image so it ignores macOS menu bar tinting and stays vivid.
-    private static func indicatorImage(elapsed: String, color: NSColor, paused: Bool) -> NSImage {
-        let font = Theme.Font.ns.dataStrong
+    static func indicatorImage(elapsed: String, color: NSColor, paused: Bool) -> NSImage {
+        let font = Theme.Menu.pillFont
         let textColor: NSColor = paused ? Theme.Palette.ink.ns : Theme.Palette.onRecord.ns
         let text = NSAttributedString(
             string: elapsed,
@@ -369,12 +367,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         )
         let textSize = text.size()
 
-        let dot: CGFloat = 8
-        let gap: CGFloat = 5
-        let hPad: CGFloat = 8
-        let height: CGFloat = 22 // standard macOS menu bar height
-        let pillHeight: CGFloat = 18
-        let width = hPad + dot + gap + ceil(textSize.width) + hPad
+        let dot = Theme.Menu.pillDot
+        let gap = Theme.Menu.pillGap
+        let leading = Theme.Menu.pillLeading
+        let trailing = Theme.Menu.pillTrailing
+        let height = Theme.Menu.pillHeight
+        let pillHeight = height
+        let width = leading + dot + gap + ceil(textSize.width) + trailing
 
         let image = NSImage(size: NSSize(width: width, height: height))
         image.lockFocus()
@@ -385,10 +384,17 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let pillRect = NSRect(x: 0, y: (height - pillHeight) / 2, width: width, height: pillHeight)
         let pillPath = NSBezierPath(roundedRect: pillRect, xRadius: pillHeight / 2, yRadius: pillHeight / 2)
         pillPath.fill()
+        if paused {
+            textColor.withAlphaComponent(0.18).setStroke()
+            let rim = NSBezierPath(roundedRect: pillRect.insetBy(dx: 0.5, dy: 0.5),
+                                   xRadius: pillHeight / 2, yRadius: pillHeight / 2)
+            rim.lineWidth = 0.5
+            rim.stroke()
+        }
 
         // Draw the filled recording dot or hollow paused ring
         textColor.set()
-        let dotRect = NSRect(x: hPad, y: (height - dot) / 2, width: dot, height: dot)
+        let dotRect = NSRect(x: leading, y: (height - dot) / 2, width: dot, height: dot)
         if paused {
             let ring = NSBezierPath(ovalIn: dotRect.insetBy(dx: 1, dy: 1))
             ring.lineWidth = 1.5
@@ -400,10 +406,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         NSGraphicsContext.restoreGraphicsState()
 
         // Draw the text
-        text.draw(at: NSPoint(x: hPad + dot + gap, y: (height - textSize.height) / 2))
+        text.draw(at: NSPoint(x: leading + dot + gap, y: (height - textSize.height) / 2))
 
         image.unlockFocus()
         image.isTemplate = false
+        image.accessibilityDescription = String(localized: paused ? "Paused" : "Recording") + " " + elapsed
         return image
     }
 

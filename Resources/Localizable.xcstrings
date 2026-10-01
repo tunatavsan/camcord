@@ -9995,6 +9995,330 @@
           }
         }
       }
+    },
+    "Camera access is denied. Configure access in Studio.": {
+      "extractionState": "manual",
+      "comment": "Capture menu",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camera access is denied. Configure access in Studio."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera erişimine izin verilmemiş. Erişimi Stüdyo’da ayarlayın."
+          }
+        }
+      }
+    },
+    "Camera enabled for future recordings. Configure in Studio.": {
+      "extractionState": "manual",
+      "comment": "Capture menu",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camera enabled for future recordings. Configure in Studio."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera sonraki kayıtlar için açık. Stüdyo’da ayarlayın."
+          }
+        }
+      }
+    },
+    "Camera is off. Configure in Studio.": {
+      "extractionState": "manual",
+      "comment": "Capture menu",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camera is off. Configure in Studio."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera kapalı. Stüdyo’da ayarlayın."
+          }
+        }
+      }
+    },
+    "Camera setup is available in Studio": {
+      "extractionState": "manual",
+      "comment": "Capture menu",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camera setup is available in Studio"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamerayı Stüdyo’da ayarlayabilirsiniz"
+          }
+        }
+      }
+    },
+    "Captures unavailable": {
+      "extractionState": "manual",
+      "comment": "Capture menu",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Captures unavailable"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çekimlere erişilemiyor"
+          }
+        }
+      }
+    },
+    "Choose a source for a fast recording": {
+      "extractionState": "manual",
+      "comment": "Capture menu",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a source for a fast recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hızlı kayıt için kaynak seçin"
+          }
+        }
+      }
+    },
+    "Enabled for recording": {
+      "extractionState": "manual",
+      "comment": "Capture menu",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enabled for recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt için açık"
+          }
+        }
+      }
+    },
+    "Finish or cancel the recording before capturing a screenshot": {
+      "extractionState": "manual",
+      "comment": "Capture menu",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finish or cancel the recording before capturing a screenshot"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekran görüntüsü almadan önce kaydı bitirin veya iptal edin"
+          }
+        }
+      }
+    },
+    "Finish or cancel the recording before choosing another source": {
+      "extractionState": "manual",
+      "comment": "Capture menu",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finish or cancel the recording before choosing another source"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Başka bir kaynak seçmeden önce kaydı bitirin veya iptal edin"
+          }
+        }
+      }
+    },
+    "Microphone access is denied. Configure access in Studio.": {
+      "extractionState": "manual",
+      "comment": "Capture menu",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone access is denied. Configure access in Studio."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon erişimine izin verilmemiş. Erişimi Stüdyo’da ayarlayın."
+          }
+        }
+      }
+    },
+    "Microphone enabled for future recordings. Configure in Studio.": {
+      "extractionState": "manual",
+      "comment": "Capture menu",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone enabled for future recordings. Configure in Studio."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon sonraki kayıtlar için açık. Stüdyo’da ayarlayın."
+          }
+        }
+      }
+    },
+    "Microphone is off. Configure in Studio.": {
+      "extractionState": "manual",
+      "comment": "Capture menu",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone is off. Configure in Studio."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon kapalı. Stüdyo’da ayarlayın."
+          }
+        }
+      }
+    },
+    "Microphone setup is available in Studio": {
+      "extractionState": "manual",
+      "comment": "Capture menu",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone setup is available in Studio"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofonu Stüdyo’da ayarlayabilirsiniz"
+          }
+        }
+      }
+    },
+    "More destinations": {
+      "extractionState": "manual",
+      "comment": "Capture menu",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "More destinations"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diğer bölümler"
+          }
+        }
+      }
+    },
+    "Open this capture or drag its file": {
+      "extractionState": "manual",
+      "comment": "Capture menu",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open this capture or drag its file"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu çekimi açın veya dosyasını sürükleyin"
+          }
+        }
+      }
+    },
+    "Record a region": {
+      "extractionState": "manual",
+      "comment": "Capture menu",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record a region"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bir alanı kaydet"
+          }
+        }
+      }
+    },
+    "Setup in Studio": {
+      "extractionState": "manual",
+      "comment": "Capture menu",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Setup in Studio"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stüdyo’da ayarlayın"
+          }
+        }
+      }
+    },
+    "Source": {
+      "extractionState": "manual",
+      "comment": "Capture menu",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaynak"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
