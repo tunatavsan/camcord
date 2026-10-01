@@ -7263,6 +7263,24 @@
         }
       }
     },
+    "Swipe right to dismiss": {
+      "extractionState": "manual",
+      "comment": "Screenshot preview card",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Swipe right to dismiss"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kapatmak için sağa kaydırın"
+          }
+        }
+      }
+    },
     "System audio": {
       "extractionState": "manual",
       "comment": "Studio interface",

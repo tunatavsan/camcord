@@ -149,7 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recordingController.onToast = showToast
         hotkeyCenter.onToast = showToast
 
-        // Screenshots land as a framed preview at the bottom-left (their own "copied"
+        // Screenshots land as a framed preview at the bottom-right (their own "copied"
         // confirmation), instead of the center toast — clickable to edit, draggable to lift.
         let screenshotPreviewCard = ScreenshotPreviewCard()
         self.screenshotPreviewCard = screenshotPreviewCard
@@ -177,8 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ready: { [weak screenshotPreviewCard] capture in screenshotPreviewCard?.show(capture: capture) },
             saved: { [weak screenshotPreviewCard] id, url in screenshotPreviewCard?.saved(id: id, to: url) },
             saveFailed: { [weak screenshotPreviewCard] capture in
-                guard let model = screenshotPreviewCard?.model, model.capture.id == capture.id else { return }
-                model.error = String(localized: "The screenshot could not be saved.")
+                screenshotPreviewCard?.saveFailed(id: capture.id)
                 // CaptureCoordinator already emits the actual important failure toast.
             }
         )

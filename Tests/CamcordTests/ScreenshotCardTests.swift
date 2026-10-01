@@ -135,6 +135,128 @@ import UniformTypeIdentifiers
         #expect(await request.value == false)
         #expect(board.string(forType: .string) == "keep")
     }
+    @Test("concurrent Quick Look and share requests coalesce the immutable PNG export")
+    func coalescedExport() async throws {
+        let manager = FileManager.default
+        let fixture = try physicalTemporaryRoot().appendingPathComponent(UUID().uuidString)
+        try manager.createDirectory(at: fixture, withIntermediateDirectories: false)
+        defer { try? manager.removeItem(at: fixture) }
+        let counter = CardEncodeCounter()
+        var operations = ScreenshotCardModel.Operations()
+        operations.exports = ScreenshotTemporaryExports(directory: fixture.appendingPathComponent("exports"))
+        operations.encode = { capture in
+            await counter.record()
+            try await Task.sleep(for: .milliseconds(40))
+            return try EditorRendered(image: capture.image, pointSize: capture.pointSize).png
+        }
+        let shot = try capture(), model = ScreenshotCardModel(capture: shot, operations: operations)
+        let provider = model.dragProvider()
+        let quickLook = Task { @MainActor in try await model.exportedFileURL() }
+        let share = Task { @MainActor in
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+            provider.loadFileRepresentation(forTypeIdentifier: UTType.png.identifier) { url, error in
+                if let error { continuation.resume(throwing: error); return }
+                guard let url else { continuation.resume(throwing: CocoaError(.fileReadUnknown)); return }
+                do { continuation.resume(returning: try Data(contentsOf: url)) }
+                catch { continuation.resume(throwing: error) }
+            }
+            }
+        }
+        let url = try await quickLook.value, bytes = try await share.value
+        #expect(bytes == (try Data(contentsOf: url)))
+        #expect(bytes == (try EditorRendered(image: shot.image, pointSize: shot.pointSize).png))
+        #expect(await counter.count == 1)
+        #expect(try await model.exportedFileURL() == url)
+        #expect(await counter.count == 1)
+    }
+    @Test("failed immutable export can retry; a stale model completion cannot publish its URL")
+    func failedExportRetry() async throws {
+        let manager = FileManager.default
+        let fixture = try physicalTemporaryRoot().appendingPathComponent(UUID().uuidString)
+        try manager.createDirectory(at: fixture, withIntermediateDirectories: false)
+        defer { try? manager.removeItem(at: fixture) }
+        let counter = CardEncodeCounter()
+        var operations = ScreenshotCardModel.Operations()
+        operations.exports = ScreenshotTemporaryExports(directory: fixture.appendingPathComponent("exports"))
+        operations.encode = { capture in
+            if await counter.record() == 1 { throw CocoaError(.fileWriteUnknown) }
+            try await Task.sleep(for: .milliseconds(30))
+            return try EditorRendered(image: capture.image, pointSize: capture.pointSize).png
+        }
+        let model = ScreenshotCardModel(capture: try capture(), operations: operations)
+        await #expect(throws: CocoaError.self) { try await model.exportedFileURL() }
+        let request = Task { try await model.exportedFileURL() }
+        while await counter.count < 2 { await Task.yield() }
+        model.invalidate()
+        await #expect(throws: CancellationError.self) { try await request.value }
+        #expect(model.preparedExportURL == nil)
+        let acceptedExport = try await model.export.fileURL()
+        #expect(operations.exports.owns(acceptedExport))
+        #expect(await counter.count == 2)
+    }
+    @Test("native accepted file promise writes the frozen PNG after the source card is invalidated")
+    func nativeFilePromise() async throws {
+        let manager = FileManager.default
+        let fixture = try physicalTemporaryRoot().appendingPathComponent(UUID().uuidString)
+        try manager.createDirectory(at: fixture, withIntermediateDirectories: false)
+        defer { try? manager.removeItem(at: fixture) }
+        var operations = ScreenshotCardModel.Operations()
+        operations.exports = ScreenshotTemporaryExports(directory: fixture.appendingPathComponent("exports"))
+        let shot = try capture(), model = ScreenshotCardModel(capture: shot, operations: operations)
+        let delegate = ScreenshotCardPromiseDelegate(export: model.export)
+        let provider = ScreenshotCardPromiseWriter(fileType: UTType.png.identifier, delegate: delegate)
+        provider.userInfo = delegate
+        model.invalidate()
+        let destination = fixture.appendingPathComponent("accepted.png")
+        let error: Error? = await withCheckedContinuation { continuation in
+            delegate.filePromiseProvider(provider, writePromiseTo: destination) { continuation.resume(returning: $0) }
+        }
+        #expect(error == nil)
+        #expect(try Data(contentsOf: destination) == (try EditorRendered(image: shot.image, pointSize: shot.pointSize).png))
+        let existing = try Data(contentsOf: destination)
+        let conflict: Error? = await withCheckedContinuation { continuation in
+            delegate.filePromiseProvider(provider, writePromiseTo: destination) { continuation.resume(returning: $0) }
+        }
+        #expect(conflict != nil)
+        #expect(try Data(contentsOf: destination) == existing)
+    }
+    @Test("native promise writer preserves prepared PNG and URL payload through its actual constructor")
+    func nativePreparedPromiseWriter() async throws {
+        let manager = FileManager.default
+        let fixture = try physicalTemporaryRoot().appendingPathComponent(UUID().uuidString)
+        try manager.createDirectory(at: fixture, withIntermediateDirectories: false)
+        defer { try? manager.removeItem(at: fixture) }
+        var operations = ScreenshotCardModel.Operations()
+        operations.exports = ScreenshotTemporaryExports(directory: fixture.appendingPathComponent("exports"))
+        let shot = try capture(), model = ScreenshotCardModel(capture: shot, operations: operations)
+        let url = try await model.exportedFileURL()
+        let png = try #require(model.preparedExportPNG)
+        let delegate = ScreenshotCardPromiseDelegate(export: model.export)
+        let writer = ScreenshotCardPromiseWriter(fileType: UTType.png.identifier, delegate: delegate, preparedURL: url, preparedPNG: png)
+        writer.userInfo = delegate
+        let board = NSPasteboard(name: .init("camcord.promise-writer." + UUID().uuidString))
+        defer { board.releaseGlobally() }
+        #expect(writer.fileType == UTType.png.identifier)
+        #expect(writer.delegate === delegate)
+        let types = writer.writableTypes(for: board)
+        #expect(types.contains(.png))
+        #expect(types.contains(.fileURL))
+        let base = NSFilePromiseProvider(fileType: UTType.png.identifier, delegate: delegate)
+        #expect(Set(base.writableTypes(for: board)).isSubset(of: Set(types)))
+        #expect(writer.pasteboardPropertyList(forType: .png) as? Data == png)
+        #expect(writer.pasteboardPropertyList(forType: .fileURL) as? String == url.absoluteString)
+        board.clearContents()
+        #expect(board.writeObjects([writer]))
+        #expect(board.data(forType: .png) == png)
+        #expect(board.string(forType: .fileURL) == url.absoluteString)
+        model.invalidate()
+        let destination = fixture.appendingPathComponent("native-prepared.png")
+        let error: Error? = await withCheckedContinuation { continuation in
+            delegate.filePromiseProvider(writer, writePromiseTo: destination) { continuation.resume(returning: $0) }
+        }
+        #expect(error == nil)
+        #expect(try Data(contentsOf: destination) == png)
+    }
     @Test("the palette routes all five genuine capture kinds")
     func captureRouting() {
         var invoked: [CaptureKind] = []
@@ -147,4 +269,9 @@ import UniformTypeIdentifiers
         for kind in CaptureKind.allCases { actions.perform(kind) }
         #expect(invoked == CaptureKind.allCases)
     }
+}
+
+private actor CardEncodeCounter {
+    private(set) var count = 0
+    @discardableResult func record() -> Int { count += 1; return count }
 }

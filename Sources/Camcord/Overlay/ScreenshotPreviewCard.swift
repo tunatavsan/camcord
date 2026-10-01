@@ -4,90 +4,261 @@ import QuartzCore
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// One visible immutable capture; late save events can update only its UUID.
+/// Each immutable capture owns its own presentation and active dismissal budget.
 @MainActor final class ScreenshotPreviewCard {
-    typealias Presenter = @MainActor (NSPanel) -> Void
+    typealias Presenter = @MainActor (NSWindow) -> Void
+    typealias HostFactory = @MainActor (CGRect) -> NSWindow
+    typealias DisplayFrames = @MainActor () -> [(id: CGDirectDisplayID, visibleFrame: CGRect)]
+    typealias Animator = @MainActor (ScreenshotCardPresentation, Bool, Bool, @escaping @MainActor () -> Void) -> Void
+    struct Timing {
+        var now: @MainActor () -> TimeInterval = { CACurrentMediaTime() }
+        var sleep: @MainActor (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }
+    }
+    final class Entry {
+        let model: ScreenshotCardModel
+        let generation: UInt64
+        let window: NSWindow
+        let host: ScreenshotCardPresentation
+        let visibleFrame: CGRect
+        var dwell = ScreenshotCardDwell()
+        var task: Task<Void, Never>?
+        var shownAt: TimeInterval
+        var enteredAt: TimeInterval?
+        var exitAt: TimeInterval?
+        var orderedOutAt: TimeInterval?
+        var dismissReason: String?
+        init(model: ScreenshotCardModel, generation: UInt64, window: NSWindow,
+             host: ScreenshotCardPresentation, visibleFrame: CGRect, now: TimeInterval) {
+            self.model = model; self.generation = generation; self.window = window
+            self.host = host; self.visibleFrame = visibleFrame; shownAt = now
+        }
+    }
     var onEdit: (@MainActor (CapturedScreenshot) -> Void)?
     var onPin: (@MainActor (CapturedScreenshot) -> Void)?
     var claimClipboardPublication: (@MainActor () -> (@MainActor () -> Bool))?
-    private var panel: NSPanel?
-    private(set) var model: ScreenshotCardModel?
-    private var dismissTask: Task<Void, Never>?
+    private(set) var entries: [Entry] = []
+    var model: ScreenshotCardModel? { entries.last?.model }
+    private var nextGeneration: UInt64 = 0
     private let presenter: Presenter
+    private let hostFactory: HostFactory
+    private let animator: Animator
     private let screenFrame: @MainActor () -> CGRect?
+    private let displayFrames: DisplayFrames
+    private let usesFixtureFrame: Bool
+    private let enabled: @MainActor () -> Bool
+    private let reduceMotion: @MainActor () -> Bool
+    private let timing: Timing
     private let operations: ScreenshotCardModel.Operations
-    private var hovering = false
     private let quickLook = EditorQuickLook()
     private static var hasCleanedExports = false
     static func cardCornerRadius(for size: CGSize) -> CGFloat { Theme.Radius.floating }
-    static func shadowInset(for size: CGSize) -> CGFloat { Theme.Space.m }
+    static func shadowInset(for size: CGSize) -> CGFloat { 12 }
     init(presenter: Presenter? = nil, screenFrame: (@MainActor () -> CGRect?)? = nil,
-         operations: ScreenshotCardModel.Operations = .init()) {
+         operations: ScreenshotCardModel.Operations = .init(), hostFactory: HostFactory? = nil,
+         animator: Animator? = nil, timing: Timing = .init(), displayFrames: DisplayFrames? = nil,
+         enabled: @escaping @MainActor () -> Bool = { HUDToast.isEnabled() },
+         reduceMotion: @escaping @MainActor () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }) {
         self.presenter = presenter ?? { $0.orderFrontRegardless() }
+        self.hostFactory = hostFactory ?? { frame in
+            let panel = ScreenshotCardPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            panel.level = .statusBar
+            panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
+            return panel
+        }
+        self.animator = animator ?? { host, entering, reduced, completion in host.animate(entering: entering, reduceMotion: reduced, completion: completion) }
         self.screenFrame = screenFrame ?? {
             (NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main)?.visibleFrame
         }
-        self.operations = operations
+        self.displayFrames = displayFrames ?? {
+            NSScreen.screens.compactMap { screen in
+                guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
+                return (number.uint32Value, screen.visibleFrame)
+            }
+        }
+        usesFixtureFrame = screenFrame != nil && displayFrames == nil
+        self.operations = operations; self.timing = timing; self.enabled = enabled; self.reduceMotion = reduceMotion
     }
     func show(capture: CapturedScreenshot) {
+        guard enabled(), let visible = visibleFrame(for: capture) else { return }
         if !Self.hasCleanedExports {
             Self.hasCleanedExports = true
             let exports = operations.exports
             Task.detached(priority: .background) { exports.cleanup() }
         }
-        hide()
-        guard HUDToast.isEnabled(), let visible = screenFrame() else { return }
+        // A repeated delivery never resets an existing capture's clock.
+        guard !entries.contains(where: { $0.model.capture.id == capture.id }) else { return }
+        if entries.count == 3 { dismiss(entries[0], reason: "evicted", animated: false) }
+        nextGeneration &+= 1
+        let generation = nextGeneration
         let model = ScreenshotCardModel(capture: capture, operations: operations)
-        model.claimClipboardPublication = { [weak self, weak model] in self?.claimClipboardPublication?() ?? model?.claimLocalPublication() ?? { false } }
-        model.onBusyChange = { [weak self, weak model] in
-            guard let self, self.model === model else { return }
-            self.armDismiss()
+        let frame = CGRect(x: visible.maxX - 264, y: visible.minY + 12, width: 264, height: 240)
+        let window = hostFactory(frame)
+        window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = false
+        window.animationBehavior = .none; window.isReleasedWhenClosed = false
+        let host = ScreenshotCardPresentation(model: model, canEdit: onEdit != nil, canPin: onPin != nil)
+        let entry = Entry(model: model, generation: generation, window: window, host: host, visibleFrame: visible, now: timing.now())
+        let current: @MainActor () -> Bool = { [weak self, weak entry] in
+            guard let self, let entry else { return false }
+            return self.isCurrent(entry, generation: generation)
         }
-        let content = ScreenshotCardContent(model: model,
-            edit: { [weak self] in self?.onEdit?(capture); self?.hide() },
-            pin: { [weak self] in self?.onPin?(capture) },
-            quickLook: { [weak self] url in self?.quickLook.show(url) },
-            dismiss: { [weak self] in self?.hide() },
-            canEdit: onEdit != nil, canPin: onPin != nil,
-            hover: { [weak self] hover in self?.hovering = hover; self?.armDismiss() })
-        let size = CGSize(width: 344, height: 316)
-        let origin = CGPoint(x: visible.minX + Theme.Space.l, y: visible.minY + Theme.Space.l)
-        let panel = ScreenshotCardPanel(contentRect: CGRect(origin: origin, size: size),
-            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
-        panel.level = .statusBar; panel.animationBehavior = .none; panel.isReleasedWhenClosed = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
-        let host = ScreenshotCardHost(rootView: content)
-        host.onCancel = { [weak self] in self?.hide() }
-        panel.contentView = host
-        self.panel = panel; self.model = model; hovering = false
-        presenter(panel); armDismiss()
+        model.claimClipboardPublication = { [weak self, weak model] in self?.claimClipboardPublication?() ?? model?.claimLocalPublication() ?? { false } }
+        model.onBusyChange = { [weak self, weak entry] in
+            guard current(), let self, let entry else { return }
+            self.pause(entry, reason: .busy, active: model.isBusy)
+            self.reflow()
+        }
+        model.onContentChange = { [weak self] in if current() { self?.reflow() } }
+        host.onPause = { [weak self, weak entry] reason, active in
+            guard current(), let self, let entry else { return }
+            self.pause(entry, reason: reason, active: active)
+        }
+        host.onDismiss = { [weak self, weak entry] reason in
+            guard current(), let self, let entry else { return }
+            self.dismiss(entry, reason: reason)
+        }
+        host.onEdit = { [weak self, weak entry] in
+            guard current(), let self, let entry, let edit = self.onEdit else { return }
+            edit(capture); self.dismiss(entry, reason: "edit")
+        }
+        host.onPin = { [weak self] in if current() { self?.onPin?(capture) } }
+        host.onQuickLook = { [weak self] url in if current() { self?.quickLook.show(url) } }
+        window.contentView = host
+        entries.append(entry)
+        reflow()
+        presenter(window)
+        animator(host, true, reduceMotion()) { [weak self, weak entry] in
+            guard current(), let self, let entry else { return }
+            entry.enteredAt = self.timing.now()
+            entry.dwell.enter(at: self.timing.now())
+            self.arm(entry)
+        }
     }
-    func saved(id: UUID, to url: URL) { model?.saved(id: id, to: url) }
-    func hide() {
-        dismissTask?.cancel(); dismissTask = nil
-        model?.invalidate(); model = nil
-        panel?.orderOut(nil); panel = nil; hovering = false
+    private func visibleFrame(for capture: CapturedScreenshot) -> CGRect? {
+        // Explicit legacy fixture geometry overrides native displays. In production the
+        // request's frozen display ID selects its current visible frame, including Dock changes.
+        if !usesFixtureFrame, let id = capture.originDisplayID,
+           let matching = displayFrames().first(where: { $0.id == id }) { return matching.visibleFrame }
+        // Imports and a display removed during capture retain the documented cursor fallback.
+        return screenFrame()
     }
-    private func armDismiss() {
-        dismissTask?.cancel(); dismissTask = nil
-        guard !hovering, model?.isBusy == false else { return }
-        let id = model?.capture.id
-        dismissTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(6))
-            guard !Task.isCancelled, self?.model?.capture.id == id else { return }
-            self?.hide()
+    func saved(id: UUID, to url: URL) { entries.first { $0.model.capture.id == id }?.model.saved(id: id, to: url) }
+    func saveFailed(id: UUID) { entries.first { $0.model.capture.id == id }?.model.saveFailed(id: id) }
+    func hide() { for entry in entries { dismiss(entry, reason: "hidden", animated: false) } }
+    func isCurrent(_ entry: Entry, generation: UInt64) -> Bool {
+        entry.generation == generation && entries.contains { $0 === entry } && entry.dwell.phase != .leaving
+    }
+    private func pause(_ entry: Entry, reason: ScreenshotCardDwell.Pause, active: Bool) {
+        guard entry.dwell.setPaused(reason, active: active, at: timing.now()) else { return }
+        arm(entry)
+    }
+    private func arm(_ entry: Entry) {
+        entry.task?.cancel(); entry.task = nil
+        guard let deadline = entry.dwell.deadline else { return }
+        let generation = entry.generation, sleep = timing.sleep
+        entry.task = Task { [weak self, weak entry] in
+            guard let self, let entry else { return }
+            do { try await sleep(max(0, deadline - self.timing.now())) } catch { return }
+            guard !Task.isCancelled, self.isCurrent(entry, generation: generation),
+                  entry.dwell.deadline == deadline, self.timing.now() >= deadline else { return }
+            self.dismiss(entry, reason: "timeout")
+        }
+    }
+    private func dismiss(_ entry: Entry, reason: String, animated: Bool = true) {
+        guard entries.contains(where: { $0 === entry }) else { return }
+        entry.task?.cancel(); entry.task = nil
+        entry.dwell.leave(at: timing.now()); entry.exitAt = timing.now(); entry.dismissReason = reason
+        entry.model.invalidate(); entry.host.invalidate()
+        entries.removeAll { $0 === entry }
+        reflow()
+        let finish: @MainActor () -> Void = { [entry, timing] in
+            entry.window.orderOut(nil); entry.orderedOutAt = timing.now()
+        }
+        if animated { animator(entry.host, false, reduceMotion(), finish) } else { finish() }
+    }
+    private func reflow() {
+        let displays = Set(entries.map { ScreenshotCardDisplayFrame($0.visibleFrame) })
+        for display in displays {
+            let group = entries.filter { $0.visibleFrame == display.frame }
+            let available = max(0, display.frame.height - 40 - CGFloat(max(0, group.count - 1)) * 4)
+            // Fixed chrome is paid for per card before sharing the remaining image space.
+            // An error/busy card can be taller without clipping its rows or wasting the
+            // quiet cards' space through equal-height slots.
+            let chromeHeights = group.map { $0.host.measuredChromeHeight + 24 }
+            let imageBudget = max(0, available - chromeHeights.reduce(0, +)) / CGFloat(group.count)
+            var y = display.frame.minY + 12
+            for entry in group {
+                entry.host.previewLimit = min(140, imageBudget)
+                let height = entry.host.measuredHeight + 24
+                let frame = CGRect(x: display.frame.maxX - 264, y: y, width: 264, height: height)
+                entry.host.reposition(from: entry.window.frame, to: frame, reduceMotion: reduceMotion())
+                entry.window.setFrame(frame, display: true)
+                y += height + 4
+            }
         }
     }
 }
 
 private final class ScreenshotCardPanel: NSPanel { override var canBecomeKey: Bool { true } }
-private final class ScreenshotCardHost: NSHostingView<ScreenshotCardContent> {
-    var onCancel: (() -> Void)?
-    override func cancelOperation(_ sender: Any?) { onCancel?() }
+private struct ScreenshotCardDisplayFrame: Hashable {
+    let x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat
+    init(_ frame: CGRect) { x = frame.minX; y = frame.minY; width = frame.width; height = frame.height }
+    var frame: CGRect { CGRect(x: x, y: y, width: width, height: height) }
 }
 
-/// The async boundary is independent of native presentation for real named-pasteboard tests.
+/// A monotonic active budget: each pause reason is independent and duplicate callbacks are inert.
+struct ScreenshotCardDwell {
+    enum Phase: String { case entering, visible, leaving }
+    enum Pause: String, Hashable { case hover, busy, sharing, gesture, dragging }
+    private(set) var phase: Phase = .entering
+    private(set) var remaining: TimeInterval = 5
+    private(set) var pauses: Set<Pause> = []
+    private(set) var deadline: TimeInterval?
+    func remaining(at now: TimeInterval) -> TimeInterval { deadline.map { max(0, $0 - now) } ?? remaining }
+    mutating func enter(at now: TimeInterval) {
+        guard phase == .entering else { return }
+        phase = .visible
+        if pauses.isEmpty { deadline = now + remaining }
+    }
+    @discardableResult mutating func setPaused(_ reason: Pause, active: Bool, at now: TimeInterval) -> Bool {
+        guard phase != .leaving, pauses.contains(reason) != active else { return false }
+        if let deadline { remaining = max(0, deadline - now); self.deadline = nil }
+        if active { pauses.insert(reason) } else { pauses.remove(reason) }
+        if phase == .visible, pauses.isEmpty { deadline = now + remaining }
+        return true
+    }
+    mutating func leave(at now: TimeInterval) { remaining = remaining(at: now); deadline = nil; phase = .leaving }
+}
+
+/// Export ownership outlives a dismissed card when an external drag has already been accepted.
+actor ScreenshotCardExport {
+    private let capture: CapturedScreenshot
+    private let exports: ScreenshotTemporaryExports
+    private let encode: @Sendable (CapturedScreenshot) async throws -> Data
+    private var completed: URL?
+    private var pending: Task<URL, Error>?
+    init(capture: CapturedScreenshot, exports: ScreenshotTemporaryExports,
+         encode: @escaping @Sendable (CapturedScreenshot) async throws -> Data) {
+        self.capture = capture; self.exports = exports; self.encode = encode
+    }
+    func fileURL() async throws -> URL {
+        if let completed, exports.owns(completed) { return completed }
+        if let pending { return try await pending.value }
+        let capture = capture, exports = exports, encode = encode
+        let task = Task {
+            let png = try await encode(capture)
+            try Task.checkCancellation()
+            return try await Task.detached { try exports.write(png) }.value
+        }
+        pending = task
+        do {
+            let url = try await task.value
+            completed = url; pending = nil
+            return url
+        } catch { pending = nil; throw error }
+    }
+}
+
+/// The async boundary is independent of native presentation for named-pasteboard tests.
 @MainActor final class ScreenshotCardModel: ObservableObject {
     @MainActor struct Operations {
         var encode: @Sendable (CapturedScreenshot) async throws -> Data = { capture in
@@ -101,66 +272,59 @@ private final class ScreenshotCardHost: NSHostingView<ScreenshotCardContent> {
         }
     }
     let capture: CapturedScreenshot
+    let export: ScreenshotCardExport
     @Published private(set) var savedURL: URL?
+    @Published private(set) var preparedExportURL: URL?
+    @Published private(set) var preparedExportPNG: Data?
     @Published private(set) var isBusy = false
-    @Published var error: String?
-    private var isAlive = true
-    private var exportURL: URL?
-    private var exportTask: Task<URL, Error>?
+    @Published var error: String? { didSet { onContentChange?() } }
+    private(set) var isAlive = true
     private var localRequests = LatestRequestGate()
+    private var busyCount = 0
     private let operations: Operations
     var claimClipboardPublication: (@MainActor () -> (@MainActor () -> Bool))?
     var onBusyChange: (@MainActor () -> Void)?
-    init(capture: CapturedScreenshot, operations: Operations = .init()) { self.capture = capture; self.operations = operations }
+    var onContentChange: (@MainActor () -> Void)?
+    init(capture: CapturedScreenshot, operations: Operations = .init()) {
+        self.capture = capture; self.operations = operations
+        export = ScreenshotCardExport(capture: capture, exports: operations.exports, encode: operations.encode)
+    }
     func saved(id: UUID, to url: URL) { guard isAlive, capture.id == id else { return }; savedURL = url }
-    func invalidate() { isAlive = false; exportTask?.cancel(); exportTask = nil; _ = localRequests.begin() }
+    func saveFailed(id: UUID) { guard isAlive, capture.id == id else { return }; error = String(localized: "The screenshot could not be saved.") }
+    func invalidate() { isAlive = false; _ = localRequests.begin(); onBusyChange = nil; onContentChange = nil }
     func claimLocalPublication() -> @MainActor () -> Bool {
         let token = localRequests.begin()
         return { [weak self] in self?.isAlive == true && self?.localRequests.isCurrent(token) == true }
     }
     func copy(to board: NSPasteboard = .general) async -> Bool {
         guard isAlive, !isBusy else { return false }
-        // Claim the shared epoch synchronously, before the first encoding suspension.
         let mayPublish = claimClipboardPublication?() ?? claimLocalPublication()
-        setBusy(true); defer { setBusy(false) }
+        beginBusy(); defer { endBusy() }
         let result = await operations.copy(capture, board, { [weak self] in self?.isAlive == true && !Task.isCancelled && mayPublish() })
         if !result, isAlive, !Task.isCancelled, mayPublish() { error = String(localized: "The screenshot could not be copied.") }
         return result
     }
     func exportedFileURL() async throws -> URL {
         guard isAlive else { throw CancellationError() }
-        if let exportURL, operations.exports.owns(exportURL) { return exportURL }
-        if let exportTask {
-            let url = try await exportTask.value
-            guard isAlive, !Task.isCancelled else { throw CancellationError() }
-            return url
-        }
-        setBusy(true)
-        let capture = capture, exports = operations.exports, encode = operations.encode
-        let task = Task {
-            let png = try await encode(capture)
-            try Task.checkCancellation()
-            return try await Task.detached { try exports.write(png) }.value
-        }
-        exportTask = task
-        defer { exportTask = nil; setBusy(false) }
-        let url = try await task.value
+        beginBusy(); defer { endBusy() }
+        let url = try await export.fileURL()
         guard isAlive, !Task.isCancelled else { throw CancellationError() }
-        exportURL = url
+        let png = try await Task.detached { try Data(contentsOf: url) }.value
+        guard isAlive, !Task.isCancelled else { throw CancellationError() }
+        preparedExportURL = url; preparedExportPNG = png
         return url
     }
-    private func setBusy(_ busy: Bool) { isBusy = busy; onBusyChange?() }
+    private func beginBusy() { busyCount += 1; if !isBusy { isBusy = true; onBusyChange?() } }
+    private func endBusy() { busyCount -= 1; if busyCount == 0, isBusy { isBusy = false; onBusyChange?() } }
     func dragProvider() -> NSItemProvider {
         let provider = NSItemProvider()
         provider.suggestedName = String(localized: "Screenshot.png")
-        let capture = capture, exports = operations.exports, encode = operations.encode
+        let export = export
         provider.registerFileRepresentation(forTypeIdentifier: UTType.png.identifier, fileOptions: [], visibility: .all) { completion in
             let progress = Progress(totalUnitCount: 1)
             let task = Task {
                 do {
-                    let png = try await encode(capture)
-                    try Task.checkCancellation()
-                    let url = try await Task.detached { try exports.write(png) }.value
+                    let url = try await export.fileURL()
                     try Task.checkCancellation()
                     completion(url, false, nil); progress.completedUnitCount = 1
                 } catch { completion(nil, false, error) }
@@ -169,75 +333,6 @@ private final class ScreenshotCardHost: NSHostingView<ScreenshotCardContent> {
             return progress
         }
         return provider
-    }
-}
-
-private struct ScreenshotCardContent: View {
-    @ObservedObject var model: ScreenshotCardModel
-    let edit: () -> Void, pin: () -> Void, quickLook: (URL) -> Void, dismiss: () -> Void
-    let canEdit: Bool, canPin: Bool
-    let hover: (Bool) -> Void
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var appeared = false
-    var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
-            HStack {
-                Label("Copied", systemImage: "checkmark").font(Theme.Font.bodyStrong)
-                Spacer()
-                Button(action: dismiss) { Image(systemName: "xmark") }.buttonStyle(.plain).accessibilityLabel("Dismiss screenshot")
-            }
-            Image(nsImage: NSImage(cgImage: model.capture.image, size: model.capture.pointSize))
-                .resizable().scaledToFit().frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Theme.Palette.well.color)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.well))
-                .onDrag { model.dragProvider() }
-                .accessibilityLabel("Screenshot preview")
-                .help("Drag the screenshot to another app")
-            Text(verbatim: "\(model.capture.image.width) × \(model.capture.image.height)")
-                .font(Theme.Font.data).foregroundStyle(Theme.Palette.ink2.color)
-            HStack {
-                Button("Edit", action: edit).disabled(!canEdit)
-                Button("Pin", action: pin).disabled(!canPin)
-                Button("Copy") { Task { _ = await model.copy() } }
-                Button("Quick Look") { Task { do { quickLook(try await model.exportedFileURL()) } catch { model.error = error.localizedDescription } } }
-                ScreenshotCardShareButton(model: model).frame(width: 24, height: 24)
-            }
-            .font(Theme.Font.caption).buttonStyle(.bordered).disabled(model.isBusy)
-            if let error = model.error { Text(error).font(Theme.Font.caption).foregroundStyle(Theme.Palette.record.color).lineLimit(2) }
-            if model.isBusy { ProgressView().controlSize(.mini).accessibilityLabel("Preparing screenshot") }
-        }
-        .padding(Theme.Space.m).foregroundStyle(Theme.Palette.ink.color).tint(Theme.Palette.ink.color)
-        .camcordGlass(.chrome, in: RoundedRectangle(cornerRadius: Theme.Radius.floating))
-        .opacity(appeared ? 1 : 0)
-        .scaleEffect(reduceMotion || appeared ? 1 : Theme.Motion.condenseScale)
-        .onAppear { withAnimation(Theme.Motion.resolve(Theme.Motion.panel, reduceMotion: reduceMotion)) { appeared = true } }
-        .onHover(perform: hover)
-    }
-}
-
-private struct ScreenshotCardShareButton: NSViewRepresentable {
-    let model: ScreenshotCardModel
-    func makeCoordinator() -> Coordinator { Coordinator(model: model) }
-    func makeNSView(context: Context) -> NSButton {
-        let button = NSButton(image: NSImage(systemSymbolName: "square.and.arrow.up", accessibilityDescription: String(localized: "Share"))!, target: context.coordinator, action: #selector(Coordinator.share(_:)))
-        button.isBordered = false; button.contentTintColor = Theme.Palette.ink.ns
-        button.setAccessibilityLabel(String(localized: "Share")); return button
-    }
-    func updateNSView(_ view: NSButton, context: Context) { context.coordinator.model = model; view.isEnabled = !model.isBusy }
-    @MainActor final class Coordinator: NSObject {
-        var model: ScreenshotCardModel
-        private var picker: NSSharingServicePicker?
-        init(model: ScreenshotCardModel) { self.model = model }
-        @objc func share(_ button: NSButton) {
-            let snapshot = model
-            Task {
-                do {
-                    let url = try await snapshot.exportedFileURL()
-                    let picker = NSSharingServicePicker(items: [url]); self.picker = picker
-                    picker.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-                } catch { snapshot.error = error.localizedDescription }
-            }
-        }
     }
 }
 
