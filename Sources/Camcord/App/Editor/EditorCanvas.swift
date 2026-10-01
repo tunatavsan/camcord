@@ -22,6 +22,40 @@ struct EditorCanvas: NSViewRepresentable {
 }
 
 @MainActor final class EditorCanvasNSView: NSView {
+    enum CursorKind: Equatable {
+        case arrow, crosshair, iBeam, openHand, closedHand
+        case resize(NSCursor.FrameResizePosition)
+        var native: NSCursor {
+            switch self {
+            case .arrow: .arrow
+            case .crosshair: .crosshair
+            case .iBeam: .iBeam
+            case .openHand: .openHand
+            case .closedHand: .closedHand
+            case .resize(let position): .frameResize(position:position,directions:.all)
+            }
+        }
+    }
+    private(set) var cursorKind = CursorKind.arrow
+    var cursorPublisher: (@MainActor (NSCursor) -> Void)?
+    var isPixelInspectionEnabled = false {
+        didSet {
+            if !isPixelInspectionEnabled { hex = ""; session?.inspectPixel(at:nil) }
+            refreshCursorRouting(force:true); needsDisplay = true
+        }
+    }
+    private var lastPointerLocation: CGPoint?
+    private struct CursorConfiguration: Equatable {
+        var tool: EditorTool; var selectedID: UUID?; var annotations: [EditorAnnotation]
+        var zoom: CGFloat; var origin: CGPoint; var visible: CGRect
+        var dragging: Bool; var moving: Bool; var handle: Int?
+    }
+    private var cursorConfiguration: CursorConfiguration?
+    private func publishCursor(_ kind:CursorKind) {
+        cursorKind = kind
+        if let cursorPublisher { cursorPublisher(kind.native) }
+        else if window?.isVisible == true { kind.native.set() }
+    }
     weak var session: EditorSession?
     var zoom: CGFloat = 1
     private(set) var fitTopInset: CGFloat = 0
@@ -78,8 +112,8 @@ struct EditorCanvas: NSViewRepresentable {
     }
     var imageOrigin: CGPoint {
         let point = CGPoint(x: (bounds.width - imageSize.width) / 2, y: (bounds.height - imageSize.height + fitTopInset) / 2)
-        let backing = convertToBacking(point)
-        return convertFromBacking(CGPoint(x: backing.x.rounded(), y: fitTopInset > 0 ? backing.y.rounded(.up) : backing.y.rounded()))
+        let scale = (window?.backingScaleFactor ?? 1) * effectiveZoom
+        return CGPoint(x:(point.x*scale).rounded()/scale,y:(point.y*scale).rounded(fitTopInset > 0 ? .up : .toNearestOrAwayFromZero)/scale)
     }
     private var padding: CGFloat {
         guard let bg = session?.document?.edits.background, bg.preset != .none else { return 0 }
@@ -138,7 +172,16 @@ struct EditorCanvas: NSViewRepresentable {
         }
         redactionsLayer.path = redactions; redactionsLayer.fillColor = CGColor(gray: 0, alpha: 1)
         liveRenderer.invalidate(baseGeneration: baseGeneration, annotations: annotations, baseEdits: session.displayBaseEdits)
-        let scale = min(4, max(0.02, (window?.backingScaleFactor ?? 1) * effectiveZoom))
+        let presentationScale = (window?.backingScaleFactor ?? 1) * effectiveZoom
+        let scale = min(4, max(0.02, presentationScale))
+        // Destination replacement and its base-mask hole share exact physical
+        // pixel edges. Independent antialiasing would leave transparent seams.
+        func patchFrame(_ region:CGRect) -> CGRect {
+            let rect = viewRect(region)
+            let left = (rect.minX*presentationScale).rounded()/presentationScale, top = (rect.minY*presentationScale).rounded()/presentationScale
+            let right = (rect.maxX*presentationScale).rounded()/presentationScale, bottom = (rect.maxY*presentationScale).rounded()/presentationScale
+            return CGRect(x:left,y:top,width:right-left,height:bottom-top)
+        }
         let common = zip(previousAnnotations, annotations).prefix { $0 == $1 }.count
         let changed = Array(previousAnnotations.dropFirst(common)) + Array(annotations.dropFirst(common))
         let privacyChanged = previousAnnotations.filter { $0.kind == .redact } != annotations.filter { $0.kind == .redact }
@@ -165,7 +208,7 @@ struct EditorCanvas: NSViewRepresentable {
                     do {
                         try liveRenderer.preparePrivacy(region:region,scale:scale,base:base,document:document,annotations:annotations)
                         let image = try liveRenderer.compose(rect:region,scale:scale,base:base,document:document,annotations:annotations)
-                        privacyLayer.frame = viewRect(region); privacyLayer.contentsScale = scale
+                        privacyLayer.frame = patchFrame(region); privacyLayer.contentsScale = scale
                         privacyLayer.minificationFilter = .trilinear; privacyLayer.magnificationFilter = .nearest
                         privacyLayer.contents = image; privacyRegion = region
                         lastPrivacyAnnotations = privacy; lastPrivacyGeneration = baseGeneration; lastPrivacyScale = scale; privacyNeedsRefresh = false
@@ -187,7 +230,7 @@ struct EditorCanvas: NSViewRepresentable {
                     let key = "\(x),\(y),\(tileSize),\(crop)"; wanted.insert(key)
                     let item = patches[key] ?? (region, CALayer())
                     if patches[key] == nil { patchesLayer.addSublayer(item.layer) }
-                    item.layer.frame = viewRect(region); item.layer.contentsScale = scale
+                    item.layer.frame = patchFrame(region); item.layer.contentsScale = scale
                     item.layer.minificationFilter = .trilinear; item.layer.magnificationFilter = .nearest
                     if (patches[key] == nil || allDirty || dirty.intersects(region)) && (!livePrivacy || renderPrivacy) {
                         do { item.layer.contents = try liveRenderer.compose(rect: region, scale: scale, base: base, document: document, annotations: annotations) }
@@ -201,12 +244,13 @@ struct EditorCanvas: NSViewRepresentable {
             }
         }
         for key in Array(patches.keys) where !wanted.contains(key) { patches.removeValue(forKey: key)?.layer.removeFromSuperlayer() }
+        if let privacyRegion { privacyLayer.frame = patchFrame(privacyRegion) }
         // Replace, rather than source-over, destination-bearing tiles. This also
         // preserves source alpha instead of compositing the same underlay twice.
         let maskPath = CGMutablePath(); maskPath.addRect(CGRect(origin: .zero, size: imageSize))
-        for item in patches.values { maskPath.addRect(viewRect(item.rect).offsetBy(dx: -imageOrigin.x, dy: -imageOrigin.y)) }
-        if let privacyRegion { maskPath.addRect(viewRect(privacyRegion).offsetBy(dx:-imageOrigin.x,dy:-imageOrigin.y)) }
-        baseMask.frame = CGRect(origin: .zero, size: imageSize); baseMask.path = maskPath
+        for item in patches.values { maskPath.addRect(item.layer.frame.offsetBy(dx: -imageOrigin.x, dy: -imageOrigin.y)) }
+        if privacyRegion != nil { maskPath.addRect(privacyLayer.frame.offsetBy(dx:-imageOrigin.x,dy:-imageOrigin.y)) }
+        baseMask.frame = CGRect(origin: .zero, size: imageSize); baseMask.contentsScale = presentationScale; baseMask.path = maskPath
         baseLayer.mask = patches.isEmpty && privacyRegion == nil ? nil : baseMask
         // UI shadow is common destination underlay for both retained source and
         // replacement tiles; masking the source must not punch a shadow hole.
@@ -218,6 +262,7 @@ struct EditorCanvas: NSViewRepresentable {
         canvasShadowLayer.shadowPath = CGPath(rect: CGRect(origin: .zero, size: imageSize), transform: nil)
         previousAnnotations = annotations
         refreshSelection()
+        refreshCursorRouting()
     }
     private func startPrivacyDisplayLink() {
         guard privacyDisplayLink == nil, window?.isVisible == true, !isHiddenOrHasHiddenAncestor else { return }
@@ -238,14 +283,14 @@ struct EditorCanvas: NSViewRepresentable {
             return [CGPoint(x: viewRect(CGRect(origin: pair.start, size: .zero)).minX - dx / length * offset, y: viewRect(CGRect(origin: pair.start, size: .zero)).minY - dy / length * offset),
                     CGPoint(x: viewRect(CGRect(origin: pair.end, size: .zero)).minX + dx / length * offset, y: viewRect(CGRect(origin: pair.end, size: .zero)).minY + dy / length * offset)]
         }
-        let rect = viewRect(annotation.rect).insetBy(dx: -offset, dy: -offset)
+        let rect = viewRect(paintRect(annotation)).insetBy(dx: -offset, dy: -offset)
         return [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.midX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.midY), CGPoint(x: rect.maxX, y: rect.maxY), CGPoint(x: rect.midX, y: rect.maxY), CGPoint(x: rect.minX, y: rect.maxY), CGPoint(x: rect.minX, y: rect.midY)]
     }
     private func refreshSelection() {
         let annotation = candidateAnnotation ?? session?.selectedAnnotation
         let outline = CGMutablePath(), handles = CGMutablePath()
         if let annotation {
-            if annotation.kind != .arrow { outline.addRect(viewRect(annotation.rect).insetBy(dx: -6 / effectiveZoom, dy: -6 / effectiveZoom)) }
+            if annotation.kind != .arrow { outline.addRect(viewRect(paintRect(annotation)).insetBy(dx: -6 / effectiveZoom, dy: -6 / effectiveZoom)) }
             for point in handlePoints(for: annotation) { handles.addRect(CGRect(x: point.x - 4 / effectiveZoom, y: point.y - 4 / effectiveZoom, width: 8 / effectiveZoom, height: 8 / effectiveZoom)) }
         }
         if let cropCandidate { outline.addRect(viewRect(cropCandidate)) }
@@ -266,10 +311,21 @@ struct EditorCanvas: NSViewRepresentable {
                 let tolerance = max(CGFloat(annotation.style.lineWidth) * 2, 6 / effectiveZoom)
                 return hypot(point.x - pair.start.x - t * dx, point.y - pair.start.y - t * dy) <= tolerance
             }
-            return annotation.rect.insetBy(dx: -6 / effectiveZoom, dy: -6 / effectiveZoom).contains(point)
+            return paintRect(annotation).insetBy(dx: -6 / effectiveZoom, dy: -6 / effectiveZoom).contains(point)
         }
     }
+    private func paintRect(_ annotation: EditorAnnotation) -> CGRect {
+        guard let document = session?.document else { return annotation.rect }
+        return EditorRenderer.textLayoutRect(annotation,document:document)
+    }
+    private func candidate(_ session:EditorSession,from:CGPoint,to:CGPoint) -> EditorAnnotation? {
+        guard var annotation = session.candidate(tool:session.tool,from:from,to:to) else { return nil }
+        annotation.rect = paintRect(annotation)
+        return annotation
+    }
     override func mouseDown(with event: NSEvent) {
+        lastPointerLocation = convert(event.locationInWindow,from:nil)
+        defer { refreshCursorRouting(force:true) }
         window?.makeFirstResponder(self)
         guard let session, let document = session.document, let point = sourcePoint(convert(event.locationInWindow, from: nil)) else { return }
         let location = convert(event.locationInWindow, from: nil)
@@ -285,10 +341,11 @@ struct EditorCanvas: NSViewRepresentable {
             }
             original = hit; candidateAnnotation = hit
         }
-        else { session.selectedID = nil; original = nil; candidateAnnotation = session.candidate(tool: session.tool, from: point, to: point) }
+        else { session.selectedID = nil; original = nil; candidateAnnotation = candidate(session,from:point,to:point) }
         refreshLayers()
     }
     override func mouseDragged(with event: NSEvent) {
+        lastPointerLocation = convert(event.locationInWindow,from:nil)
         guard let session, let document = session.document, let start, let point = sourcePoint(convert(event.locationInWindow, from: nil)) else { return }
         if var original {
             if let handleIndex {
@@ -299,7 +356,7 @@ struct EditorCanvas: NSViewRepresentable {
                     func clamp(_ p: CGPoint) -> CGPoint { CGPoint(x: min(max(0, p.x), document.bounds.maxX), y: min(max(0, p.y), document.bounds.maxY)) }
                     original.setArrowEndpoints(start: clamp(pair.start), end: clamp(pair.end))
                 } else {
-                    var rect = original.rect
+                    var rect = paintRect(original)
                     let dx = point.x - start.x, dy = point.y - start.y
                     let minX = [0, 6, 7].contains(handleIndex) ? rect.minX + dx : rect.minX
                     let maxX = [2, 3, 4].contains(handleIndex) ? rect.maxX + dx : rect.maxX
@@ -307,6 +364,7 @@ struct EditorCanvas: NSViewRepresentable {
                     let maxY = [4, 5, 6].contains(handleIndex) ? rect.maxY + dy : rect.maxY
                     rect = CGRect(x: min(minX, maxX), y: min(minY, maxY), width: max(1, abs(maxX - minX)), height: max(1, abs(maxY - minY)))
                     original.setRect(rect.intersection(document.bounds))
+                    original.rect = paintRect(original)
                 }
             } else {
                 let rect = original.rect
@@ -315,7 +373,7 @@ struct EditorCanvas: NSViewRepresentable {
             }
             candidateAnnotation = original
         } else if session.tool == .crop { cropCandidate = EditorGeometry.drag(from: start, to: point, bounds: document.bounds) }
-        else { candidateAnnotation = session.candidate(tool: session.tool, from: start, to: point); candidateAnnotation?.id = creatingID }
+        else { candidateAnnotation = candidate(session,from:start,to:point); candidateAnnotation?.id = creatingID }
         refreshLayers(); needsDisplay = true
     }
     override func mouseUp(with event: NSEvent) {
@@ -333,22 +391,62 @@ struct EditorCanvas: NSViewRepresentable {
     func cancelGesture() { start = nil; original = nil; handleIndex = nil; candidateAnnotation = nil; cropCandidate = nil; refreshLayers(); needsDisplay = true }
     override func updateTrackingAreas() {
         super.updateTrackingAreas(); if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self); addTrackingArea(area); tracking = area
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .activeAlways, .inVisibleRect], owner: self); addTrackingArea(area); tracking = area
     }
+    private var toolCursor: CursorKind {
+        switch session?.tool {
+        case .text: .iBeam
+        case nil,.select: .arrow
+        default: .crosshair
+        }
+    }
+    private func resizeCursor(_ annotation:EditorAnnotation,index:Int) -> CursorKind {
+        let positions: [NSCursor.FrameResizePosition] = [.topLeft,.top,.topRight,.right,.bottomRight,.bottom,.bottomLeft,.left]
+        guard annotation.kind == .arrow else { return .resize(positions[index]) }
+        let pair = annotation.resolvedArrowEndpoints
+        let dx = index == 0 ? pair.start.x-pair.end.x : pair.end.x-pair.start.x
+        let dy = index == 0 ? pair.start.y-pair.end.y : pair.end.y-pair.start.y
+        let diagonal = tan(CGFloat.pi/8)
+        if abs(dy) <= abs(dx)*diagonal { return .resize(dx < 0 ? .left : .right) }
+        if abs(dx) <= abs(dy)*diagonal { return .resize(dy < 0 ? .top : .bottom) }
+        return .resize(dy < 0 ? (dx < 0 ? .topLeft : .topRight) : (dx < 0 ? .bottomLeft : .bottomRight))
+    }
+    func cursor(at location:CGPoint) -> CursorKind {
+        if start != nil {
+            if let original { return handleIndex.map { resizeCursor(candidateAnnotation ?? original,index:$0) } ?? .closedHand }
+            return toolCursor
+        }
+        if let index = hitHandle(location), let selected = session?.selectedAnnotation { return resizeCursor(selected,index:index) }
+        guard let point = sourcePoint(location), session?.document?.edits.crop.contains(point) == true else { return .arrow }
+        return hitAnnotation(point) == nil ? toolCursor : .openHand
+    }
+    private func refreshCursorRouting(force:Bool = false) {
+        let value = CursorConfiguration(tool:session?.tool ?? .select,selectedID:session?.selectedID,annotations:liveAnnotations,zoom:effectiveZoom,origin:imageOrigin,visible:visibleRect,dragging:start != nil,moving:original != nil,handle:handleIndex)
+        guard force || value != cursorConfiguration else { return }
+        cursorConfiguration = value; window?.invalidateCursorRects(for:self)
+        if let lastPointerLocation { publishCursor(cursor(at:lastPointerLocation)) }
+    }
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(visibleRect,cursor:.arrow)
+        let image = CGRect(origin:imageOrigin,size:imageSize).intersection(visibleRect)
+        if !image.isNull && !image.isEmpty { addCursorRect(image,cursor:(lastPointerLocation.map { cursor(at:$0) } ?? toolCursor).native) }
+    }
+    override func cursorUpdate(with event:NSEvent) {
+        let location = convert(event.locationInWindow,from:nil); lastPointerLocation = location
+        refreshCursorRouting()
+        publishCursor(cursor(at:location))
+    }
+    override func mouseEntered(with event:NSEvent) { mouseMoved(with:event) }
     override func mouseMoved(with event: NSEvent) {
-        let location = convert(event.locationInWindow, from: nil)
-        if let index = hitHandle(location), let selected = session?.selectedAnnotation {
-            if selected.kind == .arrow { NSCursor.crosshair.set() }
-            else {
-                let positions: [NSCursor.FrameResizePosition] = [.topLeft, .top, .topRight, .right, .bottomRight, .bottom, .bottomLeft, .left]
-                NSCursor.frameResize(position: positions[index], directions: .all).set()
-            }
-        } else if let point = sourcePoint(location), hitAnnotation(point) != nil { NSCursor.openHand.set() }
-        else { NSCursor.arrow.set() }
-        if let point = sourcePoint(location) { session?.inspectPixel(at: point); hex = session?.pixelHex ?? "" } else { hex = "" }
+        let location = convert(event.locationInWindow, from: nil); lastPointerLocation = location
+        refreshCursorRouting()
+        publishCursor(cursor(at:location))
+        if isPixelInspectionEnabled, let point = sourcePoint(location) { session?.inspectPixel(at: point); hex = session?.pixelHex ?? "" }
+        else { hex = ""; session?.inspectPixel(at:nil) }
         needsDisplay = true
     }
-    override func mouseExited(with event: NSEvent) { hex = ""; NSCursor.arrow.set(); needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { lastPointerLocation = nil; hex = ""; session?.inspectPixel(at:nil); publishCursor(.arrow); needsDisplay = true }
     @objc func undo(_ sender: Any?) { cancelGesture(); session?.undo(); refreshLayers() }
     @objc func redo(_ sender: Any?) { cancelGesture(); session?.redo(); refreshLayers() }
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -364,7 +462,7 @@ struct EditorCanvas: NSViewRepresentable {
         if command && shift && key == "c", let hex = session.pixelHex { session.copyHex(hex); return }
         if command && key == "c" { Task { await session.copy() }; return }
         if command && key == "s" { session.chooseExport(); return }
-        if event.keyCode == 53 { cancelGesture(); session.selectedID = nil; session.tool = .select; return }
+        if event.keyCode == 53 { cancelGesture(); session.selectedID = nil; session.tool = .select; refreshLayers(); return }
         if event.keyCode == 51 || event.keyCode == 117 { session.deleteSelected(); refreshLayers(); return }
         let amount: CGFloat = shift ? 10 : 1
         switch event.keyCode {
@@ -379,7 +477,7 @@ struct EditorCanvas: NSViewRepresentable {
         if command && key == "0" { session.fitZoom = true; return }
         if command && key == "1" { session.fitZoom = false; session.zoom = session.actualPixelZoom; return }
         let shortcuts: [String: EditorTool] = ["v": .select, "a": .arrow, "r": .rectangle, "t": .text, "h": .highlight, "n": .step, "b": .blur, "p": .pixelate, "x": .redact, "c": .crop]
-        if !command, let tool = shortcuts[key] { session.tool = tool; return }; super.keyDown(with: event)
+        if !command, let tool = shortcuts[key] { session.tool = tool; refreshCursorRouting(force:true); return }; super.keyDown(with: event)
     }
     override func accessibilityRole() -> NSAccessibility.Role? { .group }
     override func accessibilityLabel() -> String? { String(localized: "Screenshot editing canvas") }
@@ -431,6 +529,14 @@ struct EditorCanvas: NSViewRepresentable {
               let session = canvas.session, canvas.imageSize.width > 0 else { return }
         synchronizing = true
         defer { synchronizing = false }
+        var viewport = viewport
+        // Fit has no scrollable image overflow. Removing legacy gutters keeps
+        // their autohide/rounding feedback from changing the fit magnification.
+        let scrollable = !session.fitZoom
+        if hasHorizontalScroller != scrollable || hasVerticalScroller != scrollable {
+            hasHorizontalScroller = scrollable; hasVerticalScroller = scrollable
+            tile(); viewport = contentSize
+        }
         let image = canvas.imageSize
         let topInset = session.fitZoom ? max(0, fitTopClearance - Theme.Editor.canvasMargin) : 0
         let fit = max(minMagnification, min(maxMagnification,

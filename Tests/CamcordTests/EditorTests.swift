@@ -978,6 +978,172 @@ struct EditorNativeInteractionTests {
         }
         session.undo(); #expect(session.document?.edits.annotations.isEmpty == true && !session.canUndo)
     }
+    @Test("Short text and capsule glyphs remain visible with shared live/export bounds at 1x and 2x", arguments:[1,2],[false,true])
+    func shortTextGlyphs(density:Int,capsule:Bool) throws {
+        let context = try EditorRenderer.context(width:960,height:600)
+        context.setFillColor(CGColor(gray:0.15,alpha:1)); context.fill(CGRect(x:0,y:0,width:960,height:600))
+        var document = try EditorDocument(source:#require(context.makeImage()),pointSize:CGSize(width:960/density,height:600/density))
+        let base = try EditorRenderer.displayBase(document)
+        var annotation = EditorAnnotation(kind:.text,rect:CGRect(x:80,y:350,width:190,height:50),text:"Review")
+        annotation.style.textBackground = capsule
+        document.edits.annotations = [annotation]
+        let full = try EditorRenderer.render(document).image
+        let live = EditorLiveRenderer(); live.invalidate(baseGeneration:1,annotations:document.edits.annotations,baseEdits:EditorEdits(crop:document.edits.crop))
+        let patch = try live.compose(rect:EditorLiveRenderer.drawingBounds(annotation,document:document),scale:1,base:base,document:document,annotations:document.edits.annotations)
+        func inkPixels(_ image:CGImage) throws -> Int {
+            let bytes = try rgba(image)
+            var count = 0
+            for index in stride(from:0,to:bytes.count,by:4) {
+                let r = bytes[index], g = bytes[index+1], b = bytes[index+2]
+                if capsule ? (r > 220 && g > 220 && b > 220) : (r > 160 && g < 100 && b < 110) { count += 1 }
+            }
+            return count
+        }
+        #expect(try inkPixels(full) > 80)
+        #expect(try inkPixels(patch) > 80)
+        let paint = EditorLiveRenderer.drawingBounds(annotation,document:document).integral
+        #expect(try rgba(patch) == rgba(#require(full.cropping(to:paint))))
+        #expect(document.edits.annotations[0].rect == annotation.rect && annotation.rect.height == 50)
+    }
+    @Test("Native hover and drag route tool, hand and resize cursors without automatic pixel inspection")
+    func nativeCursorRouting() async throws {
+        let session = EditorSession(); let doc = try source()
+        session.open(CapturedScreenshot(id:UUID(),image:doc.source,pointSize:doc.pointSize,kind:.screenshot,saveToDiskRequested:false)); await session.waitForRendering()
+        let window = NSWindow(contentRect:CGRect(x:0,y:0,width:600,height:480),styleMask:[.titled],backing:.buffered,defer:false); window.isReleasedWhenClosed = false
+        let canvas = EditorCanvasNSView(frame:CGRect(x:0,y:0,width:600,height:480)); canvas.session = session
+        var published:[NSCursor] = []; canvas.cursorPublisher = { published.append($0) }
+        window.contentView = canvas; canvas.refreshLayers()
+        defer { session.stop(); window.close() }
+        func event(_ type:NSEvent.EventType,_ point:CGPoint) throws -> NSEvent {
+            try #require(NSEvent.mouseEvent(with:type,location:canvas.convert(point,to:nil),modifierFlags:[],timestamp:0,windowNumber:window.windowNumber,context:nil,eventNumber:0,clickCount:1,pressure:1))
+        }
+        let empty = canvas.viewRect(CGRect(x:250,y:210,width:0,height:0)).origin
+        for tool in [EditorTool.arrow,.rectangle,.highlight,.blur,.pixelate,.redact,.step,.crop] {
+            session.tool = tool; canvas.mouseMoved(with:try event(.mouseMoved,empty))
+            #expect(canvas.cursorKind == .crosshair)
+        }
+        session.tool = .text; canvas.mouseMoved(with:try event(.mouseMoved,empty))
+        #expect(canvas.cursorKind == .iBeam && published.last === NSCursor.iBeam)
+        #expect(session.pixelHex == nil)
+        session.tool = .select; canvas.refreshLayers(); #expect(canvas.cursorKind == .arrow)
+        session.tool = .text; canvas.refreshLayers(); #expect(canvas.cursorKind == .iBeam)
+        canvas.isPixelInspectionEnabled = true; canvas.mouseMoved(with:try event(.mouseMoved,empty)); #expect(session.pixelHex != nil)
+        canvas.isPixelInspectionEnabled = false; #expect(session.pixelHex == nil)
+        session.tool = .rectangle
+        canvas.mouseDown(with:try event(.leftMouseDown,empty)); #expect(canvas.cursorKind == .crosshair)
+        canvas.mouseDragged(with:try event(.leftMouseDragged,CGPoint(x:empty.x+20,y:empty.y+10))); #expect(canvas.cursorKind == .crosshair)
+        canvas.cancelGesture()
+        session.add(tool:.rectangle,from:CGPoint(x:40,y:40),to:CGPoint(x:140,y:100)); canvas.refreshLayers()
+        let middle = canvas.viewRect(CGRect(x:90,y:70,width:0,height:0)).origin
+        canvas.mouseMoved(with:try event(.mouseMoved,middle)); #expect(canvas.cursorKind == .openHand)
+        canvas.mouseDown(with:try event(.leftMouseDown,middle)); #expect(canvas.cursorKind == .closedHand)
+        canvas.mouseDragged(with:try event(.leftMouseDragged,CGPoint(x:middle.x+10,y:middle.y+5))); #expect(canvas.cursorKind == .closedHand)
+        canvas.mouseUp(with:try event(.leftMouseUp,CGPoint(x:middle.x+10,y:middle.y+5))); #expect(canvas.cursorKind == .openHand)
+        let rect = try #require(session.selectedAnnotation)
+        let positions:[NSCursor.FrameResizePosition] = [.topLeft,.top,.topRight,.right,.bottomRight,.bottom,.bottomLeft,.left]
+        for (index,point) in canvas.handlePoints(for:rect).enumerated() {
+            canvas.mouseMoved(with:try event(.mouseMoved,point)); #expect(canvas.cursorKind == .resize(positions[index]))
+        }
+        session.add(tool:.arrow,from:CGPoint(x:40,y:160),to:CGPoint(x:170,y:160)); canvas.refreshLayers()
+        let arrow = try #require(session.selectedAnnotation), endpoints = canvas.handlePoints(for:arrow)
+        canvas.mouseMoved(with:try event(.mouseMoved,endpoints[0])); #expect(canvas.cursorKind == .resize(.left))
+        canvas.mouseDown(with:try event(.leftMouseDown,endpoints[1])); #expect(canvas.cursorKind == .resize(.right))
+        canvas.mouseDragged(with:try event(.leftMouseDragged,CGPoint(x:endpoints[1].x,y:endpoints[1].y+70))); #expect(canvas.cursorKind == .resize(.bottomRight))
+        canvas.cancelGesture()
+        #expect(!window.isVisible)
+    }
+    @Test("Native short text hit area, handles and resize include its first line without migrating stored boxes")
+    func nativeShortTextGeometry() async throws {
+        let doc = try source(scale:2), session = EditorSession()
+        session.open(CapturedScreenshot(id:UUID(),image:doc.source,pointSize:doc.pointSize,kind:.screenshot,saveToDiskRequested:false)); await session.waitForRendering()
+        let window = NSWindow(contentRect:CGRect(x:0,y:0,width:800,height:640),styleMask:[.titled],backing:.buffered,defer:false); window.isReleasedWhenClosed = false
+        let canvas = EditorCanvasNSView(frame:CGRect(x:0,y:0,width:800,height:640)); canvas.session = session; canvas.cursorPublisher = { _ in }
+        window.contentView = canvas
+        defer { session.stop(); window.close() }
+        let stored = EditorAnnotation(kind:.text,rect:CGRect(x:100,y:120,width:190,height:50),text:"Review")
+        session.edit { $0.annotations.append(stored) }; session.selectedID = stored.id; canvas.refreshLayers()
+        let paint = EditorRenderer.textLayoutRect(stored,document:try #require(session.document))
+        #expect(paint.minY == stored.rect.minY && paint.height > stored.rect.height)
+        #expect(session.selectedAnnotation?.rect == stored.rect)
+        #expect(canvas.handlePoints(for:stored)[5].y > canvas.viewRect(stored.rect).maxY)
+        func event(_ type:NSEvent.EventType,_ location:CGPoint) throws -> NSEvent {
+            try #require(NSEvent.mouseEvent(with:type,location:canvas.convert(location,to:nil),modifierFlags:[],timestamp:0,windowNumber:window.windowNumber,context:nil,eventNumber:0,clickCount:1,pressure:1))
+        }
+        let lowerLine = canvas.viewRect(CGRect(x:paint.minX+25,y:paint.maxY-2,width:0,height:0)).origin
+        canvas.mouseMoved(with:try event(.mouseMoved,lowerLine)); #expect(canvas.cursorKind == .openHand)
+        canvas.mouseDown(with:try event(.leftMouseDown,lowerLine)); #expect(canvas.cursorKind == .closedHand)
+        canvas.mouseUp(with:try event(.leftMouseUp,CGPoint(x:lowerLine.x+10,y:lowerLine.y+5)))
+        #expect(session.selectedAnnotation?.rect == stored.rect.offsetBy(dx:10,dy:5))
+        session.undo(); canvas.refreshLayers(); #expect(session.selectedAnnotation?.rect == stored.rect)
+        let bottom = canvas.handlePoints(for:stored)[5]
+        canvas.mouseDown(with:try event(.leftMouseDown,bottom))
+        canvas.mouseUp(with:try event(.leftMouseUp,CGPoint(x:bottom.x,y:bottom.y-paint.height+1)))
+        #expect(session.selectedAnnotation?.rect.height == paint.height)
+        #expect(session.selectedAnnotation?.rect.minY == stored.rect.minY)
+        session.undo(); #expect(session.selectedAnnotation?.rect == stored.rect)
+        session.tool = .text; session.selectedID = nil; canvas.refreshLayers()
+        let click = canvas.viewRect(CGRect(x:400,y:350,width:0,height:0)).origin
+        canvas.mouseDown(with:try event(.leftMouseDown,click)); canvas.mouseUp(with:try event(.leftMouseUp,click))
+        #expect(session.selectedAnnotation?.kind == .text && session.selectedAnnotation?.rect.height == paint.height)
+        #expect(!window.isVisible)
+    }
+    @Test("Fit stays fixed through native legacy gutter changes, annotation gestures and UndoRedo")
+    func nativeFitScrollerStability() async throws {
+        let c = try EditorRenderer.context(width:960,height:600)
+        c.setFillColor(CGColor(gray:1,alpha:1)); c.fill(CGRect(x:0,y:0,width:960,height:600))
+        let session = EditorSession(); session.open(CapturedScreenshot(id:UUID(),image:try #require(c.makeImage()),pointSize:CGSize(width:480,height:300),kind:.screenshot,saveToDiskRequested:false)); await session.waitForRendering()
+        let window = NSWindow(contentRect:CGRect(x:0,y:0,width:1180,height:760),styleMask:[.titled],backing:.buffered,defer:false); window.isReleasedWhenClosed = false
+        let scroll = EditorScrollNSView(frame:CGRect(x:0,y:0,width:1180,height:760)); scroll.hasHorizontalScroller = true; scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .legacy; scroll.allowsMagnification = true; scroll.minMagnification = 0.02; scroll.maxMagnification = 16; scroll.fitTopClearance = 60
+        let canvas = EditorCanvasNSView(); canvas.session = session; scroll.documentView = canvas; window.contentView = scroll
+        defer { session.stop(); window.close() }
+        func settle() async {
+            for _ in 0..<5 { scroll.tile(); scroll.layoutSubtreeIfNeeded(); scroll.synchronize(viewport:scroll.contentSize); await Task.yield() }
+        }
+        await settle(); let fit = scroll.magnification
+        for style in [NSScroller.Style.legacy,.overlay,.legacy] {
+            for autohide in [false,true] {
+                scroll.scrollerStyle = style; scroll.autohidesScrollers = autohide; await settle()
+                #expect(abs(scroll.magnification-fit) < 0.0001)
+                session.add(tool:.arrow,from:CGPoint(x:100,y:100),to:CGPoint(x:300,y:200)); canvas.refreshLayers(); await settle()
+                #expect(abs(scroll.magnification-fit) < 0.0001)
+                session.undo(); canvas.refreshLayers(); await settle(); #expect(abs(scroll.magnification-fit) < 0.0001)
+                session.redo(); canvas.refreshLayers(); await settle(); #expect(abs(scroll.magnification-fit) < 0.0001)
+                session.undo()
+            }
+        }
+        session.fitZoom = false; session.zoom = 1.5; scroll.synchronize(viewport:scroll.contentSize)
+        #expect(scroll.hasHorizontalScroller && scroll.hasVerticalScroller && scroll.magnification == 1.5)
+        #expect(!window.isVisible)
+    }
+    @Test("Fractional physical zoom preserves source alpha and color across destination tile boundaries", arguments:[CGFloat(1.04),CGFloat(1.055),CGFloat(2.055)],[CGFloat(1),CGFloat(0.5)])
+    func fractionalTileEdges(zoom:CGFloat,alpha:CGFloat) async throws {
+        let doc = try source(alpha:alpha)
+        let session = EditorSession(); session.open(CapturedScreenshot(id:UUID(),image:doc.source,pointSize:doc.pointSize,kind:.screenshot,saveToDiskRequested:false)); await session.waitForRendering()
+        let window = NSWindow(contentRect:CGRect(x:0,y:0,width:600,height:480),styleMask:[.titled],backing:.buffered,defer:false); window.isReleasedWhenClosed = false
+        let scroll = EditorScrollNSView(frame:CGRect(x:0,y:0,width:600,height:480)); scroll.allowsMagnification = true; scroll.minMagnification = 0.02; scroll.maxMagnification = 16
+        let canvas = EditorCanvasNSView(); canvas.session = session; scroll.documentView = canvas; window.contentView = scroll
+        defer { session.stop(); window.close() }
+        session.fitZoom = false; session.zoom = zoom; scroll.synchronize(viewport:scroll.contentSize)
+        canvas.refreshLayers()
+        CATransaction.begin(); CATransaction.setDisableActions(true); canvas.canvasShadowLayer.shadowOpacity = 0; CATransaction.commit()
+        let layer = try #require(canvas.layer), delegate = layer.delegate; layer.delegate = nil
+        defer { layer.delegate = delegate }
+        let scale = zoom*window.backingScaleFactor
+        let region = canvas.viewRect(CGRect(x:10,y:205,width:300,height:20))
+        func pixels() throws -> [UInt8] {
+            let c = try EditorRenderer.context(width:Int(ceil(canvas.bounds.width*scale)),height:Int(ceil(canvas.bounds.height*scale)))
+            c.translateBy(x:0,y:CGFloat(c.height)); c.scaleBy(x:scale,y:-scale); layer.render(in:c)
+            return try rgba(#require(c.makeImage()?.cropping(to:CGRect(x:region.minX*scale,y:region.minY*scale,width:region.width*scale,height:region.height*scale).integral)))
+        }
+        let baseline = try pixels()
+        session.add(tool:.arrow,from:CGPoint(x:30,y:30),to:CGPoint(x:270,y:160)); session.selectedID = nil; canvas.refreshLayers()
+        canvas.canvasShadowLayer.shadowOpacity = 0
+        let patched = try pixels()
+        #expect(zip(baseline,patched).map { abs(Int($0)-Int($1)) }.max() == 0)
+        #expect(stride(from:3,to:patched.count,by:4).map { patched[$0] }.min() == UInt8((alpha*255).rounded()))
+        #expect(!window.isVisible)
+    }
     @Test("True arrow points survive old records, all directions, zero-axis geometry and independent resize")
     func arrowEndpoints() throws {
         let starts: [CGPoint] = [.init(x: 10.25, y: 20.75), .init(x: 150, y: 10), .init(x: 20, y: 150), .init(x: 150, y: 150), .init(x: 10, y: 30), .init(x: 30, y: 10)]

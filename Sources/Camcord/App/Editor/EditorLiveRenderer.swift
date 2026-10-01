@@ -80,7 +80,7 @@ import Metal
     static func drawingBounds(_ annotation: EditorAnnotation, document: EditorDocument) -> CGRect {
         let density = max(CGFloat(document.source.width) / document.pointSize.width, CGFloat(document.source.height) / document.pointSize.height)
         let extent = CGFloat(annotation.style.lineWidth * 2 + 8) * density
-        return annotation.rect.insetBy(dx: -extent, dy: -extent).intersection(document.edits.crop.integral)
+        return EditorRenderer.textLayoutRect(annotation,document:document).insetBy(dx: -extent, dy: -extent).intersection(document.edits.crop.integral)
     }
     func treatment(for annotation: EditorAnnotation, index: Int, base: EditorDisplayBase, document: EditorDocument, annotations: [EditorAnnotation]) throws -> Treatment {
         if let cached = treatments[annotation.id] { return cached }

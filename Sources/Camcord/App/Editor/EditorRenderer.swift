@@ -296,11 +296,24 @@ enum EditorRenderer {
         return CGSize(width: 12 * CGFloat(document.source.width) / document.pointSize.width, height: 12 * CGFloat(document.source.height) / document.pointSize.height)
     }
 
+    /// A short stored box must still contain the first line at its requested font size.
+    static func textLayoutRect(_ annotation: EditorAnnotation, pixelScale: CGSize) -> CGRect {
+        guard annotation.kind == .text else { return annotation.rect }
+        let font = NSFont.systemFont(ofSize:annotation.style.fontSize,weight:.semibold)
+        let lineHeight = ceil(font.ascender - font.descender + font.leading)
+        let inset: CGFloat = annotation.style.textBackground ? 8 : 0
+        var rect = annotation.rect
+        rect.size.height = max(rect.height,ceil((lineHeight + inset) * pixelScale.height))
+        return rect
+    }
+    static func textLayoutRect(_ annotation: EditorAnnotation, document: EditorDocument) -> CGRect {
+        textLayoutRect(annotation,pixelScale:CGSize(width:CGFloat(document.source.width)/document.pointSize.width,height:CGFloat(document.source.height)/document.pointSize.height))
+    }
     /// All presentation widths/fonts/shadows are points; persistent rectangles remain source pixels.
     static func draw(_ annotation: EditorAnnotation, context: CGContext, pixelScale: CGSize = CGSize(width: 1, height: 1), underlyingLuminance: Double = 1, highlightTreatment: HighlightTreatment = HighlightTreatment(blendMode: .multiply, opacity: 0.6), presentationScale: CGFloat = 1) {
         context.saveGState(); defer { context.restoreGState() }
         context.scaleBy(x: pixelScale.width, y: pixelScale.height)
-        let source = annotation.rect
+        let source = textLayoutRect(annotation,pixelScale:pixelScale)
         let rect = CGRect(x: source.minX / pixelScale.width, y: source.minY / pixelScale.height,
                           width: source.width / pixelScale.width, height: source.height / pixelScale.height)
         let style = annotation.style, width = CGFloat(style.lineWidth)
