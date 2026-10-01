@@ -61,7 +61,10 @@ struct EditorInteractionRenderTests {
                 let clipFrame = canvas.enclosingScrollView.map { $0.convert($0.contentView.frame,to:nil) } ?? .zero
                 let state: [String:Any] = ["pid":Int(ProcessInfo.processInfo.processIdentifier),"executablePath":Bundle.main.executableURL?.path ?? "", "windowID":window.windowNumber,"appActive":NSApp.isActive,"applicationRunning":NSApp.isRunning,"activationPolicy":NSApp.activationPolicy().rawValue,"finishedLaunchingBefore":finishedLaunchingBefore,"finishedLaunching":NSRunningApplication.current.isFinishedLaunching,"bundleIdentifier":Bundle.main.bundleIdentifier ?? "","key":window.isKeyWindow,"visible":window.isVisible,"backingScale":window.backingScaleFactor,"imageFrameInWindow":values(imageFrame),"clipFrameInWindow":values(clipFrame),"windowFrame":values(window.frame),"sourcePNG":output.appendingPathComponent("source.png").path,"sourceSize":[image.width,image.height],"sourcePixelMarkerROI":values(markerROI),"sourcePixelMarkerCoordinates":"CGImage/PNG source top-left pixels; detected checker rows","tool":session.tool.rawValue,"annotationCount":session.document?.edits.annotations.count ?? 0,"revision":session.revision,"baseGeneration":session.displayBaseGeneration,"displayRasterRequests":session.displayRasterRequests,"privacyDisplayFrames":canvas.privacyDisplayFrames,"privacyPatchComputations":canvas.privacyPatchComputations,"zoom":canvas.effectiveZoom,"displayedZoomPercent":session.displayedZoomPercent,"canUndo":session.canUndo,"canRedo":session.canRedo,"selectedID":session.selectedID?.uuidString ?? "","gestureCandidate":canvas.candidateAnnotation?.kind.rawValue ?? "none","inspector":session.showsBackgroundInspector,"error":session.error ?? "","firstResponder":String(describing:window.firstResponder),"eventPhase":playback.phase,"eventError":playback.error,"eventEvidence":"actual NSEvent production responder/canvas playback; customer CUA unmeasured","fixtureKind":"ordinary-production-window; actual CUA required"]
                 let clipboardState: [String:Any] = ["clipboardBoardName":fixtureClipboard.pasteboard.name.rawValue,"clipboardPNGBytes":fixtureClipboard.pngByteCount,"clipboardPNGSHA256":fixtureClipboard.pngSHA256,"clipboardPublications":fixtureClipboard.publicationCount,"clipboardTarget":"unique-named-pasteboard; actual PNG publisher"]
-                try JSONSerialization.data(withJSONObject:state.merging(clipboardState) { _,new in new },options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("ready.json"),options:.atomic)
+                let clearance = (canvas.enclosingScrollView as? EditorScrollNSView)?.fitTopClearance ?? 0
+                let colorWells = findColorWells(window.contentView)
+                let controlMeasurements: [String:Any] = ["fitTopClearanceInClipPoints":clearance,"styleCapsuleMeasuredHeight":max(0,clearance-Theme.Space.m-Theme.Space.s),"fitTopInsetInSourcePoints":canvas.fitTopInset,"nativeCustomColorWellFramesInWindow":colorWells.map { values($0.convert($0.bounds,to:nil)) },"nativeCustomColorWellIntrinsicSizes":colorWells.map { [$0.intrinsicContentSize.width,$0.intrinsicContentSize.height] }]
+                try JSONSerialization.data(withJSONObject:state.merging(clipboardState) { _,new in new }.merging(controlMeasurements) { _,new in new },options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("ready.json"),options:.atomic)
                 let windows: [[String:Any]] = [["primaryID":window.windowNumber,"windowID":window.windowNumber,"pid":Int(ProcessInfo.processInfo.processIdentifier),"frame":values(window.frame),"key":window.isKeyWindow,"visible":window.isVisible,"title":window.title,"role":"primary"]]
                 try JSONSerialization.data(withJSONObject:windows,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("windows.json"),options:.atomic)
             }
@@ -72,6 +75,11 @@ struct EditorInteractionRenderTests {
     private func findCanvas(_ view: NSView?) -> EditorCanvasNSView? {
         guard let view else { return nil }; if let canvas = view as? EditorCanvasNSView { return canvas }
         for child in view.subviews { if let result = findCanvas(child) { return result } }; return nil
+    }
+    private func findColorWells(_ view: NSView?) -> [EditorContinuousColorWell] {
+        guard let view else { return [] }
+        if let well = view as? EditorContinuousColorWell { return [well] }
+        return view.subviews.flatMap { findColorWells($0) }
     }
     private func values(_ rect: CGRect) -> [CGFloat] { [rect.minX,rect.minY,rect.width,rect.height] }
     private func checkerROI(_ image:CGImage) throws -> CGRect {

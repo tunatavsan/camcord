@@ -53,6 +53,7 @@ struct EditorStyleCapsule: View {
         .padding(.vertical, Theme.Space.s)
         .camcordGlass(.chrome, in: Capsule())
         .fixedSize()
+        .contentShape(Capsule())
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Annotation style")
     }
@@ -89,25 +90,28 @@ private struct EditorColorSwatches: View {
                         .frame(width: Theme.Editor.swatchSize, height: Theme.Editor.swatchSize)
                         .overlay { Circle().strokeBorder(Theme.Palette.hairlineStrong.color, lineWidth: 1) }
                         .padding(Theme.Space.xs)
-                        .background(color == value ? Theme.Palette.selectionStrong.color : .clear, in: Circle())
+                        .overlay { Circle().strokeBorder(color == value ? Theme.Palette.ink2.color : .clear, lineWidth: 1.5) }
                         .frame(width: Theme.Editor.hitSize, height: Theme.Editor.hitSize)
                 }
                 .accessibilityLabel(Text(labels[index]))
                 .accessibilityValue(color == value ? Text("Selected") : Text("Not selected"))
             }
             EditorNativeColorWell(color: color, set: set, session: session)
+                .frame(width: Theme.Editor.swatchSize, height: Theme.Editor.swatchSize)
+                .padding(Theme.Space.xs)
+                .overlay { Circle().strokeBorder(Theme.Editor.swatches.contains(color) ? .clear : Theme.Palette.ink2.color, lineWidth: 1.5) }
                 .frame(width: Theme.Editor.hitSize, height: Theme.Editor.hitSize)
         }
     }
 }
 
-private struct EditorNativeColorWell: NSViewRepresentable {
+struct EditorNativeColorWell: NSViewRepresentable {
     let color: EditorColor
     let set: (EditorColor) -> Void
     let session: EditorSession?
     func makeCoordinator() -> Coordinator { Coordinator(set: set, session: session) }
     func makeNSView(context: Context) -> NSColorWell {
-        let well = EditorContinuousColorWell(frame: CGRect(x: 0, y: 0, width: Theme.Editor.hitSize, height: Theme.Editor.hitSize))
+        let well = EditorContinuousColorWell(frame: CGRect(x: 0, y: 0, width: Theme.Editor.swatchSize, height: Theme.Editor.swatchSize))
         well.session = context.coordinator.session
         well.colorWellStyle = .minimal
         well.supportsAlpha = true
@@ -122,7 +126,7 @@ private struct EditorNativeColorWell: NSViewRepresentable {
         well.color = NSColor(cgColor: color.cgColor) ?? .clear
     }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSColorWell, context: Context) -> CGSize? {
-        CGSize(width: Theme.Editor.hitSize, height: Theme.Editor.hitSize)
+        CGSize(width: Theme.Editor.swatchSize, height: Theme.Editor.swatchSize)
     }
     @MainActor final class Coordinator: NSObject {
         var set: (EditorColor) -> Void
@@ -282,8 +286,28 @@ private struct EditorRecentThumbnail: View {
     }
 }
 
-@MainActor private final class EditorContinuousColorWell: NSColorWell {
+@MainActor final class EditorContinuousColorWell: NSColorWell {
     weak var session: EditorSession?
+    override var intrinsicContentSize: NSSize { NSSize(width: Theme.Editor.swatchSize, height: Theme.Editor.swatchSize) }
+    override func draw(_ dirtyRect: NSRect) {
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        let radius = min(bounds.width, bounds.height) / 2 - 1.5
+        for segment in 0..<72 {
+            NSColor(calibratedHue: CGFloat(segment) / 72, saturation: 0.85, brightness: 0.95, alpha: 1).setStroke()
+            let arc = NSBezierPath()
+            arc.appendArc(withCenter: center, radius: radius, startAngle: CGFloat(segment) * 5, endAngle: CGFloat(segment + 1) * 5 + 0.5)
+            arc.lineWidth = 3; arc.stroke()
+        }
+        if let context = NSGraphicsContext.current?.cgContext, window?.firstResponder === self {
+            context.setStrokeColor(NSColor.keyboardFocusIndicatorColor.cgColor)
+            context.setLineWidth(1); context.strokeEllipse(in: bounds.insetBy(dx: 0.5, dy: 0.5))
+        }
+    }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = convert(point, from: superview)
+        guard hypot(local.x - bounds.midX, local.y - bounds.midY) <= min(bounds.width, bounds.height) / 2 else { return nil }
+        return super.hitTest(point)
+    }
     override func activate(_ exclusive: Bool) { if !isActive { session?.beginContinuousEdit() }; super.activate(exclusive) }
     override func deactivate() { if isActive { session?.endContinuousEdit() }; super.deactivate() }
 }

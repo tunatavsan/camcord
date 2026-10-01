@@ -3,6 +3,7 @@ import SwiftUI
 
 struct EditorCanvas: NSViewRepresentable {
     let session: EditorSession
+    var fitTopClearance: CGFloat = 0
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = EditorScrollNSView(); scroll.hasHorizontalScroller = true; scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
         scroll.drawsBackground = false
@@ -13,6 +14,7 @@ struct EditorCanvas: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let canvas = scroll.documentView as? EditorCanvasNSView else { return }
         canvas.session = session
+        (scroll as? EditorScrollNSView)?.fitTopClearance = fitTopClearance
         canvas.updateSize(viewport: scroll.contentSize)
         canvas.refreshLayers()
         canvas.needsDisplay = true
@@ -22,6 +24,7 @@ struct EditorCanvas: NSViewRepresentable {
 @MainActor final class EditorCanvasNSView: NSView {
     weak var session: EditorSession?
     var zoom: CGFloat = 1
+    private(set) var fitTopInset: CGFloat = 0
     var effectiveZoom: CGFloat { enclosingScrollView?.magnification ?? 1 }
     let baseLayer = CALayer()
     let canvasShadowLayer = CALayer()
@@ -74,9 +77,9 @@ struct EditorCanvas: NSViewRepresentable {
         return session?.document?.edits.crop.size ?? .zero
     }
     var imageOrigin: CGPoint {
-        let point = CGPoint(x: (bounds.width - imageSize.width) / 2, y: (bounds.height - imageSize.height) / 2)
+        let point = CGPoint(x: (bounds.width - imageSize.width) / 2, y: (bounds.height - imageSize.height + fitTopInset) / 2)
         let backing = convertToBacking(point)
-        return convertFromBacking(CGPoint(x: backing.x.rounded(), y: backing.y.rounded()))
+        return convertFromBacking(CGPoint(x: backing.x.rounded(), y: fitTopInset > 0 ? backing.y.rounded(.up) : backing.y.rounded()))
     }
     private var padding: CGFloat {
         guard let bg = session?.document?.edits.background, bg.preset != .none else { return 0 }
@@ -94,10 +97,11 @@ struct EditorCanvas: NSViewRepresentable {
         session?.reportBackingScale(window?.backingScaleFactor ?? 1)
         (enclosingScrollView as? EditorScrollNSView)?.synchronize(viewport: viewport)
     }
-    func sizeDocument(viewport: CGSize, magnification: CGFloat) {
+    func sizeDocument(viewport: CGSize, magnification: CGFloat, fitTopInset: CGFloat = 0) {
         zoom = 1
+        self.fitTopInset = fitTopInset / magnification
         let margin = Theme.Editor.canvasMargin * 2 / magnification
-        let size = CGSize(width: max(viewport.width / magnification, imageSize.width + margin), height: max(viewport.height / magnification, imageSize.height + margin))
+        let size = CGSize(width: max(viewport.width / magnification, imageSize.width + margin), height: max(viewport.height / magnification, imageSize.height + margin + self.fitTopInset))
         if frame.size != size { setFrameSize(size) }; refreshLayers()
     }
     override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); updateSize(viewport: enclosingScrollView?.contentSize ?? bounds.size); refreshLayers() }
@@ -415,6 +419,7 @@ struct EditorCanvas: NSViewRepresentable {
 }
 
 @MainActor final class EditorScrollNSView: NSScrollView {
+    var fitTopClearance: CGFloat = 0
     private var synchronizing = false
     private var reportGeneration = 0
     override func layout() {
@@ -427,11 +432,12 @@ struct EditorCanvas: NSViewRepresentable {
         synchronizing = true
         defer { synchronizing = false }
         let image = canvas.imageSize
+        let topInset = session.fitZoom ? max(0, fitTopClearance - Theme.Editor.canvasMargin) : 0
         let fit = max(minMagnification, min(maxMagnification,
             min((viewport.width - Theme.Editor.canvasMargin * 2) / image.width,
-                (viewport.height - Theme.Editor.canvasMargin * 2) / image.height)))
+                (viewport.height - Theme.Editor.canvasMargin * 2 - topInset) / image.height)))
         let target = session.fitZoom ? fit : min(maxMagnification, max(minMagnification, session.zoom))
-        canvas.sizeDocument(viewport: viewport, magnification: target)
+        canvas.sizeDocument(viewport: viewport, magnification: target, fitTopInset: topInset)
         if abs(magnification - target) > 0.0001 {
             setMagnification(target, centeredAt: CGPoint(x: contentView.bounds.midX, y: contentView.bounds.midY))
         }

@@ -3,8 +3,91 @@ import CoreGraphics
 import ImageIO
 import CoreImage
 import UniformTypeIdentifiers
+import SwiftUI
 import Testing
 @testable import Camcord
+
+@Suite("Editor contextual control layout", .serialized) @MainActor
+struct EditorControlLayoutTests {
+    private func descendants<T: NSView>(_ view: NSView, of type: T.Type) -> [T] {
+        (view as? T).map { [$0] } ?? view.subviews.flatMap { descendants($0, of: type) }
+    }
+    @Test("Fit reserves the measured production capsule for every tool and selected content through resize")
+    func measuredCapsuleFit() async throws {
+        let session = EditorSession()
+        let image = try EditorRendererTests.image(width: 480, height: 300)
+        session.open(CapturedScreenshot(id: UUID(), image: image, pointSize: CGSize(width: 480, height: 300), kind: .screenshot, saveToDiskRequested: false))
+        await session.waitForRendering()
+        let host = NSHostingController(rootView: EditorWorkspace(session: session, services: nil))
+        host.sizingOptions = []
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 800, height: 580), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentViewController = host
+        defer { session.stop(); window.close() }
+        for tool in EditorTool.allCases {
+            session.selectedID = nil; session.tool = tool
+            if tool == .text || tool == .step {
+                session.add(tool: tool, from: CGPoint(x: 50, y: 50), to: CGPoint(x: 150, y: 100))
+            }
+            for size in [CGSize(width: 800, height: 580), CGSize(width: 640, height: 480)] {
+                window.setContentSize(size)
+                for _ in 0..<4 {
+                    host.view.layoutSubtreeIfNeeded()
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                let scroll = try #require(descendants(host.view, of: EditorScrollNSView.self).first)
+                let canvas = try #require(scroll.documentView as? EditorCanvasNSView)
+                let showsStyle = session.selectedAnnotation != nil || tool != .select && tool != .crop
+                if showsStyle {
+                    let capsule = NSHostingView(rootView: EditorStyleCapsule(session: session))
+                    let actualHeight = capsule.fittingSize.height
+                    #expect(actualHeight > 0)
+                    #expect(abs(scroll.fitTopClearance - (Theme.Space.m + actualHeight + 8)) < 0.001)
+                    let imageRect = scroll.convert(CGRect(origin: canvas.imageOrigin, size: canvas.imageSize), from: canvas)
+                    #expect(imageRect.minY + 0.001 >= scroll.fitTopClearance)
+                    #expect(imageRect.maxY <= scroll.contentSize.height - Theme.Editor.canvasMargin + 1)
+                } else {
+                    #expect(scroll.fitTopClearance == 0 && canvas.fitTopInset == 0)
+                }
+                session.fitZoom = false
+                for scale in [CGFloat(1), CGFloat(2)] {
+                    session.reportBackingScale(scale); session.zoom = session.actualPixelZoom
+                    scroll.synchronize(viewport: scroll.contentSize)
+                    #expect(scroll.magnification == 1 / scale && canvas.fitTopInset == 0)
+                }
+                canvas.viewDidChangeBackingProperties()
+                #expect(session.backingScale == window.backingScaleFactor && canvas.fitTopInset == 0)
+                session.fitZoom = true
+            }
+        }
+        #expect(!window.isVisible)
+    }
+    @Test("Native custom color well has swatch dimensions, circular hit bounds and a working color action")
+    func nativeColorWell() async throws {
+        let session = EditorSession()
+        session.open(CapturedScreenshot(id: UUID(), image: try EditorRendererTests.image(), pointSize: CGSize(width: 8, height: 6), kind: .screenshot, saveToDiskRequested: false))
+        await session.waitForRendering()
+        session.add(tool: .rectangle, from: .zero, to: CGPoint(x: 6, y: 5))
+        defer { session.stop() }
+        let host = NSHostingView(rootView: EditorStyleCapsule(session: session))
+        host.frame.size = host.fittingSize
+        host.layoutSubtreeIfNeeded()
+        let well = try #require(descendants(host, of: EditorContinuousColorWell.self).first)
+        #expect(well.intrinsicContentSize == CGSize(width: 16, height: 16))
+        #expect(well.frame.size == CGSize(width: Theme.Editor.swatchSize, height: Theme.Editor.swatchSize))
+        #expect(well.accessibilityLabel() == String(localized: "Custom color"))
+        #expect(well.colorWellStyle == .minimal && well.supportsAlpha)
+        #expect(well.hitTest(well.frame.origin) == nil)
+        #expect(well.hitTest(CGPoint(x: well.frame.midX, y: well.frame.midY)) === well)
+        let custom = NSColor(srgbRed: 0.2, green: 0.3, blue: 0.8, alpha: 0.6)
+        well.color = custom
+        #expect(well.sendAction(well.action, to: well.target))
+        let selected = try #require(session.selectedAnnotation)
+        #expect(abs(selected.style.color.red - 0.2) < 0.001 && abs(selected.style.color.alpha - 0.6) < 0.001)
+        #expect(selected.style.color == session.style.color)
+        session.undo()
+        #expect(session.selectedAnnotation?.style.color != selected.style.color)
+    }
+}
 
 @Suite("Screenshot editor pixels and privacy")
 struct EditorRendererTests {

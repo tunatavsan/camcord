@@ -43,18 +43,23 @@ struct EditorWorkspace: View {
     let services: AppServices?
     @State private var quickLook = EditorQuickLook()
     @State private var libraryToken: UUID?
+    @State private var styleCapsuleHeight: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private var showsStyle: Bool { session.selectedAnnotation != nil || session.tool != .select && session.tool != .crop }
 
     var body: some View {
         ZStack {
             if session.document == nil {
                 EditorEmptyView(services: services, open: session.chooseImage)
             } else {
-                EditorCanvas(session: session)
+                EditorCanvas(session: session, fitTopClearance: showsStyle ? Theme.Space.m + styleCapsuleHeight + Theme.Space.s : 0)
                     .overlay(alignment: .top) {
                         VStack(spacing: Theme.Space.s) {
-                            if session.selectedAnnotation != nil || session.tool != .select && session.tool != .crop {
+                            if showsStyle {
                                 EditorStyleCapsule(session: session)
+                                    .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { height in
+                                        if styleCapsuleHeight != height { styleCapsuleHeight = height }
+                                    }
                             }
                             EditorSensitiveSummary(session: session)
                         }
