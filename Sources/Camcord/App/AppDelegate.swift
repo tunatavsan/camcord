@@ -304,8 +304,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applicationItem.submenu = applicationMenu
         menu.addItem(applicationItem)
         menu.addItem(AppMenus.editingMenuItem())
-        menu.addItem(AppMenus.viewMenuItem(target: self, action: #selector(showModule(_:)),
-                                           toggleSidebar: #selector(toggleSidebar(_:))))
+        menu.addItem(AppMenus.viewMenuItem(target: self, action: #selector(showModule(_:))))
         let windowMenu = AppMenus.windowMenuItem()
         menu.addItem(windowMenu)
         NSApp.windowsMenu = windowMenu.submenu
@@ -317,11 +316,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let raw = sender.representedObject as? String, let id = ModuleID(rawValue: raw) else { return }
         panelController?.close()
         mainWindowController?.show(module: id)
-    }
-
-    /// View › Toggle Sidebar (⌃⌘S).
-    @objc private func toggleSidebar(_ sender: Any?) {
-        mainWindowController?.model.sidebarVisible.toggle()
     }
 
     /// ⌘, opens the main window on Settings (K7).

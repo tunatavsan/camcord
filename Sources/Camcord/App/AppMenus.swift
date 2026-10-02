@@ -33,7 +33,8 @@ enum AppMenus {
 
     /// ⌘1…⌘4: the main window's modules, in sidebar order (K1). Each item carries its module's
     /// id; `action` on `target` opens the window on it.
-    static func viewMenuItem(target: AnyObject, action: Selector, toggleSidebar: Selector) -> NSMenuItem {
+    /// The sidebar is always shown (owner, 2026-10-02), so there is no Toggle Sidebar item.
+    static func viewMenuItem(target: AnyObject, action: Selector) -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: String(localized: "View", comment: "Menu title"))
         for module in ModuleRegistry.all {
@@ -44,11 +45,6 @@ enum AppMenus {
             entry.representedObject = module.id.rawValue
             entry.image = NSImage(systemSymbolName: module.symbol, accessibilityDescription: nil)
         }
-        menu.addItem(.separator())
-        let sidebar = menu.addItem(withTitle: String(localized: "Toggle Sidebar", comment: "Shows or hides the main window's sidebar"),
-                                   action: toggleSidebar, keyEquivalent: "s")
-        sidebar.keyEquivalentModifierMask = [.command, .control]
-        sidebar.target = target
         item.submenu = menu
         return item
     }

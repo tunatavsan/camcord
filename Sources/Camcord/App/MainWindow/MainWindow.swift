@@ -107,7 +107,8 @@ struct MainWindowView: View {
     private var module: any CamcordModule { ModuleRegistry.module(model.selection) ?? ModuleRegistry.all[0] }
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $model.sidebarColumnVisibility) {
+        // The sidebar is always shown (owner, 2026-10-02): no toggle, no collapse.
+        NavigationSplitView(columnVisibility: .constant(.all)) {
             ZStack {
                 if model.selection == .settings {
                     SettingsSidebar(model: model)
@@ -146,6 +147,32 @@ struct MainWindowView: View {
         .environment(\.mainWindowLifecycle, lifecycle)
         .background(EditorDocumentEditedBridge(edited: services?.editor.hasUnsavedEdits == true)
             .frame(width: 0, height: 0))
+    }
+}
+
+/// The sidebar is always shown (owner, 2026-10-02), so the split view's own toggle is hidden.
+/// Hidden, not removed: `toolbar(removing: .sidebarToggle)` narrows and shortens the native
+/// sidebar. SwiftUI re-adds toolbar items as modules change, so every addition is checked.
+enum SidebarToggleSuppressor {
+    static let identifier = "com.apple.SwiftUI.navigationSplitView.toggleSidebar"
+    @MainActor private static var observer: NSObjectProtocol?
+
+    @MainActor static func start() {
+        guard observer == nil else { return }
+        observer = NotificationCenter.default.addObserver(forName: NSToolbar.willAddItemNotification,
+                                                          object: nil, queue: .main) { note in
+            let item = note.userInfo?["item"] as? NSToolbarItem
+            MainActor.assumeIsolated { if let item { hide(item) } }
+        }
+    }
+
+    @MainActor static func hideToggles(in toolbar: NSToolbar?) {
+        start()
+        toolbar?.items.forEach(hide)
+    }
+
+    @MainActor private static func hide(_ item: NSToolbarItem) {
+        if item.itemIdentifier.rawValue == identifier, !item.isHidden { item.isHidden = true }
     }
 }
 
@@ -680,6 +707,8 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         window.contentViewController = host
         window.setFrame(frame, display: false)
         observeMinimum(in: window)
+        // And once more after the first layout pass has built the toolbar's items.
+        DispatchQueue.main.async { [weak window] in SidebarToggleSuppressor.hideToggles(in: window?.toolbar) }
     }
 
     private func observeMinimum(in window: NSWindow) {
@@ -692,6 +721,10 @@ final class MainWindowController: NSObject, NSWindowDelegate {
             },
             window.observe(\.contentMinSize, options: [.new]) { [weak self] window, _ in
                 MainActor.assumeIsolated { self?.enforceMinimum(in: window) }
+            },
+            // SwiftUI installs (and replaces) the toolbar after the content mounts.
+            window.observe(\.toolbar, options: [.initial, .new]) { window, _ in
+                MainActor.assumeIsolated { SidebarToggleSuppressor.hideToggles(in: window.toolbar) }
             }
         ]
         enforceMinimum(in: window)
