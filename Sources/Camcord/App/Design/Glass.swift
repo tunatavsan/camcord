@@ -220,8 +220,8 @@ struct TrayBlur: NSViewRepresentable {
 }
 
 final class TrayBlurView: NSView {
-    /// Light enough that text behind the window stays legible (owner, 2026-10-02).
-    static let radius = 6.0
+    /// The native sidebar's own radius: words behind the window stay readable (owner, 2026-10-02).
+    static let radius = 2.0
 
     init(cornerRadius: CGFloat) {
         super.init(frame: .zero)
