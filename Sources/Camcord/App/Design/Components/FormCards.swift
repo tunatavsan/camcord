@@ -23,7 +23,7 @@ struct FormPage<Content: View>: View {
             .padding(.horizontal, Theme.Space.xxl)
             .padding(.top, Theme.Space.l)
             .padding(.bottom, Theme.Space.xxl)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .top)
         }
         .scrollIndicators(.automatic)
     }

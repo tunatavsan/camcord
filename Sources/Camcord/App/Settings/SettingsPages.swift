@@ -57,6 +57,7 @@ struct SettingsModuleView: View {
 
 struct SettingsPageView: View {
     @Environment(\.mainWindowModel) private var windowModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var activity = SettingsActivity()
     let group: SettingsGroup
     let store: SettingsStore
@@ -65,6 +66,19 @@ struct SettingsPageView: View {
 
     var body: some View {
         let _ = SettingsKeyRecorder.active?.recordStore(store)
+        ZStack(alignment: .top) {
+            page
+                .background(PerformanceLayoutCompletionBridge(target: .settings(group),
+                    active: activity.isActive, diagnostics: windowModel?.performanceDiagnostics))
+                // Only the selected page gets a fresh scroll position; the module and store stay alive.
+                .id(group)
+                .transition(.opacity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .animation(Theme.Motion.resolve(Theme.Motion.moduleSwitch, reduceMotion: reduceMotion), value: group)
+    }
+
+    private var page: some View {
         Group {
             switch group {
         case .general: GeneralSettingsPage(store: store)
@@ -76,8 +90,6 @@ struct SettingsPageView: View {
         case .permissions: PermissionsSettingsPage(store: store)
             }
         }
-        .background(PerformanceLayoutCompletionBridge(target: .settings(group),
-            active: activity.isActive, diagnostics: windowModel?.performanceDiagnostics))
     }
 }
 
