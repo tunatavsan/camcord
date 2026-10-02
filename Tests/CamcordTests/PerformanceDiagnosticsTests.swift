@@ -6,6 +6,53 @@ import Testing
 
 @Suite("Performance diagnostics", .serialized)
 struct PerformanceDiagnosticsTests {
+    @Test("callback cadence uses injected arrival times without assuming 120 Hz")
+    func callbackArrivalIntervals() throws {
+        var measurement = try #require(DisplayCallbackMeasurement(startedAt: 1))
+        measurement.callback(at: 1.010)
+        measurement.callback(at: 1.026)
+        measurement.callback(at: 1.044)
+        measurement.callback(at: 1.114)
+        #expect(measurement.callbackCount == 4)
+        #expect(measurement.intervals.count == 3)
+        #expect(abs(try #require(measurement.firstCallbackMilliseconds) - 10) < 0.000_001)
+        #expect(abs(try #require(measurement.medianIntervalMilliseconds) - 18) < 0.000_001)
+        #expect(abs(measurement.maximumInterval * 1_000 - 70) < 0.000_001)
+    }
+
+    @Test("deadline bounds observation and cannot manufacture a first callback")
+    func callbackDeadlineAndInvalidTimes() throws {
+        var measurement = try #require(DisplayCallbackMeasurement(startedAt: 10))
+        #expect(!measurement.expired(at: 10.649))
+        #expect(measurement.expired(at: measurement.deadline))
+        measurement.callback(at: .nan)
+        measurement.callback(at: 9.9)
+        measurement.callback(at: measurement.deadline)
+        #expect(measurement.callbackCount == 0)
+        #expect(measurement.firstCallbackMilliseconds == nil)
+        #expect(measurement.medianIntervalMilliseconds == nil)
+        #expect(measurement.invalidCallbacks == 3)
+        measurement.callback(at: 10.01)
+        measurement.callback(at: 10.01)
+        measurement.callback(at: 10.009)
+        #expect(measurement.callbackCount == 1)
+        #expect(measurement.invalidCallbacks == 5)
+        #expect(DisplayCallbackMeasurement(startedAt: .infinity) == nil)
+        #expect(DisplayCallbackMeasurement(startedAt: 0, duration: 1.01) == nil)
+    }
+
+    @Test("callback storage is bounded and median math includes even sample counts")
+    func boundedCallbackStorage() throws {
+        var even = try #require(DisplayCallbackMeasurement(startedAt: 0))
+        for time in [0.01, 0.02, 0.05] { even.callback(at: time) }
+        #expect(abs(try #require(even.medianIntervalMilliseconds) - 20) < 0.000_001)
+        var bounded = try #require(DisplayCallbackMeasurement(startedAt: 0))
+        for tick in 1...300 { bounded.callback(at: Double(tick) / 1_000) }
+        #expect(bounded.callbackCount == 300)
+        #expect(bounded.intervals.count == DisplayCallbackMeasurement.maximumIntervals)
+        #expect(bounded.truncated)
+    }
+
     @Test("activation needs an eligible owned window; no display does not complete it")
     func activationWithoutDisplay() throws {
         var tracker = ActivationDisplayTracker()

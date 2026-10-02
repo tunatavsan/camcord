@@ -92,25 +92,42 @@ final class ActivationPerformanceDiagnostics {
     private let log = OSLog(subsystem: "dev.tavsan.camcord", category: .pointsOfInterest)
     private weak var window: NSWindow?
     private var tracker = ActivationDisplayTracker()
-    private var intervals: [UInt64: OSSignpostID] = [:]
+    private struct Interval { let id: OSSignpostID; let started: UInt64 }
+    private var intervals: [UInt64: Interval] = [:]
 
     func register(window: NSWindow?) {
         guard self.window !== window else { return }
         emit(tracker.cancel())
         self.window = window
+        #if DEBUG
+        NavigationDisplayLinkDiagnostics.shared.register(window: window)
+        #endif
     }
 
     func didBecomeActive() {
         observeCost(phase: "activation") {
             emit(tracker.begin(eligible: window?.isVisible == true && window?.isMiniaturized == false))
+            #if DEBUG
+            if ProcessInfo.processInfo.environment["CAMCORD_DEBUG_DISPLAYLINK"] == "1" {
+                NavigationDisplayLinkDiagnostics.shared.request(label: "activation.debug")
+            }
+            #endif
         }
     }
 
-    func didResignActive() { observeCost(phase: "resign") { emit(tracker.cancel()) } }
+    func didResignActive() {
+        observeCost(phase: "resign") { emit(tracker.cancel()) }
+        #if DEBUG
+        NavigationDisplayLinkDiagnostics.shared.cancel(outcome: "resigned")
+        #endif
+    }
 
     func willClose(window: NSWindow) {
         guard self.window === window else { return }
         emit(tracker.cancel())
+        #if DEBUG
+        NavigationDisplayLinkDiagnostics.shared.cancel(outcome: "closed")
+        #endif
     }
 
     func displayGeneration(window: NSWindow, needsDisplay: Bool) -> UInt64? {
@@ -133,22 +150,26 @@ final class ActivationPerformanceDiagnostics {
             switch event {
             case .began(let generation):
                 let id = OSSignpostID(log: log)
-                intervals[generation] = id
+                intervals[generation] = Interval(id: id, started: DispatchTime.now().uptimeNanoseconds)
                 os_signpost(.begin, log: log, name: "ActivationToAppKitDisplay", signpostID: id,
                             "generation=%llu", generation)
             case .ended(let generation, let outcome):
-                guard let id = intervals.removeValue(forKey: generation) else { continue }
-                os_signpost(.end, log: log, name: "ActivationToAppKitDisplay", signpostID: id,
+                guard let interval = intervals.removeValue(forKey: generation) else { continue }
+                let elapsed = DispatchTime.now().uptimeNanoseconds - interval.started
+                os_signpost(.end, log: log, name: "ActivationToAppKitDisplay", signpostID: interval.id,
                             "generation=%llu outcome=%{public}@", generation, outcome.rawValue)
+                DiagnosticsLog.append("performance activation generation=\(generation) elapsed_ms=\(Double(elapsed) / 1_000_000) outcome=\(outcome.rawValue)")
             }
         }
     }
 
     private func observeCost(phase: String, _ operation: () -> Void) {
         let id = OSSignpostID(log: log)
+        let started = DispatchTime.now().uptimeNanoseconds
         os_signpost(.begin, log: log, name: "ActivationObserverCost", signpostID: id, "%{public}@", phase)
         operation()
         os_signpost(.end, log: log, name: "ActivationObserverCost", signpostID: id, "%{public}@", phase)
+        DiagnosticsLog.append("performance activation-observer phase=\(phase) elapsed_ms=\(Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000)")
     }
 
     private func recordRetina(window: NSWindow) {
@@ -161,6 +182,7 @@ final class ActivationPerformanceDiagnostics {
                     layers.count, layers.invalidScales, layers.minimumScale, layers.maximumScale,
                     layers.rasterizedLayers, layers.minimumRasterizationScale, layers.maximumRasterizationScale,
                     layers.truncated ? 1 : 0)
+        DiagnosticsLog.append("performance activation-retina backing_scale=\(finite(window.backingScaleFactor)) width_px=\(finite(backing.width)) height_px=\(finite(backing.height)) layers=\(layers.count) invalid=\(layers.invalidScales) min_scale=\(layers.minimumScale) max_scale=\(layers.maximumScale) rasterized=\(layers.rasterizedLayers) min_raster_scale=\(layers.minimumRasterizationScale) max_raster_scale=\(layers.maximumRasterizationScale) truncated=\(layers.truncated ? 1 : 0)")
     }
 }
 
@@ -220,6 +242,9 @@ final class NavigationPerformanceDiagnostics {
     private var pending: [Target: Pending] = [:]
 
     func request(_ target: Target) {
+        #if DEBUG
+        let callbackStartedAt = CACurrentMediaTime()
+        #endif
         // A superseded request gets an explicit outcome, never a false layout completion.
         for old in pending.keys.filter({ target.isModule || !$0.isModule }) {
             end(old, outcome: "superseded")
@@ -229,6 +254,9 @@ final class NavigationPerformanceDiagnostics {
         pending[target] = interval
         os_signpost(.begin, log: log, name: target.name, signpostID: interval.signpost,
                     "%{public}@ generation=%llu", target.label, sequence)
+        #if DEBUG
+        NavigationDisplayLinkDiagnostics.shared.requestNavigation(target, startedAt: callbackStartedAt)
+        #endif
     }
 
     func generation(for target: Target) -> UInt64? { pending[target]?.generation }
@@ -242,6 +270,11 @@ final class NavigationPerformanceDiagnostics {
 
     private func end(_ target: Target, outcome: String) {
         guard let interval = pending.removeValue(forKey: target) else { return }
+        #if DEBUG
+        if outcome == "superseded" {
+            NavigationDisplayLinkDiagnostics.shared.cancel(label: target.label, outcome: "superseded")
+        }
+        #endif
         os_signpost(.end, log: log, name: target.name, signpostID: interval.signpost,
                     "%{public}@ outcome=%{public}@ generation=%llu", target.label, outcome, interval.generation)
     }
@@ -287,6 +320,164 @@ struct PerformanceLayoutCompletionBridge: NSViewRepresentable {
 }
 
 #if DEBUG
+/// Arrival cadence of display-link callbacks, not frames rendered or presented by the app.
+/// The clock is supplied by the caller so interval/deadline math needs no real-time tests.
+struct DisplayCallbackMeasurement {
+    static let maximumIntervals = 256
+    let startedAt: Double
+    let deadline: Double
+    private(set) var firstCallbackAt: Double?
+    private var previousCallbackAt: Double?
+    private(set) var callbackCount = 0
+    private(set) var invalidCallbacks = 0
+    private(set) var intervals: [Double] = []
+    private(set) var maximumInterval = 0.0
+    private(set) var truncated = false
+
+    init?(startedAt: Double, duration: Double = 0.65) {
+        guard startedAt.isFinite, startedAt >= 0, duration.isFinite,
+              (0.3...1.0).contains(duration), (startedAt + duration).isFinite else { return nil }
+        self.startedAt = startedAt
+        deadline = startedAt + duration
+    }
+
+    func expired(at now: Double) -> Bool { now.isFinite && now >= deadline }
+
+    mutating func callback(at now: Double) {
+        guard now.isFinite, now >= startedAt, now < deadline,
+              previousCallbackAt.map({ now > $0 }) ?? true else { invalidCallbacks += 1; return }
+        if firstCallbackAt == nil { firstCallbackAt = now }
+        if let previousCallbackAt {
+            let interval = now - previousCallbackAt
+            maximumInterval = max(maximumInterval, interval)
+            if intervals.count < Self.maximumIntervals { intervals.append(interval) }
+            else { truncated = true }
+        }
+        previousCallbackAt = now
+        callbackCount += 1
+    }
+
+    var firstCallbackMilliseconds: Double? { firstCallbackAt.map { ($0 - startedAt) * 1_000 } }
+    var medianIntervalMilliseconds: Double? {
+        guard !intervals.isEmpty else { return nil }
+        let sorted = intervals.sorted(), middle = sorted.count / 2
+        return (sorted.count.isMultiple(of: 2) ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle]) * 1_000
+    }
+}
+
+/// One short sampling window per navigation request. An existing mounted layout does not
+/// stop the sampling window; the deadline merely bounds observation, never marks a draw.
+@MainActor
+final class NavigationDisplayLinkDiagnostics {
+    static let shared = NavigationDisplayLinkDiagnostics()
+    private struct Session {
+        let generation: UInt64
+        var measurement: DisplayCallbackMeasurement
+        let deadlineTask: Task<Void, Never>
+        var callbackCostNanoseconds: UInt64 = 0
+    }
+    private weak var window: NSWindow?
+    private var displayLink: CADisplayLink?
+    private var proxy: NavigationDisplayLinkProxy?
+    private var sessions: [String: Session] = [:]
+    private var sequence: UInt64 = 0
+    private var preferredMinimum: Float = 0
+    private var preferredMaximum: Float = 0
+
+    func register(window: NSWindow?) {
+        guard self.window !== window else { return }
+        cancel(outcome: "window-replaced")
+        self.window = window
+    }
+
+    func requestNavigation(_ target: NavigationPerformanceDiagnostics.Target, startedAt: Double) {
+        // A completed layout can still have a live observation window. A new transition
+        // supersedes it, so its aggregate cannot include the next transition's callbacks.
+        for old in sessions.keys.filter({ target.isModule
+            ? $0.hasPrefix("module.") || $0.hasPrefix("settings.")
+            : $0.hasPrefix("settings.") }) {
+            cancel(label: old, outcome: "superseded")
+        }
+        request(label: target.label, startedAt: startedAt)
+    }
+
+    func request(label: String, startedAt: Double? = nil) {
+        cancel(label: label, outcome: "superseded")
+        guard eligible, let view = window?.contentView,
+              let measurement = DisplayCallbackMeasurement(startedAt: startedAt ?? CACurrentMediaTime()) else { return }
+        // Labels originate only from fixed module/page enums or the explicit debug flag.
+        guard sessions.count < 16 else { return }
+        sequence &+= 1
+        let generation = sequence
+        let deadlineTask = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .milliseconds(650)) } catch { return }
+            guard let self, self.sessions[label]?.generation == generation else { return }
+            self.cancel(label: label, outcome: "deadline")
+        }
+        sessions[label] = Session(generation: generation, measurement: measurement, deadlineTask: deadlineTask)
+        if displayLink == nil {
+            let proxy = NavigationDisplayLinkProxy(owner: self)
+            self.proxy = proxy
+            let link = view.displayLink(target: proxy, selector: #selector(NavigationDisplayLinkProxy.tick(_:)))
+            let fps = Float(min(120, max(1, window?.screen?.maximumFramesPerSecond ?? 60)))
+            preferredMinimum = min(80, fps)
+            preferredMaximum = fps
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: preferredMinimum, maximum: fps, preferred: fps)
+            displayLink = link
+            link.add(to: .main, forMode: .common)
+        }
+    }
+
+    func cancel(outcome: String) {
+        for label in Array(sessions.keys) { cancel(label: label, outcome: outcome) }
+        stopIfIdle()
+    }
+
+    func cancel(label: String, outcome: String) {
+        guard let session = sessions.removeValue(forKey: label) else { return }
+        session.deadlineTask.cancel()
+        let value = session.measurement
+        DiagnosticsLog.append("performance displaylink-callbacks target=\(label) generation=\(session.generation) outcome=\(outcome) callbacks=\(value.callbackCount) intervals=\(value.intervals.count) first_callback_ms=\(value.firstCallbackMilliseconds ?? -1) p50_ms=\(value.medianIntervalMilliseconds ?? -1) max_ms=\(value.maximumInterval * 1_000) invalid=\(value.invalidCallbacks) truncated=\(value.truncated ? 1 : 0) preferred_min=\(preferredMinimum) preferred_max=\(preferredMaximum) callback_sample_math_ms=\(Double(session.callbackCostNanoseconds) / 1_000_000)")
+        stopIfIdle()
+    }
+
+    private var eligible: Bool {
+        guard let window, window.isVisible, !window.isMiniaturized,
+              window.occlusionState.contains(.visible) else { return false }
+        return NSApp?.isActive == true
+    }
+
+    func tick() {
+        guard eligible else { cancel(outcome: "inactive"); return }
+        // CACurrentMediaTime measures callback ARRIVAL; the display-link timestamp can
+        // describe a scheduled frame even when this callback reaches the main actor late.
+        let now = CACurrentMediaTime()
+        for label in Array(sessions.keys) {
+            if sessions[label]?.measurement.expired(at: now) == true {
+                cancel(label: label, outcome: "deadline"); continue
+            }
+            let started = DispatchTime.now().uptimeNanoseconds
+            sessions[label]?.measurement.callback(at: now)
+            sessions[label]?.callbackCostNanoseconds += DispatchTime.now().uptimeNanoseconds - started
+        }
+        stopIfIdle()
+    }
+
+    private func stopIfIdle() {
+        guard sessions.isEmpty else { return }
+        displayLink?.invalidate()
+        displayLink = nil
+        proxy = nil
+    }
+}
+
+@MainActor
+private final class NavigationDisplayLinkProxy: NSObject {
+    weak var owner: NavigationDisplayLinkDiagnostics?
+    init(owner: NavigationDisplayLinkDiagnostics) { self.owner = owner }
+    @objc func tick(_ link: CADisplayLink) { owner?.tick() }
+}
+
 /// Tracks continuous runloop work, excluding the interval in which the loop is asleep.
 struct RunLoopStallTracker {
     struct Stall: Sendable {
