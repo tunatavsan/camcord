@@ -220,7 +220,8 @@ struct TrayBlur: NSViewRepresentable {
 }
 
 final class TrayBlurView: NSView {
-    static let radius = 20.0
+    /// Light enough that text behind the window stays legible (owner, 2026-10-02).
+    static let radius = 6.0
 
     init(cornerRadius: CGFloat) {
         super.init(frame: .zero)
