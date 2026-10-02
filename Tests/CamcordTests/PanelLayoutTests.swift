@@ -30,18 +30,14 @@ struct PanelLayoutTests {
     @Test("the capture palette stays compact in every recording state")
     func sizeTable() {
         #expect(CapturePanelView.panelWidth == 360)
-        #expect(CapturePanelView.panelHeight == 424)
+        #expect(CapturePanelView.panelHeight == 492)
         // Recording status uses the same compact palette footprint as idle capture.
         #expect(CapturePanelView.activeHeight == CapturePanelView.panelHeight)
         for height in [CapturePanelView.panelHeight, CapturePanelView.activeHeight,
                        CapturePanelView.finishingHeight, CapturePanelView.finishedHeight] {
             #expect(height <= 520)
         }
-        // The window and the view read one table, so the panel opens at its fixed dimension.
-        #expect(CapturePanelView.height(state: .idle, isFinishing: false, finished: false) == CapturePanelView.panelHeight)
-        #expect(CapturePanelView.height(state: .recording, isFinishing: false, finished: false) == CapturePanelView.activeHeight)
-        #expect(CapturePanelView.height(state: .recording, isFinishing: true, finished: false) == CapturePanelView.finishingHeight)
-        #expect(CapturePanelView.height(state: .idle, isFinishing: false, finished: true) == CapturePanelView.finishedHeight)
+
     }
 
     @Test("only a press on the camera rectangle moves it; the recording itself is not a control")

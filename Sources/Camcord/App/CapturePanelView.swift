@@ -9,19 +9,11 @@ struct CapturePanelView: View {
     let actions: PanelActions
     @State private var shortcuts: [CaptureKind: String] = [:]
     @State private var context: PanelPresentation
-    /// One fixed dimension per state, so every row lands where it was designed to.
     static let panelWidth: CGFloat = 360
-    static let panelHeight: CGFloat = 424
-    static let activeHeight: CGFloat = 424
+    static let panelHeight: CGFloat = 492
+    static let activeHeight: CGFloat = 492
     static let finishingHeight: CGFloat = 220
     static let finishedHeight: CGFloat = 418
-    static let recentThumbHeight: CGFloat = 66
-
-    static func height(state: RecordingController.UIState, isFinishing: Bool, finished: Bool) -> CGFloat {
-        if finished { return finishedHeight }
-        if isFinishing { return finishingHeight }
-        return state == .idle ? panelHeight : activeHeight
-    }
     // Geometry used by the independent recording stage.
     static let contextColumnWidth: CGFloat = 248
     static let controlColumnWidth: CGFloat = 276
@@ -37,7 +29,9 @@ struct CapturePanelView: View {
 
     private var canConfigure: Bool { model.state == .idle && !model.isStarting && !model.isArmed }
     private var currentHeight: CGFloat {
-        Self.height(state: model.state, isFinishing: model.isFinishing, finished: model.finishedURL != nil)
+        if model.finishedURL != nil { return Self.finishedHeight }
+        if model.isFinishing { return Self.finishingHeight }
+        return model.state == .idle ? Self.panelHeight : Self.activeHeight
     }
 
     var body: some View {
@@ -55,12 +49,11 @@ struct CapturePanelView: View {
                 PanelRecentCaptures(items: context.recent, images: context.thumbnails,
                                     loading: context.library?.isLoading == true,
                                     issue: context.library?.loadingIssue, open: openCapture)
-                    .padding(.top, Theme.Space.xs)
                 Spacer(minLength: 0)
             }
             PanelFooter(actions: actions)
         }
-        .padding(Theme.Space.l)
+        .padding(Theme.Space.m)
         .frame(width: Self.panelWidth, height: currentHeight, alignment: .top)
         .foregroundStyle(Theme.Palette.ink.color)
         .tint(Theme.Palette.ink.color)
@@ -109,8 +102,8 @@ private struct PanelHeader: View {
                     Text(verbatim: elapsed).font(Theme.Font.dataStrong)
                         .accessibilityLabel(Text("Elapsed time"))
                 }
-            } else if model.isFinishing || model.isArmed {
-                Text(model.isFinishing ? "Finalizing…" : "Ready to start")
+            } else {
+                Text(model.isFinishing ? "Finalizing…" : model.isArmed ? "Ready to start" : "Capture")
                     .font(Theme.Font.caption).foregroundStyle(Theme.Palette.ink3.color)
             }
         }
@@ -165,16 +158,11 @@ private struct PanelRecordingModule: View {
                 } label: {
                     HStack(spacing: Theme.Space.s) {
                         Image(systemName: canConfigure ? context.recordingSource.symbol : model.isArmed ? "macwindow" : "record.circle")
-                            .foregroundStyle(Theme.Palette.ink2.color)
                         Text(canConfigure ? context.recordingSource.label : "Source locked").font(Theme.Font.bodyStrong)
-                        Spacer(minLength: 0)
-                        Image(systemName: "chevron.up.chevron.down").font(Theme.Font.caption)
-                            .foregroundStyle(Theme.Palette.ink3.color)
+                        Image(systemName: "chevron.down").font(Theme.Font.caption)
                     }
-                    .padding(.horizontal, Theme.Space.m)
                     .frame(maxWidth: .infinity, alignment: .leading).frame(height: 36)
-                    .background(Theme.Palette.hover.color, in: .capsule)
-                    .contentShape(.capsule)
+                    .contentShape(.rect)
                 }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden)
                 .disabled(!canConfigure)
@@ -190,8 +178,8 @@ private struct PanelRecordingModule: View {
             }
             PanelRecordingControls(model: model, context: context, actions: actions)
         }
-        .padding(Theme.Space.s + Theme.Space.xs)
-        .background(Theme.Palette.selection.color, in: .rect(cornerRadius: Theme.Radius.box))
+        .padding(Theme.Space.m)
+        .background(Theme.Palette.selection.color, in: .rect(cornerRadius: Theme.Radius.floating))
     }
 }
 
@@ -233,15 +221,17 @@ private struct PanelRecordingControls: View {
             } else if model.state != .idle {
                 Button(action: actions.pauseResume) {
                     Label(model.state == .paused ? "Resume" : "Pause", systemImage: model.state == .paused ? "play.fill" : "pause")
-                        .font(Theme.Font.bodyStrong).frame(maxWidth: .infinity)
+                        .font(Theme.Font.body)
                 }.buttonStyle(PanelSecondaryStyle())
                 PanelPrimaryButton(title: "Stop", symbol: "stop.fill", action: actions.toggleRecording)
             } else {
+                Text("Recording").font(Theme.Font.caption).foregroundStyle(Theme.Palette.ink3.color)
+                Spacer(minLength: 0)
                 PanelPrimaryButton(title: "Record", symbol: "record.circle",
                                    action: { context.startRecording(using: actions) })
                     .help(KeyboardShortcuts.getShortcut(for: .toggleRecording)?.description ?? String(localized: "Start recording"))
             }
-        }.frame(height: 36)
+        }.frame(height: 32)
     }
 }
 
@@ -252,7 +242,7 @@ private struct PanelPrimaryButton: View {
     var body: some View {
         Button(action: action) {
             Label(title, systemImage: symbol).font(Theme.Font.bodyStrong)
-                .frame(maxWidth: .infinity).frame(height: 36)
+                .padding(.horizontal, Theme.Space.m).frame(height: 32)
         }
         .buttonStyle(PanelPrimaryStyle())
     }
@@ -264,60 +254,44 @@ private struct PanelRecentCaptures: View {
     let loading: Bool
     let issue: String?
     let open: (CaptureItem) -> Void
-    /// Three fixed tiles side by side. Each shows the whole capture, scaled to fit, never
-    /// cropped (owner, 2026-10-02), whatever its shape.
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
             Text("Recent captures").font(Theme.Font.captionStrong).foregroundStyle(Theme.Palette.ink3.color)
+                .padding(.bottom, Theme.Space.xs)
             if items.isEmpty {
                 Label(loading ? "Loading captures…" : issue == nil ? "No captures yet" : "Captures unavailable",
                       systemImage: loading ? "clock" : "photo")
                     .font(Theme.Font.caption).foregroundStyle(Theme.Palette.ink3.color)
-                    .frame(maxWidth: .infinity, minHeight: CapturePanelView.recentThumbHeight)
-                    .background(Theme.Palette.well.color, in: .rect(cornerRadius: Theme.Radius.thumb))
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     .help(Text(verbatim: issue ?? ""))
             } else {
-                HStack(alignment: .top, spacing: Theme.Space.s) {
-                    ForEach(0..<3, id: \.self) { index in
-                        if index < items.count {
-                            tile(items[index])
-                        } else {
-                            Color.clear.frame(maxWidth: .infinity, minHeight: CapturePanelView.recentThumbHeight)
-                        }
+                ForEach(items) { item in
+                    Button { open(item) } label: {
+                        HStack(spacing: Theme.Space.s) {
+                            ZStack {
+                                Theme.Palette.well.color
+                                if let image = images[item.id] {
+                                    Image(decorative: image, scale: 1).resizable().scaledToFit()
+                                } else {
+                                    Image(systemName: item.kind == .recording ? "film" : "photo")
+                                        .foregroundStyle(Theme.Palette.ink3.color)
+                                }
+                            }
+                            .frame(width: 64, height: 42).clipShape(.rect(cornerRadius: Theme.Radius.key))
+                            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                                Text(verbatim: item.title).font(Theme.Font.bodyStrong).lineLimit(1)
+                                Text(verbatim: PanelRelativeDate.string(for: item.createdAt))
+                                    .font(Theme.Font.dataSmall).foregroundStyle(Theme.Palette.ink3.color).lineLimit(1)
+                            }.frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                        }.padding(Theme.Space.xs)
                     }
+                    .buttonStyle(PanelHoverStyle(radius: Theme.Radius.thumb))
+                    .onDrag { PanelCaptureDrag(item: item)?.provider() ?? NSItemProvider() }
+                    .help("Open this capture or drag its file")
+                    .accessibilityLabel(Text(verbatim: item.title))
                 }
             }
         }
-    }
-
-    private func tile(_ item: CaptureItem) -> some View {
-        Button { open(item) } label: {
-            VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                ZStack {
-                    Theme.Palette.well.color
-                    if let image = images[item.id] {
-                        Image(decorative: image, scale: 1).resizable().scaledToFit()
-                            .clipShape(.rect(cornerRadius: Theme.Radius.badge))
-                            .padding(Theme.Space.xs)
-                    } else {
-                        Image(systemName: item.kind == .recording ? "film" : "photo")
-                            .foregroundStyle(Theme.Palette.ink3.color)
-                    }
-                }
-                .frame(maxWidth: .infinity).frame(height: CapturePanelView.recentThumbHeight)
-                .clipShape(.rect(cornerRadius: Theme.Radius.thumb))
-                Text(verbatim: PanelRelativeDate.string(for: item.createdAt))
-                    .font(Theme.Font.dataSmall).foregroundStyle(Theme.Palette.ink3.color)
-                    .lineLimit(1).padding(.horizontal, Theme.Space.xs)
-            }
-            .padding(Theme.Space.xs / 2)
-        }
-        .buttonStyle(PanelHoverStyle(radius: Theme.Radius.thumb))
-        .frame(maxWidth: .infinity)
-        .onDrag { PanelCaptureDrag(item: item)?.provider() ?? NSItemProvider() }
-        .help(Text(verbatim: item.title))
-        .accessibilityLabel(Text(verbatim: item.title))
-        .accessibilityHint(Text("Opens the capture; drag to use its file", comment: "Accessibility: recent capture tile"))
     }
 }
 
@@ -383,10 +357,10 @@ private struct PanelPrimaryStyle: ButtonStyle {
 private struct PanelSecondaryStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .padding(.horizontal, Theme.Space.m).frame(height: 36)
-            .background(configuration.isPressed ? Theme.Palette.pressed.color : Theme.Palette.hover.color,
-                        in: .capsule)
-            .contentShape(.capsule)
+            .padding(.horizontal, Theme.Space.s).frame(height: 32)
+            .background(configuration.isPressed ? Theme.Palette.pressed.color : .clear,
+                        in: .rect(cornerRadius: Theme.Radius.well))
+            .overlay { RoundedRectangle(cornerRadius: Theme.Radius.well).strokeBorder(Theme.Menu.line.color, lineWidth: 0.5) }
     }
 }
 

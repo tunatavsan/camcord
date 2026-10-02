@@ -40,8 +40,7 @@ struct EditorBackgroundInspector: View {
                 }.buttonStyle(.borderless)
             }.padding(Theme.Space.l)
         }
-        // On the window's glass, like the sidebar: no opaque slab of its own.
-        .scrollContentBackground(.hidden)
+        .background(Theme.Palette.surface.color)
         .disabled(session.document == nil)
     }
 }

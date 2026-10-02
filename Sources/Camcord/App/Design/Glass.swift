@@ -87,13 +87,13 @@ extension NSGlassEffectView {
 
 // MARK: - Window backdrops
 
-/// Passive window surfaces beneath pages. The window is one untinted system Liquid Glass
-/// surface; thumbnails, previews, video and form cards keep their own opaque surfaces above it.
-/// The sidebar case supports legacy clients.
+/// Passive window surfaces beneath pages. Content uses untinted system Liquid Glass;
+/// thumbnails, previews, video and form cards keep their own opaque surfaces above it.
+/// The native split-view sidebar supplies its own glass; the sidebar case supports legacy clients.
 enum WindowBackdrop: CaseIterable, Sendable {
     /// A legacy whole-height sidebar backdrop.
     case sidebar
-    /// The whole window as one glass frame, sidebar and module together.
+    /// An inset content pane matching the native sidebar's glass family.
     case content
 
     /// Legacy material metadata. The content pane is rendered with `glassEffect` instead.
@@ -120,19 +120,18 @@ enum WindowBackdrop: CaseIterable, Sendable {
 
 private struct WindowBackdropView: NSViewRepresentable {
     let backdrop: WindowBackdrop
-    var material: NSVisualEffectView.Material?
 
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
         view.blendingMode = .behindWindow
         // Active even while the window is not key: the frost must not flatten to grey.
         view.state = .active
-        view.material = material ?? backdrop.material
+        view.material = backdrop.material
         return view
     }
 
     func updateNSView(_ view: NSVisualEffectView, context: Context) {
-        view.material = material ?? backdrop.material
+        view.material = backdrop.material
     }
 }
 
@@ -144,24 +143,14 @@ private struct WindowBackdropModifier: ViewModifier {
         content.background {
             Group {
                 if backdrop == .content {
-                    // The whole app sits in ONE framed glass panel, the one the native sidebar
-                    // wore (owner, 2026-10-02): inset from the window's edge, its rim visible,
-                    // the sidebar and the module inside it with no gap between them.
-                    // Built like the system's floating sidebar: a translucent window base and
-                    // one untinted system glass panel inset over it. The glass draws its own
-                    // rim; nothing opaque sits behind it, so the desktop shows through.
-                    ZStack {
+                    Group {
                         if reduceTransparency {
-                            backdrop.solid.color
-                            RoundedRectangle(cornerRadius: Theme.Radius.floating, style: .continuous)
-                                .fill(Theme.Palette.surface.color)
-                                .padding(Theme.Navigation.nativeSidebarInset)
+                            contentShape.fill(backdrop.solid.color)
                         } else {
-                            WindowBackdropView(backdrop: .sidebar, material: .windowBackground)
-                            WindowFrameGlass()
-                                .padding(Theme.Navigation.nativeSidebarInset)
+                            Color.clear.glassEffect(.regular, in: contentShape)
                         }
                     }
+                    .padding(Theme.Navigation.nativeSidebarInset)
                 } else if reduceTransparency {
                     backdrop.solid.color
                 } else {
@@ -171,27 +160,16 @@ private struct WindowBackdropModifier: ViewModifier {
                     }
                 }
             }
-            .ignoresSafeArea()
+            // Preserve the split view's horizontal reservation while extending beneath the titlebar.
+            .ignoresSafeArea(edges: backdrop == .content ? [.top, .bottom] : .all)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
         }
     }
 
-}
-
-/// The app's frame: one system glass panel whose rim is the visible border.
-private struct WindowFrameGlass: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSGlassEffectView {
-        let view = NSGlassEffectView()
-        view.style = .regular
-        view.tintColor = nil
-        view.cornerRadius = Theme.Radius.floating
-        view.contentView = NSView()
-        view.setAccessibilityHidden(true)
-        return view
+    private var contentShape: ConcentricRectangle {
+        ConcentricRectangle(corners: .concentric(minimum: .fixed(Theme.Navigation.nativeSidebarInset)))
     }
-
-    func updateNSView(_ view: NSGlassEffectView, context: Context) {}
 }
 
 extension View {
