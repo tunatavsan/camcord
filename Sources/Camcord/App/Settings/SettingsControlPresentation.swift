@@ -39,14 +39,15 @@ struct SettingsNativeValueSlider: NSViewRepresentable {
     let label: LocalizedStringResource
     let format: (Double) -> String
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.locale) private var locale
 
     func makeNSView(context: Context) -> SettingsSliderHost {
-        SettingsSliderHost(content: content, label: String(localized: label), valueDescription: format(value))
+        SettingsSliderHost(content: content, label: label, locale: locale, valueDescription: format(value))
     }
 
     func updateNSView(_ view: SettingsSliderHost, context: Context) {
         view.host.rootView = content
-        view.label = String(localized: label)
+        view.updateLabel(label, locale: locale)
         view.valueDescription = format(value)
         view.needsLayout = true
     }
@@ -65,12 +66,19 @@ struct SettingsSliderContent: View {
 
 final class SettingsSliderHost: NSView {
     let host: NSHostingView<SettingsSliderContent>
-    var label: String
+    private(set) var label: String
     var valueDescription: String
+    private var localizedLabelResource: LocalizedStringResource
+    private let localize: (LocalizedStringResource) -> String
 
-    init(content: SettingsSliderContent, label: String, valueDescription: String) {
+    init(content: SettingsSliderContent, label: LocalizedStringResource, locale: Locale,
+         valueDescription: String, localize: @escaping (LocalizedStringResource) -> String = { String(localized: $0) }) {
+        var resource = label
+        resource.locale = locale
         host = NSHostingView(rootView: content)
-        self.label = label
+        localizedLabelResource = resource
+        self.localize = localize
+        self.label = localize(resource)
         self.valueDescription = valueDescription
         super.init(frame: .zero)
         addSubview(host)
@@ -78,6 +86,16 @@ final class SettingsSliderHost: NSView {
     }
 
     required init?(coder: NSCoder) { nil }
+
+    func updateLabel(_ label: LocalizedStringResource, locale: Locale) {
+        var resource = label
+        resource.locale = locale
+        // The full resource includes its key, values, table and bundle; the effective locale
+        // keeps an environment language change from reusing the previous accessibility text.
+        guard resource != localizedLabelResource else { return }
+        localizedLabelResource = resource
+        self.label = localize(resource)
+    }
 
     override func layout() {
         super.layout()

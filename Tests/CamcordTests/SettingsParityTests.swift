@@ -57,6 +57,94 @@ struct SettingsParityTests {
         #expect(disabledValue == 0.197)
     }
 
+    @Test("slider labels resolve once until their resource or effective locale changes")
+    func sliderLabelLocalizationReuse() {
+        _ = NSApplication.shared
+        var resolved: [LocalizedStringResource] = []
+        let english = Locale(identifier: "en")
+        let turkish = Locale(identifier: "tr")
+        let host = SettingsSliderHost(content: SettingsSliderContent(value: .constant(12), range: 0...200, enabled: true),
+            label: "Bit rate", locale: english, valueDescription: "12 Mbps", localize: { resource in
+                resolved.append(resource)
+                return "\(resource.key) [\(resource.locale.identifier)]"
+            })
+        #expect(resolved.count == 1 && host.label == "Bit rate [en]")
+        for _ in 0..<25 {
+            host.updateLabel(LocalizedStringResource("Bit rate"), locale: english)
+        }
+        #expect(resolved.count == 1)
+        host.updateLabel("Size", locale: english)
+        #expect(resolved.count == 2 && host.label == "Size [en]")
+        host.updateLabel("Size", locale: turkish)
+        #expect(resolved.count == 3 && host.label == "Size [tr]")
+        host.updateLabel("Size", locale: turkish)
+        #expect(resolved.count == 3)
+        host.updateLabel(LocalizedStringResource("Size", table: "Another table"), locale: turkish)
+        #expect(resolved.count == 4 && resolved.last?.table == "Another table")
+    }
+
+    @Test("native slider identity, labels, values and enablement survive resource and locale updates")
+    func nativeSliderLocalizationUpdates() async throws {
+        _ = NSApplication.shared
+        let bundleURL = FileManager.default.temporaryDirectory.appendingPathComponent("slider-localization-\(UUID().uuidString).bundle")
+        defer { try? FileManager.default.removeItem(at: bundleURL) }
+        for (language, strings) in [
+            ("en", "\"Bit rate\" = \"Bit rate\";\n\"Size\" = \"Size\";\n"),
+            ("tr", "\"Bit rate\" = \"Bit hızı\";\n\"Size\" = \"Boyut\";\n")
+        ] {
+            let directory = bundleURL.appendingPathComponent("\(language).lproj")
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try strings.write(to: directory.appendingPathComponent("Localizable.strings"), atomically: true, encoding: .utf8)
+        }
+        let info = ["CFBundleIdentifier": "dev.camcord.tests.slider.\(UUID().uuidString)", "CFBundleDevelopmentRegion": "en"]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: bundleURL.appendingPathComponent("Info.plist"))
+        let bundle = try #require(Bundle(url: bundleURL))
+        let bitRate = LocalizedStringResource("Bit rate", bundle: bundle)
+        let size = LocalizedStringResource("Size", bundle: bundle)
+        var value = 12.6
+        let binding = Binding(get: { value }, set: { value = $0 })
+        func presentation(label: LocalizedStringResource, language: String, range: ClosedRange<Double>, enabled: Bool,
+                          format: @escaping (Double) -> String) -> some View {
+            SettingsNativeValueSlider(value: binding, range: range, label: label, format: format)
+                .environment(\.locale, Locale(identifier: language))
+                .disabled(!enabled)
+        }
+        let host = NSHostingView(rootView: presentation(label: bitRate, language: "en", range: 0...200, enabled: true,
+                                                       format: { "Value \($0)" }))
+        host.frame = CGRect(x: 0, y: 0, width: 280, height: 44)
+        host.layoutSubtreeIfNeeded()
+        let first = try #require(Self.nativeSliders(in: host).first)
+        #expect(first.accessibilityLabel() == "Bit rate" && first.accessibilityValueDescription() == "Value 12.6")
+        value = 0.197
+        host.rootView = presentation(label: size, language: "tr", range: 0.08...0.60, enabled: false,
+                                    format: { "\(Int(($0 * 100).rounded())) %" })
+        try await Self.settleNativeSlider(in: host) { slider in
+            slider.accessibilityLabel() == "Boyut" && slider.accessibilityValueDescription() == "20 %" && !slider.isEnabled
+                && abs(slider.doubleValue - 0.197) < 0.000_001 && slider.minValue == 0.08 && slider.maxValue == 0.60
+        }
+        #expect(Self.nativeSliders(in: host).first === first)
+        host.rootView = presentation(label: size, language: "en", range: 0.08...0.60, enabled: true,
+                                    format: { "\(Int(($0 * 100).rounded())) %" })
+        try await Self.settleNativeSlider(in: host) { $0.accessibilityLabel() == "Size" && $0.isEnabled }
+        #expect(Self.nativeSliders(in: host).first === first)
+        let target = try #require(first.target as? NSObject)
+        let action = try #require(first.action)
+        first.doubleValue = 0.25
+        _ = target.perform(action, with: first)
+        #expect(value == 0.25)
+    }
+
+    private static func settleNativeSlider(in host: NSView, until predicate: (NSSlider) -> Bool) async throws {
+        for _ in 0..<100 {
+            host.layoutSubtreeIfNeeded()
+            if let slider = nativeSliders(in: host).first, predicate(slider) { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let slider = try #require(nativeSliders(in: host).first)
+        try #require(predicate(slider), "The native slider did not receive its updated presentation")
+    }
+
     private static func nativeSliders(in view: NSView) -> [NSSlider] {
         (view as? NSSlider).map { [$0] } ?? view.subviews.flatMap(nativeSliders)
     }
