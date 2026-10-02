@@ -62,8 +62,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         super.init()
 
         if let button = statusItem.button {
-            let image = ViewfinderMarkView.templateImage(size: 17)
-            button.image = image
+            button.image = CamcordBrandAssets.templateImage
+            button.setAccessibilityLabel("Camcord")
             // Left-click -> panel, right-click -> context menu. The menu is NOT
             // permanently assigned to the status item (that would hijack all clicks);
             // it's attached just-in-time in showContextMenu().
@@ -321,7 +321,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     /// Renders the recording state on the status item: a vivid, glowing red glyph +
-    /// elapsed time while recording (hollow while paused), plain camera when idle.
+    /// elapsed time while recording (hollow while paused), the template lens when idle.
     /// The elapsed text is drawn as an attributed string in the state color so it is
     /// clearly legible on the menu bar instead of the default (near-invisible) label.
     func setRecordingUI(_ state: RecordingController.UIState, elapsed: String?) {
@@ -335,8 +335,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         lastElapsed = elapsed
         switch state {
         case .idle:
-            let image = ViewfinderMarkView.templateImage(size: 17)
-            button.image = image
+            button.image = CamcordBrandAssets.templateImage
             button.contentTintColor = nil
             button.attributedTitle = NSAttributedString(string: "")
         case .recording:

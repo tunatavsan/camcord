@@ -212,7 +212,7 @@ private struct SidebarShortcutBadge: View {
 struct SidebarBrandHeader: View {
     var body: some View {
         HStack(spacing: Theme.Space.s) {
-            ViewfinderMarkView(dot: .plain)
+            CamcordBrandMark()
                 .frame(width: Theme.Navigation.brandSize, height: Theme.Navigation.brandSize)
                 .frame(width: Theme.Navigation.brandSlotSize, height: Theme.Navigation.brandSlotSize)
             Text(verbatim: "Camcord").font(Theme.Font.sidebarBrand)

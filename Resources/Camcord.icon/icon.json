@@ -1,0 +1,256 @@
+{
+  "fill": {
+    "linear-gradient": [
+      "display-p3:0.2500,0.1600,0.4400,1.0000",
+      "display-p3:0.0400,0.0200,0.1000,1.0000"
+    ],
+    "orientation": {
+      "start": {
+        "x": 0.5,
+        "y": 0.0
+      },
+      "stop": {
+        "x": 0.5,
+        "y": 1.0
+      }
+    }
+  },
+  "groups": [
+    {
+      "name": "Kay\u0131t \u0131\u015f\u0131\u011f\u0131",
+      "layers": [
+        {
+          "name": "G\u00f6z bebe\u011fi",
+          "image-name": "00-00-G\u00f6z_bebe\u011fi.svg",
+          "fill": {
+            "linear-gradient": [
+              "display-p3:1.0000,0.4500,0.3800,1.0000",
+              "display-p3:0.8600,0.1000,0.2000,1.0000"
+            ],
+            "orientation": {
+              "start": {
+                "x": 0.5,
+                "y": 0.0
+              },
+              "stop": {
+                "x": 0.5,
+                "y": 1.0
+              }
+            }
+          },
+          "glass": true
+        },
+        {
+          "name": "Par\u0131lt\u0131 1",
+          "image-name": "00-01-Par\u0131lt\u0131_1.svg",
+          "fill": {
+            "solid": "display-p3:1.0000,0.3000,0.2800,1.0000"
+          },
+          "glass": false,
+          "opacity": 0.16
+        },
+        {
+          "name": "Par\u0131lt\u0131 2",
+          "image-name": "00-02-Par\u0131lt\u0131_2.svg",
+          "fill": {
+            "solid": "display-p3:1.0000,0.3000,0.2800,1.0000"
+          },
+          "glass": false,
+          "opacity": 0.08
+        },
+        {
+          "name": "Par\u0131lt\u0131 3",
+          "image-name": "00-03-Par\u0131lt\u0131_3.svg",
+          "fill": {
+            "solid": "display-p3:1.0000,0.3000,0.2800,1.0000"
+          },
+          "glass": false,
+          "opacity": 0.04
+        }
+      ],
+      "lighting": "combined",
+      "specular": true,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.35
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.2
+      }
+    },
+    {
+      "name": "Mercek",
+      "layers": [
+        {
+          "name": "Ana yans\u0131ma",
+          "image-name": "01-00-Ana_yans\u0131ma.svg",
+          "fill": {
+            "solid": "display-p3:1.0000,1.0000,1.0000,1.0000"
+          },
+          "glass": false,
+          "opacity": 0.78
+        },
+        {
+          "name": "Kaplama",
+          "image-name": "01-01-Kaplama.svg",
+          "fill": {
+            "linear-gradient": [
+              "display-p3:0.3000,0.9500,0.8000,1.0000",
+              "display-p3:0.5500,0.4500,1.0000,1.0000"
+            ],
+            "orientation": {
+              "start": {
+                "x": 0,
+                "y": 0.5
+              },
+              "stop": {
+                "x": 1,
+                "y": 0.5
+              }
+            }
+          },
+          "glass": false,
+          "opacity": 0.7
+        },
+        {
+          "name": "Eleman",
+          "image-name": "01-02-Eleman.svg",
+          "fill": {
+            "solid": "display-p3:0.3000,0.4200,0.7200,1.0000"
+          },
+          "glass": false,
+          "opacity": 0.55
+        },
+        {
+          "name": "Mercek",
+          "image-name": "01-03-Mercek.svg",
+          "fill": {
+            "linear-gradient": [
+              "display-p3:0.1300,0.2400,0.5200,1.0000",
+              "display-p3:0.0200,0.0300,0.1000,1.0000"
+            ],
+            "orientation": {
+              "start": {
+                "x": 0.5,
+                "y": 0.0
+              },
+              "stop": {
+                "x": 0.5,
+                "y": 1.0
+              }
+            }
+          },
+          "glass": true
+        }
+      ],
+      "lighting": "combined",
+      "specular": true,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.4
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.1
+      }
+    },
+    {
+      "name": "Halkalar",
+      "layers": [
+        {
+          "name": "\u0130\u00e7 halka",
+          "image-name": "02-00-\u0130\u00e7_halka.svg",
+          "fill": {
+            "linear-gradient": [
+              "display-p3:0.9200,0.9200,0.9800,1.0000",
+              "display-p3:0.6200,0.6200,0.7400,1.0000"
+            ],
+            "orientation": {
+              "start": {
+                "x": 0.5,
+                "y": 0.0
+              },
+              "stop": {
+                "x": 0.5,
+                "y": 1.0
+              }
+            }
+          },
+          "glass": true,
+          "opacity": 0.9
+        },
+        {
+          "name": "D\u0131\u015f halka",
+          "image-name": "02-01-D\u0131\u015f_halka.svg",
+          "fill": {
+            "linear-gradient": [
+              "display-p3:1.0000,1.0000,1.0000,1.0000",
+              "display-p3:0.8000,0.8000,0.9000,1.0000"
+            ],
+            "orientation": {
+              "start": {
+                "x": 0.5,
+                "y": 0.0
+              },
+              "stop": {
+                "x": 0.5,
+                "y": 1.0
+              }
+            }
+          },
+          "glass": true
+        }
+      ],
+      "lighting": "individual",
+      "specular": true,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.2
+      }
+    },
+    {
+      "name": "G\u00f6vde",
+      "layers": [
+        {
+          "name": "G\u00f6vde",
+          "image-name": "03-00-G\u00f6vde.svg",
+          "fill": {
+            "linear-gradient": [
+              "display-p3:0.1400,0.1200,0.2200,1.0000",
+              "display-p3:0.0300,0.0200,0.0700,1.0000"
+            ],
+            "orientation": {
+              "start": {
+                "x": 0.5,
+                "y": 0.0
+              },
+              "stop": {
+                "x": 0.5,
+                "y": 1.0
+              }
+            }
+          },
+          "glass": true
+        }
+      ],
+      "lighting": "individual",
+      "specular": false,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.45
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}

@@ -89,7 +89,7 @@ struct FirstRunView: View {
     var body: some View {
         VStack(spacing: Theme.Space.xl) {
             VStack(spacing: Theme.Space.m) {
-                ViewfinderMarkView(dot: .plain)
+                CamcordBrandMark()
                     .frame(width: 52, height: 52)
                     .foregroundStyle(Theme.Palette.ink.color)
                 Text("Camcord captures your screen", comment: "First-run title")

@@ -101,7 +101,7 @@ private struct PanelHeader: View {
     let elapsed: String?
     var body: some View {
         HStack(spacing: Theme.Space.s) {
-            ViewfinderMarkView().frame(width: Theme.Menu.mark, height: Theme.Menu.mark)
+            CamcordBrandMark().frame(width: Theme.Menu.mark, height: Theme.Menu.mark)
             Text("Camcord").font(Theme.Font.bodyStrong)
             Spacer()
             if state != .idle {

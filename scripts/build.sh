@@ -7,14 +7,16 @@ INSTALL_ROOT="/Applications"
 INSTALL_APP="$INSTALL_ROOT/Camcord.app"
 INSTALL=false
 SIGN_MODE=signed
+BUILD_CONFIGURATION=release
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
 for arg in "$@"; do
     case "$arg" in
         --install) INSTALL=true ;;
+        --debug) BUILD_CONFIGURATION=debug ;;
         --unsigned) SIGN_MODE=unsigned ;;
         --ad-hoc) SIGN_MODE=adhoc ;;
-        *) fail "Unknown argument: $arg. Use --install, --unsigned, or --ad-hoc." ;;
+        *) fail "Unknown argument: $arg. Use --install, --debug, --unsigned, or --ad-hoc." ;;
     esac
 done
 [[ "$INSTALL" == false || "$SIGN_MODE" == signed ]] || fail "Installation requires a stable signing identity."
@@ -137,37 +139,31 @@ if [[ "$SIGN_MODE" == signed ]]; then
     [[ -n "$MATCHES" && "$MATCHES" != *$'\n'* ]] || fail "Expected exactly one signing identity '$IDENTITY'. Set CAMCORD_SIGN_IDENTITY to an exact certificate name or hash; see scripts/dev-setup.sh."
 fi
 
-swift build -c release
+swift build -c "$BUILD_CONFIGURATION"
 mkdir -p dist
 BUILD_STAGE="$(mktemp -d "$PROJECT_ROOT/dist/.camcord-build.XXXXXX")"
 check_path "$BUILD_STAGE"
 APP="$BUILD_STAGE/Camcord.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp .build/release/Camcord "$APP/Contents/MacOS/Camcord"
+cp ".build/$BUILD_CONFIGURATION/Camcord" "$APP/Contents/MacOS/Camcord"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 build_number="$(git rev-list --count HEAD)"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build_number" "$APP/Contents/Info.plist"
-if [[ -e Resources/AppIcon.icon || -L Resources/AppIcon.icon ]]; then
-    ICON_OUTPUT="$BUILD_STAGE/icons"
-    scripts/build-icons.sh "$PROJECT_ROOT/Resources/AppIcon.icon" "$ICON_OUTPUT"
-    cp "$ICON_OUTPUT/Assets.car" "$APP/Contents/Resources/Assets.car"
-    cp "$ICON_OUTPUT/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
-    # Merge only the compiler's icon keys, preserving the app's other metadata.
-    for icon_key in CFBundleIconName CFBundleIconFile; do
-        icon_value="$(plutil -extract "$icon_key" raw -expect string "$ICON_OUTPUT/partial.plist")"
-        [[ "$icon_value" == AppIcon ]] || fail "Unexpected compiled icon basename: $icon_value"
-        plutil -replace "$icon_key" -string "$icon_value" "$APP/Contents/Info.plist"
-    done
-else
-    cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
-fi
-if [[ -f Resources/MenuBarTemplate.pdf ]]; then
-    cp Resources/MenuBarTemplate.pdf "$APP/Contents/Resources/MenuBarTemplate.pdf"
-fi
+ICON_OUTPUT="$BUILD_STAGE/icons"
+scripts/build-icons.sh "$PROJECT_ROOT/Resources/Camcord.icon" "$ICON_OUTPUT"
+cp "$ICON_OUTPUT/Assets.car" "$APP/Contents/Resources/Assets.car"
+cp "$ICON_OUTPUT/Camcord.icns" "$APP/Contents/Resources/Camcord.icns"
+# Merge only the compiler's icon keys, preserving the app's other metadata.
+for icon_key in CFBundleIconName CFBundleIconFile; do
+    icon_value="$(plutil -extract "$icon_key" raw -expect string "$ICON_OUTPUT/partial.plist")"
+    [[ "$icon_value" == Camcord ]] || fail "Unexpected compiled icon basename: $icon_value"
+    plutil -replace "$icon_key" -string "$icon_value" "$APP/Contents/Info.plist"
+done
+cp Resources/MenuBarIcon.svg "$APP/Contents/Resources/MenuBarIcon.svg"
 
 # Bundle.module resolves resources outside Contents/Resources. Copy localized
 # resources explicitly so the app remains portable after leaving the build machine.
-if compgen -G ".build/release/*.bundle" >/dev/null; then
+if compgen -G ".build/$BUILD_CONFIGURATION/*.bundle" >/dev/null; then
     fail "SwiftPM resource bundles are not supported; use Bundle.main resources."
 fi
 xcrun xcstringstool compile Resources/Localizable.xcstrings --output-directory "$APP/Contents/Resources"
@@ -220,5 +216,5 @@ if [[ "$INSTALL" == true ]]; then
     open -g "$INSTALL_APP" || fail "Installed successfully, but background launch failed. Previous installation remains at: ${BACKUP:-none}"
     echo "Installed and launched $INSTALL_APP in the background."
 else
-    echo "Built $PROJECT_ROOT/dist/Camcord.app ($SIGN_MODE)."
+    echo "Built $PROJECT_ROOT/dist/Camcord.app ($BUILD_CONFIGURATION, $SIGN_MODE)."
 fi
