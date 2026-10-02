@@ -801,14 +801,11 @@ private struct PanelChrome: ViewModifier {
                 RoundedRectangle(cornerRadius: Theme.Radius.floating)
                     .fill(Theme.Palette.glassSolidChrome.color)
             } else {
-                // The left sidebar's recipe: a frost behind the panel's one native glass
-                // region. SwiftUI controls remain above it, so their fills are not glass content.
-                ZStack {
-                    FrostView().clipShape(RoundedRectangle(cornerRadius: Theme.Radius.floating, style: .continuous))
-                    PanelGlassBackground(appearance: colorScheme == .dark ? .darkAqua : .aqua)
-                }
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+                // The left sidebar's own recipe: one untinted native glass region, nothing
+                // behind it. SwiftUI controls remain above it, so their fills are not glass content.
+                PanelGlassBackground(appearance: colorScheme == .dark ? .darkAqua : .aqua)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
             }
         }
     }

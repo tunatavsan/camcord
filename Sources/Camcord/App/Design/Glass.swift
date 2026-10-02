@@ -147,7 +147,7 @@ private struct WindowBackdropModifier: ViewModifier {
                         if reduceTransparency {
                             contentShape.fill(backdrop.solid.color)
                         } else {
-                            FrostedGlass(shape: contentShape)
+                            PaneGlass()
                         }
                     }
                     .padding(Theme.Navigation.nativeSidebarInset)
@@ -172,34 +172,26 @@ private struct WindowBackdropModifier: ViewModifier {
     }
 }
 
-/// The floating sidebar's recipe, for any glass panel (owner, 2026-10-02: "like the left
-/// menu"). The system blurs what lies behind the sidebar before its glass (a frosted
-/// backdrop), which is why it reads as frosted glass rather than clear glass. The same here:
-/// a behind-window frost clipped to the panel's shape, then untinted system glass on top.
-struct FrostedGlass<S: Shape>: View {
-    let shape: S
+/// A window pane's glass, made exactly like the native floating sidebar's: one untinted AppKit
+/// `NSGlassEffectView` with nothing behind it in the window. Measured over the same backdrop it
+/// renders identically to the sidebar, in light and dark (2026-10-02); SwiftUI's `glassEffect`
+/// over a large area, or any frost under the glass, does not.
+struct PaneGlass: NSViewRepresentable {
+    var cornerRadius: CGFloat = Theme.Radius.floating
 
-    var body: some View {
-        ZStack {
-            FrostView().clipShape(shape)
-            Color.clear.glassEffect(.regular, in: shape)
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-}
-
-/// The frost under a glass panel: always active, so it never flattens to grey.
-struct FrostView: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.blendingMode = .behindWindow
-        view.state = .active
-        view.material = .sidebar
+    func makeNSView(context: Context) -> NSGlassEffectView {
+        let view = NSGlassEffectView()
+        view.style = .regular
+        view.tintColor = nil
+        view.cornerRadius = cornerRadius
+        view.contentView = NSView()
+        view.setAccessibilityHidden(true)
         return view
     }
 
-    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
+    func updateNSView(_ view: NSGlassEffectView, context: Context) {
+        if view.cornerRadius != cornerRadius { view.cornerRadius = cornerRadius }
+    }
 }
 
 extension View {
