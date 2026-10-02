@@ -12,6 +12,8 @@ struct CaptureTransitionTests {
         operations.screenshotSettings = { ScreenshotSettings(saveToDisk: false) }
         operations.regionCursorPoint = { CGPoint(x: 10, y: 10) }
         operations.regionFullscreenContext = { context }
+        operations.regionSnapshotLog = { _ in }
+        operations.regionFallbackLog = { _ in }
         operations.captureFrozenDesktop = { _, _ in snapshot }
         return operations
     }

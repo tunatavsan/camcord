@@ -61,6 +61,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     private let presentation: (@MainActor () -> Void)?
     private let presentationProbe: PresentationProbe?
     private let presentationTiming: PresentationTiming
+    private let presentationLog: @MainActor (String) -> Void
     private let clickedResolver: (@MainActor (CGPoint) async -> SCWindow?)?
     private let frozenResolver: (@MainActor (CGWindowID) async -> SCWindow?)?
 
@@ -119,12 +120,14 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
          presentation: (@MainActor () -> Void)? = nil,
          presentationProbe: PresentationProbe? = nil,
          presentationTiming: PresentationTiming = PresentationTiming(),
+         presentationLog: @escaping @MainActor (String) -> Void = { TriggerLog.overlay($0) },
          clickedResolver: (@MainActor (CGPoint) async -> SCWindow?)? = nil,
          frozenResolver: (@MainActor (CGWindowID) async -> SCWindow?)? = nil) {
         self.shareableContentCache = shareableContentCache
         self.presentation = presentation
         self.presentationProbe = presentationProbe
         self.presentationTiming = presentationTiming
+        self.presentationLog = presentationLog
         self.clickedResolver = clickedResolver
         self.frozenResolver = frozenResolver
     }
@@ -374,7 +377,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
 
         // Phase G.1: a trigger can arrive and still draw nothing — a fullscreen game sits
         // above .screenSaver. Report whether the panels actually made it on screen.
-        TriggerLog.overlay("ordered=\(panels.count) buildMs=\(CaptureCoordinator.elapsedMs(since: started))")
+        presentationLog("ordered=\(panels.count) buildMs=\(CaptureCoordinator.elapsedMs(since: started))")
         let ordered = panels
         observePresentation(PresentationProbe(read: {
             (ordered.filter { Self.windowIsObservedVisible($0) }.count,
@@ -454,11 +457,11 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
             guard state.targetVisible || timedOut else { return }
             let elapsed = (self.presentationTiming.now() - orderedAt).components
             let milliseconds = elapsed.seconds * 1000 + elapsed.attoseconds / 1_000_000_000_000_000
-            TriggerLog.overlay("visible=\(state.visible)/\(state.total) cursorDisplay=\(state.targetVisible) observedWindowVisibleMs=\(milliseconds)")
+            self.presentationLog("visible=\(state.visible)/\(state.total) cursorDisplay=\(state.targetVisible) observedWindowVisibleMs=\(milliseconds)")
             self.stopObservingPresentation()
             if Self.presentationIsBlind(orderedPanels: state.total, targetVisible: state.targetVisible,
                                         isHoldSession: isHoldSession) {
-                TriggerLog.overlay("blind=1 selection presentation timed out")
+                self.presentationLog("blind=1 selection presentation timed out")
                 self.presentationWasBlind = true
                 self.finish(nil)
             }

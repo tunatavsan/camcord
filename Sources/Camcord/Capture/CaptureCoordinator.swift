@@ -25,6 +25,10 @@ final class CaptureCoordinator {
                                        primaryScreenHeight: height).origin
         }
         var regionFullscreenContext: () -> FullscreenContext = { FullscreenContext.current() }
+        var regionSnapshotLog: (Int) -> Void = { DiagnosticsLog.append("region frozen-snapshot ms=\($0)") }
+        var regionFallbackLog: (FullscreenContext) -> Void = {
+            TriggerLog.overlay("UI-less capture allowed by fullscreen context \($0.logLine)")
+        }
         var recognize: (CGImage) async throws -> String = { try await TextRecognitionService.read(in: $0).clipboardString }
         var recognitionFinished: () -> Void = {}
         var tagScrollCapture: @Sendable (URL) -> Bool = { CaptureFileRules.tagScrollCapture($0) }
@@ -196,11 +200,11 @@ final class CaptureCoordinator {
             // one-off stall; the file says whether the wait was here or in the overlay.
             let snapshotStart = ContinuousClock.now
             let snapshot = try await operations.captureFrozenDesktop(settings.resolutionScale, cursorPoint)
-            DiagnosticsLog.append("region frozen-snapshot ms=\(Self.elapsedMs(since: snapshotStart))")
+            operations.regionSnapshotLog(Self.elapsedMs(since: snapshotStart))
             guard let (selection, mode) = await overlay.selectFrozen(snapshot: snapshot) else {
                 if overlay.consumeBlindPresentation() {
                     if fullscreenContext.isGameLike || fullscreenContext.coversDisplay {
-                        TriggerLog.overlay("UI-less capture allowed by fullscreen context \(fullscreenContext.logLine)")
+                        operations.regionFallbackLog(fullscreenContext)
                         await performFrozenScreenshot(snapshot, cgRect: snapshot.desktopBounds, sound: .fullScreenShot, acceptedToken: acceptedToken)
                     } else {
                         fail("Region selection could not appear; fullscreen fallback refused")

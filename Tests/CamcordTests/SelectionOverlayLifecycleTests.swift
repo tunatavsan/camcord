@@ -53,7 +53,7 @@ import Testing
 
     func overlay() -> SelectionOverlayController {
         .init(shareableContentCache: ShareableContentCache(), presentation: {},
-              presentationProbe: probe, presentationTiming: timing)
+              presentationProbe: probe, presentationTiming: timing, presentationLog: { _ in })
     }
 }
 
