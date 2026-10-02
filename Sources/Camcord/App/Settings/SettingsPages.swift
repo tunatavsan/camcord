@@ -85,17 +85,22 @@ struct SettingsPageView: View {
 struct RetainedSettingsPageStack<Content: View>: View {
     let selection: SettingsGroup
     private let content: (SettingsGroup) -> Content
+    private let reduceMotionOverride: Bool?
     @State private var visited: Set<SettingsGroup>
     @Environment(\.mainWindowModel) private var windowModel
     @Environment(\.mainWindowModuleActive) private var moduleActive
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     private var activity = SettingsActivity()
 
-    init(selection: SettingsGroup, @ViewBuilder content: @escaping (SettingsGroup) -> Content) {
+    init(selection: SettingsGroup, reduceMotionOverride: Bool? = nil,
+         @ViewBuilder content: @escaping (SettingsGroup) -> Content) {
         self.selection = selection
         self.content = content
+        self.reduceMotionOverride = reduceMotionOverride
         _visited = State(initialValue: [selection])
     }
+
+    private var reduceMotion: Bool { reduceMotionOverride ?? systemReduceMotion }
 
     private var mountedPages: [SettingsGroup] {
         SettingsGroup.allCases.filter { visited.contains($0) || $0 == selection }
@@ -115,11 +120,14 @@ struct RetainedSettingsPageStack<Content: View>: View {
                     .allowsHitTesting(active)
                     .accessibilityHidden(!active)
                     .opacity(selected ? 1 : 0)
-                    .transition(.opacity)
+                    // Retention keeps native state, while outgoing text disappears without a dissolve.
+                    .animation(selected ? Theme.Motion.resolve(Theme.Motion.moduleSwitch, reduceMotion: reduceMotion) : nil,
+                               value: selected)
+                    .transition(.asymmetric(insertion: .opacity, removal: .identity))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .animation(Theme.Motion.resolve(Theme.Motion.moduleSwitch, reduceMotion: reduceMotion), value: selection)
+        .animation(Theme.Motion.resolve(Theme.Motion.moduleSwitch, reduceMotion: reduceMotion), value: mountedPages)
         .onChange(of: selection) { _, group in visited.insert(group) }
     }
 }

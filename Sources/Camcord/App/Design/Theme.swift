@@ -208,7 +208,7 @@ extension Theme {
                                     highContrastDark: C(0xFFFFFF), highContrastLight: C(0x000000))
         static let ink2 = ThemeColor("ink2", dark: C(0xA8AEB6), light: C(0x454B53),
                                      highContrastDark: C(0xC9CED4), highContrastLight: C(0x2B3036))
-        static let ink3 = ThemeColor("ink3", dark: C(0x8A919A), light: C(0x596067),
+        static let ink3 = ThemeColor("ink3", dark: C(0xA0A7B0), light: C(0x596067),
                                      highContrastDark: C(0xB0B6BE), highContrastLight: C(0x3A4047))
         static let onInk = ThemeColor("onInk", dark: C(0x15171A), light: C(0xF4F5F7),
                                       highContrastDark: C(0x000000), highContrastLight: C(0xFFFFFF))
@@ -470,7 +470,7 @@ extension Theme {
             static let panel: Double = 0.26
             static let morph: Double = 0.26
             static let exit: Double = 0.12
-            static let moduleSwitch: Double = 0.20
+            static let moduleSwitch: Double = 0.14
             static let reduced: Double = 0.15
             static let breath: Double = 0.52
             static let dwell: Double = 6

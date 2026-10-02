@@ -210,16 +210,21 @@ struct RetainedModuleStack<Content: View>: View {
     let selection: ModuleID
     let model: MainWindowModel?
     private let content: (ModuleID) -> Content
+    private let reduceMotionOverride: Bool?
     @State private var visited: Set<ModuleID>
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.mainWindowLifecycle) private var lifecycle
 
-    init(selection: ModuleID, model: MainWindowModel? = nil, @ViewBuilder content: @escaping (ModuleID) -> Content) {
+    init(selection: ModuleID, model: MainWindowModel? = nil, reduceMotionOverride: Bool? = nil,
+         @ViewBuilder content: @escaping (ModuleID) -> Content) {
         self.selection = selection
         self.model = model
         self.content = content
+        self.reduceMotionOverride = reduceMotionOverride
         _visited = State(initialValue: [selection])
     }
+
+    private var reduceMotion: Bool { reduceMotionOverride ?? systemReduceMotion }
 
     private var mountedModules: [ModuleID] {
         ModuleRegistry.all.map(\.id).filter { visited.contains($0) || $0 == selection }
@@ -238,11 +243,15 @@ struct RetainedModuleStack<Content: View>: View {
                     .accessibilityHidden(!active)
                     .opacity(active ? 1 : 0)
                     .offset(y: Theme.Motion.moduleOffset(active: active, reduceMotion: reduceMotion))
-                    .animation(Theme.Motion.moduleSwitch, value: active)
-                    .transition(.opacity.combined(with: .offset(y: Theme.Motion.moduleOffset(active: false, reduceMotion: reduceMotion))))
+                    // Hide the outgoing content immediately; only the incoming module fades in.
+                    .animation(active ? Theme.Motion.resolve(Theme.Motion.moduleSwitch, reduceMotion: reduceMotion) : nil,
+                               value: active)
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .offset(y: Theme.Motion.moduleOffset(active: false, reduceMotion: reduceMotion))),
+                        removal: .identity))
             }
         }
-        .animation(Theme.Motion.moduleSwitch, value: selection)
+        .animation(Theme.Motion.resolve(Theme.Motion.moduleSwitch, reduceMotion: reduceMotion), value: mountedModules)
         .onChange(of: selection) { _, id in visited.insert(id) }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ModuleSelectionResponderBridge(selection: selection,

@@ -16,8 +16,9 @@ private actor MainWindowEditorDecodeGate {
 @MainActor private struct RetainedModuleTestShell: View {
     @Bindable var model: MainWindowModel
     var externalValue = 0
+    var reduceMotionOverride: Bool? = nil
     var body: some View {
-        RetainedModuleStack(selection: model.selection, model: model) {
+        RetainedModuleStack(selection: model.selection, model: model, reduceMotionOverride: reduceMotionOverride) {
             RetainedModuleTestPage(id: $0, externalValue: externalValue)
         }
     }
@@ -48,6 +49,7 @@ private actor MainWindowEditorDecodeGate {
         var edits = 0
         var active = false
         var externalValue = 0
+        var lastActivityAnimation: Animation?
         var resigns = 0
         override var acceptsFirstResponder: Bool { true }
         override func resignFirstResponder() -> Bool { resigns += 1; return super.resignFirstResponder() }
@@ -60,6 +62,7 @@ private actor MainWindowEditorDecodeGate {
         return view
     }
     func updateNSView(_ view: ProbeView, context: Context) {
+        if view.active != active { view.lastActivityAnimation = context.transaction.animation }
         view.module = id; view.identity = identity; view.edits = edits; view.active = active
         view.externalValue = externalValue
         view.edit = edit; view.isEnabled = context.environment.isEnabled
@@ -106,13 +109,14 @@ struct MainWindowTests {
         #expect(predicate(), "The retained module tree did not reach \(stage)")
     }
 
-    @Test("visited modules retain view identity and local edits, inactive controls stop immediately")
-    func retainedModuleIdentity() async throws {
+    @Test("visited modules retain identity and edits; retained activity updates use the incoming motion policy",
+          arguments: [false, true])
+    func retainedModuleIdentity(reduceMotion: Bool) async throws {
         _ = NSApplication.shared
         let defaults = try freshDefaults()
         defer { defaults.removePersistentDomain(forName: Self.suiteName) }
         let model = MainWindowModel(defaults: defaults)
-        let host = NSHostingView(rootView: RetainedModuleTestShell(model: model))
+        let host = NSHostingView(rootView: RetainedModuleTestShell(model: model, reduceMotionOverride: reduceMotion))
         host.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
         let window = offscreenWindow()
         window.contentView = host
@@ -122,13 +126,22 @@ struct MainWindowTests {
         let identity = first.identity
         first.changeValue()
         try await settle(host) { first.edits == 1 }
+        var outgoing = first
         for id in [ModuleID.studio, .edit, .settings, .studio, .library] {
+            let alreadyMounted = moduleProbes(in: host).contains { $0.module == id }
             model.select(id)
             try await settle(host) {
                 let probes = moduleProbes(in: host)
                 return probes.filter(\.active).map(\.module) == [id]
                     && probes.allSatisfy { $0.isEnabled == $0.active }
             }
+            let incoming = try #require(moduleProbes(in: host).first { $0.module == id })
+            #expect(outgoing.lastActivityAnimation == nil)
+            // A new native view's transaction does not describe its wrapper's insertion transition.
+            if alreadyMounted {
+                #expect(incoming.lastActivityAnimation == Theme.Motion.resolve(Theme.Motion.moduleSwitch, reduceMotion: reduceMotion))
+            }
+            outgoing = incoming
         }
         let probes = moduleProbes(in: host)
         #expect(probes.count == 4)
@@ -138,7 +151,7 @@ struct MainWindowTests {
         #expect(revisited.identity == identity && revisited.edits == 1)
         #expect(!window.isVisible && !window.isKeyWindow)
         window.contentView = nil
-        let reopened = NSHostingView(rootView: RetainedModuleTestShell(model: model))
+        let reopened = NSHostingView(rootView: RetainedModuleTestShell(model: model, reduceMotionOverride: reduceMotion))
         reopened.frame = host.frame
         window.contentView = reopened
         try await settle(reopened) { moduleProbes(in: reopened).count == 1 }
@@ -321,7 +334,7 @@ struct MainWindowTests {
 
     @Test("Reduce Motion keeps the module fade and removes translation")
     func moduleMotion() {
-        #expect(Theme.Motion.Duration.moduleSwitch == 0.20)
+        #expect(Theme.Motion.Duration.moduleSwitch == 0.14)
         #expect(Theme.Motion.moduleOffset(active: true, reduceMotion: false) == 0)
         #expect(Theme.Motion.moduleOffset(active: false, reduceMotion: false) == 8)
         #expect(Theme.Motion.moduleOffset(active: false, reduceMotion: true) == 0)

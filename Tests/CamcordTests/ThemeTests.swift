@@ -38,6 +38,15 @@ struct ThemeTests {
         #expect(contrast(Theme.Palette.warn, on: Theme.Palette.surface, variant) >= 3)
     }
 
+    @Test("section captions remain above 4.5:1 on the measured dark glass composite")
+    func captionContrastOnCompositedGlass() {
+        // The actual material behind section captions measured RGB (51, 52, 55).
+        // Keep this independent of palette.window: a transparent composite has its own luminance.
+        let measuredBackground = RGBA(0x333437)
+        let caption = Theme.Palette.ink3.value(.dark).over(measuredBackground)
+        #expect(RGBA.contrast(caption, measuredBackground) >= 4.5)
+    }
+
     @Test("Increase Contrast strengthens hairlines and ink; it never weakens them")
     func highContrastIsStronger() {
         for (normal, strong) in [(ThemeColor.Variant.dark, ThemeColor.Variant.highContrastDark),

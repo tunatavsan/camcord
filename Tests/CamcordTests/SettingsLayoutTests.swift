@@ -17,12 +17,14 @@ import Testing
 
 @MainActor private struct RetainedSettingsLayoutShell: View {
     let selection: SettingsLayoutSelection
+    var animatesTransitions = false
+    var reduceMotionOverride: Bool? = nil
     var body: some View {
-        RetainedSettingsPageStack(selection: selection.group) { group in
+        RetainedSettingsPageStack(selection: selection.group, reduceMotionOverride: reduceMotionOverride) { group in
             RetainedSettingsLayoutPage(group: group)
         }
         .environment(\.mainWindowModuleActive, selection.moduleActive)
-        .transaction { $0.disablesAnimations = true }
+        .transaction { $0.disablesAnimations = !animatesTransitions }
     }
 }
 
@@ -50,11 +52,13 @@ import Testing
         var identity = UUID()
         var edits = 0
         var active = false
+        var lastActivityAnimation: Animation?
         var edit: (() -> Void)?
         @objc func changeValue() { edit?() }
     }
     func makeNSView(context: Context) -> ProbeView { ProbeView() }
     func updateNSView(_ view: ProbeView, context: Context) {
+        if view.active != active { view.lastActivityAnimation = context.transaction.animation }
         view.group = group; view.identity = identity; view.edits = edits; view.active = active
         view.edit = edit; view.isEnabled = context.environment.isEnabled
     }
@@ -116,11 +120,13 @@ struct SettingsLayoutTests {
         }
     }
 
-    @Test("visited Settings pages retain their identity and edits while hidden pages and modules become inactive")
-    func retainedPageActivity() async throws {
+    @Test("visited Settings pages retain identity and edits; retained activity updates use the incoming motion policy",
+          arguments: [false, true])
+    func retainedPageActivity(reduceMotion: Bool) async throws {
         _ = NSApplication.shared
         let selection = SettingsLayoutSelection()
-        let host = NSHostingView(rootView: RetainedSettingsLayoutShell(selection: selection))
+        let host = NSHostingView(rootView: RetainedSettingsLayoutShell(selection: selection, animatesTransitions: true,
+            reduceMotionOverride: reduceMotion))
         host.frame = NSRect(x: 0, y: 0, width: 900, height: 640)
         let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = host
@@ -131,11 +137,21 @@ struct SettingsLayoutTests {
         first.changeValue()
         try await settle(host) { first.edits == 1 }
         for group in SettingsGroup.allCases + [.input, .general] {
+            let alreadyMounted = descendants(of: SettingsRetentionProbe.ProbeView.self, in: host).contains { $0.group == group }
+            let outgoing = descendants(of: SettingsRetentionProbe.ProbeView.self, in: host).first { $0.active }
             selection.group = group
             try await settle(host, reason: "only selected page active") {
                 let probes = descendants(of: SettingsRetentionProbe.ProbeView.self, in: host)
                 return probes.filter(\.active).map(\.group) == [group]
                     && probes.allSatisfy { $0.isEnabled == $0.active }
+            }
+            let incoming = try #require(descendants(of: SettingsRetentionProbe.ProbeView.self, in: host).first { $0.group == group })
+            if let outgoing, outgoing !== incoming {
+                #expect(outgoing.lastActivityAnimation == nil)
+                // A new native view's transaction does not describe its wrapper's insertion transition.
+                if alreadyMounted {
+                    #expect(incoming.lastActivityAnimation == Theme.Motion.resolve(Theme.Motion.moduleSwitch, reduceMotion: reduceMotion))
+                }
             }
         }
         let probes = descendants(of: SettingsRetentionProbe.ProbeView.self, in: host)
@@ -144,6 +160,7 @@ struct SettingsLayoutTests {
         #expect(revisited === first && revisited.identity == identity && revisited.edits == 1)
         selection.moduleActive = false
         try await settle(host) { probes.allSatisfy { !$0.active && !$0.isEnabled } }
+        #expect(probes.allSatisfy { $0.lastActivityAnimation == nil })
         selection.group = .input
         try await settle(host) { probes.allSatisfy { !$0.active && !$0.isEnabled } }
         selection.moduleActive = true
