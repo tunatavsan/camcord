@@ -9,37 +9,38 @@ private final class DetachedControlPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
-/// Owns the menu-bar popover and the optional detached native palette. Both use
-/// one retained SwiftUI host, so their local control state and async work stay
-/// singular while the presentation surface changes.
+/// The menu-bar panel itself: a borderless palette under the status item. It becomes key
+/// without activating Camcord, so its glass is drawn in its active state from the first frame
+/// instead of the washed-out inactive one (owner, 2026-10-02).
+private final class AnchoredControlPanel: NSPanel {
+    var cancel: (() -> Void)?
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+    override func cancelOperation(_ sender: Any?) { cancel?() }
+}
+
+/// Owns the menu-bar panel and the optional detached native palette. Both use one retained
+/// SwiftUI host, so their local control state and async work stay singular while the
+/// presentation surface changes.
 @MainActor
-final class PanelController: NSObject, NSPopoverDelegate, NSWindowDelegate {
+final class PanelController: NSObject, NSWindowDelegate {
     typealias DetachedPanelPresenter = @MainActor (_ panel: NSPanel, _ shouldFocus: Bool) -> Bool
 
-    private struct DetachedPresentationRequest {
-        var shouldFocus: Bool
-        var bumpToken: Bool
-    }
-
-    private let popover = NSPopover()
     private let hostingController: NSHostingController<CapturePanelView>
     private let model: RecordingStateModel
     private let detachedPanelPresenter: DetachedPanelPresenter
     private var modelObservers = Set<AnyCancellable>()
+    private var anchoredPanel: AnchoredControlPanel?
+    private var anchoredIsPresented = false
     private var detachedPanel: DetachedControlPanel?
     private var detachedIsPresented = false
     private var hasPlacedDetachedPanel = false
-    private var lastCloseAt: ContinuousClock.Instant?
-    /// True while an EXPLICIT close() (e.g. a capture action closing the panel) is in
-    /// flight, so its close doesn't arm the transient-auto-close reopen guard and
-    /// swallow a legitimate status-button click that follows.
-    private var isExplicitClose = false
-    private var isClosing = false
-    private weak var pendingCompletionAnchor: NSStatusBarButton?
-    private var pendingDetachedPresentation: DetachedPresentationRequest?
-    /// Global mouse-down monitor: `.transient` reliably closes on clicks INSIDE our
-    /// process, but for a menu-bar agent app a click on the desktop or another app is
-    /// not always caught — this closes the panel (animated) on any such outside click.
+    /// `.transient` closes on an outside click or when the panel loses key; a recording hold
+    /// keeps it open (`.applicationDefined`).
+    private var behavior: NSPopover.Behavior = .transient
+    private var lastTransientCloseAt: ContinuousClock.Instant?
+    /// Global monitors never see our own process's events, so this only fires for clicks
+    /// on the desktop or in another app.
     private var outsideClickMonitor: Any?
 
     init(
@@ -59,51 +60,35 @@ final class PanelController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             return panel.isVisible
         }
         hostingController = NSHostingController(rootView: CapturePanelView(model: model, actions: actions, library: library, defaults: defaults))
+        // Windows are sized from the same state that sizes the SwiftUI view, never from
+        // the host's measurements, so the panel always opens at its fixed dimension.
+        hostingController.sizingOptions = []
         super.init()
-        popover.behavior = .transient
-        popover.animates = false
-        popover.delegate = self
-        // Keep the controller's preferredContentSize synced to the SwiftUI content's
-        // ideal size. Without a definite size the popover lays out in two passes and
-        // anchors its beak against the wrong (pre-resize) frame — the panel then opens
-        // a whole content-height below the status item instead of right under it.
-        hostingController.sizingOptions = [.preferredContentSize]
         hostingController.view.wantsLayer = true
-        popover.contentViewController = hostingController
 
         Publishers.CombineLatest3(model.$state, model.$isFinishing, model.$finishedURL)
             .sink { [weak self] state, isFinishing, finishedURL in
                 MainActor.assumeIsolated {
-                    self?.resizeDetachedPanelIfNeeded(
-                        state: state,
-                        isFinishing: isFinishing,
-                        finishedURL: finishedURL
-                    )
+                    self?.resizePanelsIfNeeded(state: state, isFinishing: isFinishing, finishedURL: finishedURL)
                 }
             }
             .store(in: &modelObservers)
     }
 
-    var isShown: Bool { popover.isShown || detachedIsPresented }
+    var isShown: Bool { anchoredIsPresented || detachedIsPresented }
 
     /// Narrow test seam for native-window lifecycle and policy assertions.
     var detachedPanelForTesting: NSPanel? { detachedPanel }
-    var popoverBehaviorForTesting: NSPopover.Behavior { popover.behavior }
+    var anchoredPanelForTesting: NSPanel? { anchoredPanel }
+    var popoverBehaviorForTesting: NSPopover.Behavior { behavior }
 
     func toggle(relativeTo button: NSStatusBarButton) {
-        if detachedIsPresented {
+        if detachedIsPresented || anchoredIsPresented {
             close()
             return
         }
-        if popover.isShown {
-            close()
-            return
-        }
-        // A click on the status button while the panel is open can be split by the
-        // transient auto-close: the popover dismisses on mouse-DOWN, then this action
-        // fires on mouse-UP and would flicker the panel straight back open. If the
-        // popover closed within the same click's window, treat this as "close".
-        if let lastCloseAt, ContinuousClock.now - lastCloseAt < .milliseconds(300) {
+        // The click that took key away from the panel (and so closed it) must not reopen it.
+        if let lastTransientCloseAt, ContinuousClock.now - lastTransientCloseAt < .milliseconds(300) {
             return
         }
         show(relativeTo: button, bumpToken: true)
@@ -118,11 +103,7 @@ final class PanelController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             showDetached(focusIfVisible: false, bumpToken: false)
             return
         }
-        if isClosing {
-            pendingCompletionAnchor = button
-            return
-        }
-        guard !popover.isShown else { return }
+        guard !anchoredIsPresented else { return }
         show(relativeTo: button, bumpToken: false)
     }
 
@@ -133,87 +114,73 @@ final class PanelController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     }
 
     private func presentDetached(focusIfVisible: Bool, bumpToken: Bool) {
-        pendingCompletionAnchor = nil
-
-        if detachedIsPresented {
-            showDetached(focusIfVisible: focusIfVisible, bumpToken: bumpToken)
-            return
-        }
-
-        // Reparent the single SwiftUI host only after AppKit has finished closing
-        // the transient popover. This prevents two windows briefly owning it.
-        if popover.isShown || isClosing {
-            if var pending = pendingDetachedPresentation {
-                pending.shouldFocus = pending.shouldFocus || focusIfVisible
-                pending.bumpToken = pending.bumpToken || bumpToken
-                pendingDetachedPresentation = pending
-            } else {
-                pendingDetachedPresentation = DetachedPresentationRequest(
-                    shouldFocus: focusIfVisible,
-                    bumpToken: bumpToken
-                )
-            }
-            if popover.isShown {
-                isExplicitClose = true
-                isClosing = true
-                popover.performClose(nil)
-            }
-            return
-        }
-
+        hideAnchored(transient: false)
         showDetached(focusIfVisible: focusIfVisible, bumpToken: bumpToken)
     }
 
     private func show(relativeTo button: NSStatusBarButton, bumpToken: Bool) {
-        pendingCompletionAnchor = nil
-        pendingDetachedPresentation = nil
-        isClosing = false
-        guard canPresentPopover(relativeTo: button) else {
+        guard let anchor = anchorRect(of: button) else {
             presentDetached(focusIfVisible: false, bumpToken: bumpToken)
             return
         }
         if bumpToken { model.panelOpenToken &+= 1 }
-        attachHostToPopover()
-        // The retained content layer owns the entrance; avoid a second system animation.
-        popover.animates = false
-        popover.behavior = model.state != .idle || model.isStarting || model.isArmed ? .applicationDefined : .transient
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        model.isPanelVisible = popover.isShown
-        if popover.isShown { animateEntrance() }
-
-        // A rapid open → close → reopen can reach here before the previous close's
-        // popoverDidClose has removed its monitor; drop any stale one first so it can't leak.
+        let panel = anchoredPanel ?? makeAnchoredPanel()
+        attachHost(to: panel)
+        behavior = model.state != .idle || model.isStarting || model.isArmed ? .applicationDefined : .transient
+        panel.setFrame(anchoredFrame(below: anchor, size: desiredContentSize()), display: false)
+        // Key without activating the app: the glass draws active and Esc/⌘0 reach the panel.
+        panel.makeKeyAndOrderFront(nil)
+        anchoredIsPresented = panel.isVisible
+        model.isPanelVisible = anchoredIsPresented
+        if anchoredIsPresented { animateEntrance(of: panel) }
         installOutsideClickMonitor()
     }
 
     private func installOutsideClickMonitor() {
         removeOutsideClickMonitor()
-        guard popover.behavior == .transient else { return }
+        guard behavior == .transient, anchoredIsPresented else { return }
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            // A click landed in another app / the desktop while the panel is open.
-            // Global monitors never see our own process's events, so this can't fire
-            // for a status-item click.
-            self?.popover.performClose(nil)
+            MainActor.assumeIsolated { self?.hideAnchored(transient: true) }
         }
     }
 
-    private func canPresentPopover(relativeTo button: NSStatusBarButton) -> Bool {
+    /// The status button's frame on screen, or nil when it is not on any display.
+    private func anchorRect(of button: NSStatusBarButton) -> NSRect? {
         guard !button.isHidden,
               !button.bounds.isEmpty,
               let window = button.window,
               window.isVisible
-        else { return false }
-
-        let buttonInWindow = button.convert(button.bounds, to: nil)
-        let buttonOnScreen = window.convertToScreen(buttonInWindow)
-        return NSScreen.screens.contains { $0.frame.intersects(buttonOnScreen) }
+        else { return nil }
+        let rect = window.convertToScreen(button.convert(button.bounds, to: nil))
+        guard NSScreen.screens.contains(where: { $0.frame.intersects(rect) }) else { return nil }
+        return rect
     }
 
-    private func attachHostToPopover() {
-        guard popover.contentViewController !== hostingController else { return }
-        detachedPanel?.contentViewController = nil
-        hostingController.sizingOptions = [.preferredContentSize]
-        popover.contentViewController = hostingController
+    /// Centred under the status item, kept inside the visible frame like the system's own
+    /// menu-bar panels.
+    private func anchoredFrame(below anchor: NSRect, size: NSSize) -> NSRect {
+        let screen = NSScreen.screens.first { $0.frame.intersects(anchor) } ?? NSScreen.main
+        let visible = screen?.visibleFrame ?? anchor
+        let margin: CGFloat = 8, gap: CGFloat = 6
+        var x = anchor.midX - size.width / 2
+        x = min(max(x, visible.minX + margin), visible.maxX - margin - size.width)
+        let top = min(anchor.minY, visible.maxY) - gap
+        return NSRect(x: x, y: top - size.height, width: size.width, height: size.height)
+    }
+
+    private func attachHost(to panel: NSPanel) {
+        // Borderless, the window takes its shape (and its shadow) from the content: clip it
+        // to the glass's corners or AppKit outlines the whole rectangle.
+        let anchored = panel === anchoredPanel
+        if let layer = hostingController.view.layer {
+            layer.cornerRadius = anchored ? Theme.Radius.floating : 0
+            layer.cornerCurve = .continuous
+            layer.masksToBounds = anchored
+        }
+        guard panel.contentViewController !== hostingController else { return }
+        if panel !== anchoredPanel { anchoredPanel?.contentViewController = nil }
+        if panel !== detachedPanel { detachedPanel?.contentViewController = nil }
+        panel.contentViewController = hostingController
     }
 
     private func showDetached(focusIfVisible: Bool, bumpToken: Bool) {
@@ -221,12 +188,7 @@ final class PanelController: NSObject, NSPopoverDelegate, NSWindowDelegate {
 
         let panel = detachedPanel ?? makeDetachedPanel()
         attachHost(to: panel)
-        resizeDetachedPanel(
-            panel,
-            state: model.state,
-            isFinishing: model.isFinishing,
-            finishedURL: model.finishedURL
-        )
+        resizeDetachedPanel(panel)
         panel.animationBehavior = .none
         let wasVisible = panel.isVisible
 
@@ -235,27 +197,47 @@ final class PanelController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         // status-anchor fallback presentations leave the current key window alone.
         detachedIsPresented = detachedPanelPresenter(panel, focusIfVisible)
         model.isPanelVisible = panel.isVisible
-        if panel.isVisible && !wasVisible { animateEntrance() }
+        if panel.isVisible && !wasVisible { animateEntrance(of: panel) }
     }
 
-    private func animateEntrance() {
+    private func animateEntrance(of panel: NSPanel) {
         let view = hostingController.view
         // Finish graph/layout work before the render server moves the retained panel layer.
         view.layoutSubtreeIfNeeded()
+        panel.invalidateShadow()
         guard let layer = view.layer else { return }
-        layer.removeAnimation(forKey: PanelEntranceMotion.offsetKey)
+        layer.removeAnimation(forKey: PanelEntranceMotion.key)
         guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
-        layer.add(PanelEntranceMotion.animation(), forKey: PanelEntranceMotion.offsetKey)
+        layer.add(PanelEntranceMotion.animation(), forKey: PanelEntranceMotion.key)
+    }
+
+    private func makeAnchoredPanel() -> AnchoredControlPanel {
+        let panel = AnchoredControlPanel(
+            contentRect: NSRect(origin: .zero, size: desiredContentSize()),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isReleasedWhenClosed = false
+        panel.isFloatingPanel = true
+        panel.becomesKeyOnlyIfNeeded = false
+        panel.hidesOnDeactivate = false
+        panel.level = .popUpMenu
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.animationBehavior = .none
+        panel.isMovable = false
+        panel.delegate = self
+        panel.cancel = { [weak self] in self?.close() }
+        anchoredPanel = panel
+        return panel
     }
 
     private func makeDetachedPanel() -> DetachedControlPanel {
-        let contentSize = desiredContentSize(
-            state: model.state,
-            isFinishing: model.isFinishing,
-            finishedURL: model.finishedURL
-        )
         let panel = DetachedControlPanel(
-            contentRect: NSRect(origin: .zero, size: contentSize),
+            contentRect: NSRect(origin: .zero, size: desiredContentSize()),
             styleMask: [.titled, .closable, .utilityWindow, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -276,59 +258,29 @@ final class PanelController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         return panel
     }
 
-    private func attachHost(to panel: NSPanel) {
-        guard panel.contentViewController !== hostingController else { return }
-        popover.contentViewController = nil
-        // A window does not consume preferredContentSize the way NSPopover does.
-        // Disable the hosting controller's automatic window sizing and drive the
-        // exact native content rect from the same state that sizes the SwiftUI view.
-        hostingController.sizingOptions = []
-        panel.contentViewController = hostingController
+    private func desiredContentSize() -> NSSize {
+        NSSize(width: CapturePanelView.panelWidth,
+               height: CapturePanelView.height(state: model.state, isFinishing: model.isFinishing,
+                                               finished: model.finishedURL != nil))
     }
 
-    private func desiredContentSize(
-        state: RecordingController.UIState,
-        isFinishing: Bool,
-        finishedURL: URL?
-    ) -> NSSize {
-        let height: CGFloat
-        if finishedURL != nil {
-            height = CapturePanelView.finishedHeight
-        } else if isFinishing {
-            height = CapturePanelView.finishingHeight
-        } else if state != .idle {
-            height = CapturePanelView.activeHeight
-        } else {
-            height = CapturePanelView.panelHeight
+    private func resizePanelsIfNeeded(state: RecordingController.UIState, isFinishing: Bool, finishedURL: URL?) {
+        let size = NSSize(width: CapturePanelView.panelWidth,
+                          height: CapturePanelView.height(state: state, isFinishing: isFinishing,
+                                                          finished: finishedURL != nil))
+        if let detachedPanel { resizeDetachedPanel(detachedPanel, contentSize: size) }
+        if let anchoredPanel, anchoredIsPresented {
+            // The top edge stays under the status item; the panel grows downwards.
+            let old = anchoredPanel.frame
+            let frame = NSRect(x: old.minX, y: old.maxY - size.height, width: size.width, height: size.height)
+            guard !NSEqualRects(old, frame) else { return }
+            anchoredPanel.setFrame(frame, display: true, animate: false)
+            anchoredPanel.invalidateShadow()
         }
-        return NSSize(width: CapturePanelView.panelWidth, height: height)
     }
 
-    private func resizeDetachedPanelIfNeeded(
-        state: RecordingController.UIState,
-        isFinishing: Bool,
-        finishedURL: URL?
-    ) {
-        guard let detachedPanel else { return }
-        resizeDetachedPanel(
-            detachedPanel,
-            state: state,
-            isFinishing: isFinishing,
-            finishedURL: finishedURL
-        )
-    }
-
-    private func resizeDetachedPanel(
-        _ panel: NSPanel,
-        state: RecordingController.UIState,
-        isFinishing: Bool,
-        finishedURL: URL?
-    ) {
-        let contentSize = desiredContentSize(
-            state: state,
-            isFinishing: isFinishing,
-            finishedURL: finishedURL
-        )
+    private func resizeDetachedPanel(_ panel: NSPanel, contentSize: NSSize? = nil) {
+        let contentSize = contentSize ?? desiredContentSize()
         let frameSize = panel.frameRect(forContentRect: NSRect(origin: .zero, size: contentSize)).size
         let oldFrame = panel.frame
         var frame = NSRect(
@@ -390,31 +342,31 @@ final class PanelController: NSObject, NSPopoverDelegate, NSWindowDelegate {
 
     /// Keep this exact host in place through target selection and stream startup.
     func keepOpenForRecording() {
-        popover.behavior = .applicationDefined
+        behavior = .applicationDefined
         removeOutsideClickMonitor()
     }
 
     func releaseRecordingHold() {
-        popover.behavior = .transient
+        behavior = .transient
         installOutsideClickMonitor()
         close()
     }
 
     func close() {
+        hideAnchored(transient: false)
         model.isPanelVisible = false
-        pendingCompletionAnchor = nil
-        pendingDetachedPresentation = nil
-        if popover.isShown {
-            // Reset happens in popoverDidClose (fires after the close animation), so the
-            // flag still holds when that late callback would otherwise stamp the guard.
-            isExplicitClose = true
-            isClosing = true
-            popover.performClose(nil)
-        } else {
-            removeOutsideClickMonitor()
-        }
         detachedIsPresented = false
         detachedPanel?.close()
+    }
+
+    /// A transient close (outside click, lost key) arms the reopen guard for the same click.
+    private func hideAnchored(transient: Bool) {
+        removeOutsideClickMonitor()
+        guard anchoredIsPresented || anchoredPanel?.isVisible == true else { return }
+        anchoredIsPresented = false
+        anchoredPanel?.orderOut(nil)
+        if transient { lastTransientCloseAt = ContinuousClock.now }
+        model.isPanelVisible = detachedIsPresented
     }
 
     private func removeOutsideClickMonitor() {
@@ -424,52 +376,21 @@ final class PanelController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         }
     }
 
-    /// Stamped in BOTH close delegate callbacks: `popoverDidClose` only fires after
-    /// the close animation completes, which can be later than the same click's
-    /// mouse-UP — by then `toggle()` would have read a stale timestamp and reopened
-    /// the popover it just dismissed. `popoverWillClose` arms the guard immediately.
-    /// Only a transient auto-close (outside click) arms it — an explicit close() from
-    /// our own actions should not swallow the user's next status-button click.
-    nonisolated func popoverWillClose(_ notification: Notification) {
+    nonisolated func windowDidResignKey(_ notification: Notification) {
+        let window = (notification.object as AnyObject?).map(ObjectIdentifier.init)
         MainActor.assumeIsolated {
-            isClosing = true
-            model.isPanelVisible = false
-            guard !isExplicitClose else { return }
-            lastCloseAt = ContinuousClock.now
-        }
-    }
-
-    nonisolated func popoverDidClose(_ notification: Notification) {
-        MainActor.assumeIsolated {
-            removeOutsideClickMonitor()
-            isClosing = false
-            if isExplicitClose {
-                isExplicitClose = false
-            } else {
-                lastCloseAt = ContinuousClock.now
-            }
-            let detachedRequest = pendingDetachedPresentation
-            let completionAnchor = pendingCompletionAnchor
-            pendingDetachedPresentation = nil
-            pendingCompletionAnchor = nil
-
-            if let detachedRequest {
-                showDetached(
-                    focusIfVisible: detachedRequest.shouldFocus,
-                    bumpToken: detachedRequest.bumpToken
-                )
-            // Finalization can finish while an outside-click close is animating.
-            // Present the completed file only after AppKit releases that popover.
-            } else if let button = completionAnchor, model.finishedURL != nil {
-                show(relativeTo: button, bumpToken: false)
-            }
+            guard let anchoredPanel, window == ObjectIdentifier(anchoredPanel),
+                  anchoredIsPresented, behavior == .transient else { return }
+            hideAnchored(transient: true)
         }
     }
 
     nonisolated func windowWillClose(_ notification: Notification) {
+        let window = (notification.object as AnyObject?).map(ObjectIdentifier.init)
         MainActor.assumeIsolated {
+            guard let detachedPanel, window == ObjectIdentifier(detachedPanel) else { return }
             detachedIsPresented = false
-            model.isPanelVisible = false
+            model.isPanelVisible = anchoredIsPresented
         }
     }
 }
@@ -478,15 +399,21 @@ private extension NSRect {
     var area: CGFloat { width * height }
 }
 
+/// A short drop and fade, at the display's own refresh rate.
 private enum PanelEntranceMotion {
-    static let offsetKey = "panelEntranceOffset"
-    static func animation() -> CABasicAnimation {
-        let animation = CABasicAnimation(keyPath: "transform.translation.y")
-        animation.fromValue = 4
-        animation.toValue = 0
-        animation.duration = 0.14
-        animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        animation.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
-        return animation
+    static let key = "panelEntrance"
+    static func animation() -> CAAnimationGroup {
+        let offset = CABasicAnimation(keyPath: "transform.translation.y")
+        offset.fromValue = 6
+        offset.toValue = 0
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0
+        fade.toValue = 1
+        let group = CAAnimationGroup()
+        group.animations = [offset, fade]
+        group.duration = 0.16
+        group.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
+        group.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+        return group
     }
 }

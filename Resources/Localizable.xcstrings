@@ -10803,6 +10803,24 @@
           }
         }
       }
+    },
+    "Opens the capture; drag to use its file": {
+      "extractionState": "manual",
+      "comment": "Accessibility: recent capture tile",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opens the capture; drag to use its file"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çekimi açar; dosyasını kullanmak için sürükleyin"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
