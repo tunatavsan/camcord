@@ -3,41 +3,68 @@ import QuartzCore
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// The complete image fits inside the preview bounds; narrow captures retain a useful
+/// control width without stretching or trimming the image itself.
+struct ScreenshotCardGeometry {
+    static let maximumPreview = CGSize(width: 300, height: 220)
+    static let minimumWidth: CGFloat = 160
+    let imageSize: CGSize
+    let canvasSize: CGSize
+    init(sourceSize: CGSize, maximumHeight: CGFloat = ScreenshotCardGeometry.maximumPreview.height) {
+        let height = maximumHeight.isFinite ? min(Self.maximumPreview.height, max(0, maximumHeight)) : 0
+        guard sourceSize.width.isFinite, sourceSize.height.isFinite,
+              sourceSize.width > 0, sourceSize.height > 0 else {
+            imageSize = .zero; canvasSize = CGSize(width: Self.minimumWidth, height: 0); return
+        }
+        let scale = min(Self.maximumPreview.width / sourceSize.width, height / sourceSize.height)
+        imageSize = CGSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
+        canvasSize = CGSize(width: max(Self.minimumWidth, imageSize.width), height: imageSize.height)
+    }
+}
+
 /// Bounded native host shared by production panels and ordinary-window fixtures.
 @MainActor final class ScreenshotCardPresentation: NSView {
     var onPause: (@MainActor (ScreenshotCardDwell.Pause, Bool) -> Void)?
     var onDismiss: (@MainActor (String) -> Void)?
     var onEdit: (@MainActor () -> Void)?
+    var onSave: (@MainActor () -> Void)?
     var onPin: (@MainActor () -> Void)?
     var onQuickLook: (@MainActor (URL) -> Void)?
-    var previewLimit: CGFloat = 140 { didSet { updateBody() } }
+    var previewLimit: CGFloat = ScreenshotCardGeometry.maximumPreview.height { didSet { if previewLimit != oldValue { updateBody() } } }
     private let model: ScreenshotCardModel
     private let canEdit: Bool
     private let canPin: Bool
     private var bodyHost: NSHostingView<ScreenshotCardBody>!
+    private let glass = NSGlassEffectView()
     private var alive = true
     private var reducedMotion = false
     private var tracking: NSTrackingArea?
     private(set) var animationDuration: TimeInterval = 0
+    var measuredWidth: CGFloat { geometry.canvasSize.width + 24 }
     var measuredHeight: CGFloat { bodyHost.fittingSize.height }
+    private var geometry: ScreenshotCardGeometry {
+        ScreenshotCardGeometry(sourceSize: CGSize(width: model.capture.image.width, height: model.capture.image.height), maximumHeight: previewLimit)
+    }
     var measuredChromeHeight: CGFloat {
         // Refresh the same view tree before measuring published error/busy state.
         updateBody(); bodyHost.layoutSubtreeIfNeeded()
-        let imageHeight = min(previewLimit, 216 * model.capture.pointSize.height / max(1, model.capture.pointSize.width))
-        return max(0, measuredHeight - imageHeight)
+        return max(0, measuredHeight - geometry.canvasSize.height)
     }
     init(model: ScreenshotCardModel, canEdit: Bool, canPin: Bool) {
         self.model = model; self.canEdit = canEdit; self.canPin = canPin
         super.init(frame: .zero)
-        wantsLayer = true; layer?.masksToBounds = true
+        wantsLayer = true
         bodyHost = NSHostingView(rootView: body())
         bodyHost.wantsLayer = true
-        addSubview(bodyHost)
+        glass.wantsLayer = true
+        glass.style = .regular; glass.tintColor = nil; glass.cornerRadius = Theme.Radius.floating
+        glass.contentView = bodyHost
+        addSubview(glass)
     }
     required init?(coder: NSCoder) { nil }
     private func body() -> ScreenshotCardBody {
-        ScreenshotCardBody(model: model, previewLimit: previewLimit, canEdit: canEdit, canPin: canPin,
-            edit: { [weak self] in self?.onEdit?() }, pin: { [weak self] in self?.onPin?() },
+        ScreenshotCardBody(model: model, geometry: geometry, canEdit: canEdit, canPin: canPin,
+            edit: { [weak self] in self?.onEdit?() }, save: { [weak self] in self?.onSave?() }, pin: { [weak self] in self?.onPin?() },
             quickLook: { [weak self] url in self?.onQuickLook?(url) },
             dismiss: { [weak self] in self?.onDismiss?("close") },
             pause: { [weak self] reason, active in self?.onPause?(reason, active) },
@@ -46,7 +73,8 @@ import UniformTypeIdentifiers
     private func updateBody() { guard bodyHost != nil else { return }; bodyHost.rootView = body(); needsLayout = true }
     override func layout() {
         super.layout()
-        bodyHost.frame = CGRect(x: 12, y: 12, width: 240, height: max(0, bounds.height - 24))
+        glass.frame = bounds.insetBy(dx: 12, dy: 12)
+        bodyHost.frame = glass.bounds
     }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -62,15 +90,16 @@ import UniformTypeIdentifiers
         onPause?(.hover, bounds.insetBy(dx: 12, dy: 12).contains(point))
     }
     override func cancelOperation(_ sender: Any?) { if alive { onDismiss?("escape") } }
-    func invalidate() { alive = false; onPause = nil; onDismiss = nil; onEdit = nil; onPin = nil; onQuickLook = nil }
+    func invalidate() { alive = false; onPause = nil; onDismiss = nil; onEdit = nil; onSave = nil; onPin = nil; onQuickLook = nil }
     func animate(entering: Bool, reduceMotion: Bool, completion: @escaping @MainActor () -> Void) {
         reducedMotion = reduceMotion
         layoutSubtreeIfNeeded()
-        guard let layer = bodyHost.layer else { completion(); return }
+        guard let layer = glass.layer else { completion(); return }
         let keyPath = reduceMotion ? "opacity" : "transform.translation.x"
-        let end: CGFloat = entering ? (reduceMotion ? 1 : 0) : (reduceMotion ? 0 : 264)
+        let travel = max(0, bounds.width)
+        let end: CGFloat = entering ? (reduceMotion ? 1 : 0) : (reduceMotion ? 0 : travel)
         let start: CGFloat
-        if entering { start = reduceMotion ? 0 : 264 }
+        if entering { start = reduceMotion ? 0 : travel }
         else if reduceMotion { start = CGFloat(layer.presentation()?.opacity ?? layer.opacity) }
         else { start = (layer.presentation()?.value(forKeyPath: keyPath) as? CGFloat) ?? 0 }
         let animation: CABasicAnimation
@@ -79,6 +108,7 @@ import UniformTypeIdentifiers
             animation.fromValue = start; animation.toValue = end
             animation.duration = Theme.Motion.Duration.reduced
         } else { animation = Theme.Motion.interactionSpring(keyPath: keyPath, from: start, to: end) }
+        preferRefreshRate(for: animation)
         animationDuration = animation.duration
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -89,24 +119,30 @@ import UniformTypeIdentifiers
     }
     func reposition(from oldFrame: CGRect, to newFrame: CGRect, reduceMotion: Bool) {
         reducedMotion = reduceMotion
-        guard !reduceMotion, oldFrame != newFrame, let layer = bodyHost.layer else { return }
+        guard !reduceMotion, oldFrame != newFrame, let layer = glass.layer else { return }
         // The window changes its logical anchor immediately; the persistent body preserves continuity.
         let previous = (layer.presentation()?.value(forKeyPath: "transform.translation.y") as? CGFloat) ?? 0
         let delta = oldFrame.minY - newFrame.minY + previous
         CATransaction.begin(); CATransaction.setDisableActions(true)
         layer.setValue(0, forKeyPath: "transform.translation.y")
-        layer.add(Theme.Motion.interactionSpring(keyPath: "transform.translation.y", from: delta, to: 0), forKey: "card-reflow")
+        let animation = Theme.Motion.interactionSpring(keyPath: "transform.translation.y", from: delta, to: 0)
+        preferRefreshRate(for: animation)
+        layer.add(animation, forKey: "card-reflow")
         CATransaction.commit()
     }
     private func pan(_ translation: CGPoint, velocity: CGPoint, ended: Bool, cancelled: Bool) {
-        guard alive, let layer = bodyHost.layer else { return }
+        guard alive, let layer = glass.layer else { return }
         onPause?(.gesture, !ended)
         if ended {
             if !cancelled, ScreenshotCardChrome.commits(translation: translation, velocity: velocity) { onDismiss?("fling"); return }
             let position = (layer.presentation()?.value(forKeyPath: "transform.translation.x") as? CGFloat) ?? max(0, translation.x)
             CATransaction.begin(); CATransaction.setDisableActions(true)
             layer.setValue(0, forKeyPath: "transform.translation.x")
-            if !reducedMotion { layer.add(Theme.Motion.interactionSpring(keyPath: "transform.translation.x", from: position, to: 0), forKey: "card-return") }
+            if !reducedMotion {
+                let animation = Theme.Motion.interactionSpring(keyPath: "transform.translation.x", from: position, to: 0)
+                preferRefreshRate(for: animation)
+                layer.add(animation, forKey: "card-return")
+            }
             CATransaction.commit()
         } else {
             CATransaction.begin(); CATransaction.setDisableActions(true)
@@ -115,30 +151,35 @@ import UniformTypeIdentifiers
             CATransaction.commit()
         }
     }
+    private func preferRefreshRate(for animation: CAAnimation) {
+        let fps = Float(min(120, max(1, window?.screen?.maximumFramesPerSecond ?? 60)))
+        animation.preferredFrameRateRange = CAFrameRateRange(minimum: min(80, fps), maximum: fps, preferred: fps)
+    }
 }
 
 private struct ScreenshotCardBody: View {
     @ObservedObject var model: ScreenshotCardModel
-    let previewLimit: CGFloat
+    let geometry: ScreenshotCardGeometry
     let canEdit: Bool, canPin: Bool
-    let edit: () -> Void, pin: () -> Void, quickLook: (URL) -> Void, dismiss: () -> Void
+    let edit: () -> Void, save: () -> Void, pin: () -> Void, quickLook: (URL) -> Void, dismiss: () -> Void
     let pause: (ScreenshotCardDwell.Pause, Bool) -> Void
     let pan: (CGPoint, CGPoint, Bool, Bool) -> Void
-    private var imageHeight: CGFloat { min(previewLimit, 216 * model.capture.pointSize.height / max(1, model.capture.pointSize.width)) }
+    @State private var hovering = false
     var body: some View {
         VStack(spacing: 6) {
             ScreenshotCardImage(model: model, edit: canEdit ? edit : nil, pause: pause)
-                .frame(width: 216, height: imageHeight)
-                .background(Theme.Palette.well.color)
-                .clipShape(.rect(cornerRadius: Theme.Radius.well))
+                .frame(width: geometry.canvasSize.width, height: geometry.canvasSize.height)
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.well).fill(Theme.Palette.well.color))
                 .accessibilityLabel("Screenshot preview")
                 .help("Drag the screenshot to another app")
             ScreenshotCardChromeView(dimensions: "\(model.capture.image.width) × \(model.capture.image.height)", dismiss: dismiss, pan: pan)
                 .frame(height: 20)
             HStack(spacing: 0) {
-                action("Edit", symbol: "pencil", enabled: canEdit, perform: edit)
-                action("Pin", symbol: "pin", enabled: canPin, perform: pin)
                 action("Copy", symbol: "doc.on.doc") { Task { _ = await model.copy() } }
+                action("Save…", symbol: "square.and.arrow.down", perform: save)
+                action("Edit", symbol: "pencil", enabled: canEdit, perform: edit)
+                action("Close", symbol: "xmark", perform: dismiss)
+                action("Pin", symbol: "pin", enabled: canPin, perform: pin)
                 action("Quick Look", symbol: "eye") {
                     Task {
                         do { let url = try await model.exportedFileURL(); if model.isAlive { quickLook(url) } }
@@ -148,14 +189,16 @@ private struct ScreenshotCardBody: View {
                 ScreenshotCardShareButton(model: model, pause: pause).frame(maxWidth: .infinity).frame(height: 26)
             }
             .disabled(model.isBusy)
+            .opacity(hovering || model.isBusy ? 1 : 0)
+            .allowsHitTesting(hovering || model.isBusy)
             if let error = model.error { Text(error).font(Theme.Font.caption).foregroundStyle(Theme.Palette.record.color).lineLimit(2).fixedSize(horizontal: false, vertical: true) }
             if model.isBusy { ProgressView().controlSize(.mini).accessibilityLabel("Preparing screenshot") }
         }
-        .frame(width: 216)
+        .frame(width: geometry.canvasSize.width)
         .padding(12)
         .foregroundStyle(Theme.Palette.ink.color)
         .tint(Theme.Palette.ink.color)
-        .camcordGlass(.chrome, in: RoundedRectangle(cornerRadius: Theme.Radius.floating))
+        .onHover { active in hovering = active; pause(.hover, active) }
     }
     private func action(_ title: LocalizedStringKey, symbol: String, enabled: Bool = true, perform: @escaping () -> Void) -> some View {
         Button(action: perform) { Image(systemName: symbol).frame(maxWidth: .infinity).frame(height: 26) }
@@ -176,8 +219,8 @@ private struct ScreenshotCardBody: View {
     }
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        status.font = .systemFont(ofSize: 11, weight: .medium); status.textColor = Theme.Palette.ink.ns
-        dimensions.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular); dimensions.textColor = Theme.Palette.ink2.ns
+        status.font = Theme.Font.ns.text(12, weight: .medium); status.textColor = Theme.Palette.ink.ns
+        dimensions.font = Theme.Font.ns.mono(11); dimensions.textColor = Theme.Palette.ink2.ns
         status.isSelectable = false; dimensions.isSelectable = false
         close.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: String(localized: "Dismiss screenshot"))
         close.isBordered = false; close.target = self; close.action = #selector(closeCard)
@@ -191,8 +234,8 @@ private struct ScreenshotCardBody: View {
     func setDimensions(_ text: String) { dimensions.stringValue = text }
     override func layout() {
         super.layout()
-        status.frame = CGRect(x: 0, y: 3, width: 60, height: 15)
-        dimensions.frame = CGRect(x: 65, y: 3, width: max(0, bounds.width - 89), height: 15)
+        status.frame = CGRect(x: 0, y: 1, width: 58, height: 18)
+        dimensions.frame = CGRect(x: 62, y: 1, width: max(0, bounds.width - 86), height: 18)
         close.frame = CGRect(x: bounds.maxX - 20, y: 0, width: 20, height: 20)
     }
     func gestureRecognizer(_ gestureRecognizer: NSGestureRecognizer, shouldAttemptToRecognizeWith event: NSEvent) -> Bool {

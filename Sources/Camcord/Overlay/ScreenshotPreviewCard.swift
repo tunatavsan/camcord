@@ -22,6 +22,7 @@ import UniformTypeIdentifiers
         let visibleFrame: CGRect
         var dwell = ScreenshotCardDwell()
         var task: Task<Void, Never>?
+        var savePanel: NSSavePanel?
         var shownAt: TimeInterval
         var enteredAt: TimeInterval?
         var exitAt: TimeInterval?
@@ -91,7 +92,9 @@ import UniformTypeIdentifiers
         nextGeneration &+= 1
         let generation = nextGeneration
         let model = ScreenshotCardModel(capture: capture, operations: operations)
-        let frame = CGRect(x: visible.maxX - 264, y: visible.minY + 12, width: 264, height: 240)
+        let preview = ScreenshotCardGeometry(sourceSize: CGSize(width: capture.image.width, height: capture.image.height))
+        let width = preview.canvasSize.width + 48
+        let frame = CGRect(x: visible.maxX - width, y: visible.minY + 12, width: width, height: preview.canvasSize.height + 100)
         let window = hostFactory(frame)
         window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = false
         window.animationBehavior = .none; window.isReleasedWhenClosed = false
@@ -119,6 +122,10 @@ import UniformTypeIdentifiers
         host.onEdit = { [weak self, weak entry] in
             guard current(), let self, let entry, let edit = self.onEdit else { return }
             edit(capture); self.dismiss(entry, reason: "edit")
+        }
+        host.onSave = { [weak self, weak entry] in
+            guard current(), let self, let entry else { return }
+            self.chooseSave(entry)
         }
         host.onPin = { [weak self] in if current() { self?.onPin?(capture) } }
         host.onQuickLook = { [weak self] url in if current() { self?.quickLook.show(url) } }
@@ -168,6 +175,8 @@ import UniformTypeIdentifiers
         entry.task?.cancel(); entry.task = nil
         entry.dwell.leave(at: timing.now()); entry.exitAt = timing.now(); entry.dismissReason = reason
         entry.model.invalidate(); entry.host.invalidate()
+        let savePanel = entry.savePanel; entry.savePanel = nil
+        savePanel?.cancel(nil); savePanel?.orderOut(nil)
         entries.removeAll { $0 === entry }
         reflow()
         let finish: @MainActor () -> Void = { [entry, timing] in
@@ -187,12 +196,32 @@ import UniformTypeIdentifiers
             let imageBudget = max(0, available - chromeHeights.reduce(0, +)) / CGFloat(group.count)
             var y = display.frame.minY + 12
             for entry in group {
-                entry.host.previewLimit = min(140, imageBudget)
+                entry.host.previewLimit = min(ScreenshotCardGeometry.maximumPreview.height, imageBudget)
                 let height = entry.host.measuredHeight + 24
-                let frame = CGRect(x: display.frame.maxX - 264, y: y, width: 264, height: height)
+                let width = entry.host.measuredWidth + 24
+                let frame = CGRect(x: display.frame.maxX - width, y: y, width: width, height: height)
                 entry.host.reposition(from: entry.window.frame, to: frame, reduceMotion: reduceMotion())
                 entry.window.setFrame(frame, display: true)
                 y += height + 4
+            }
+        }
+    }
+    private func chooseSave(_ entry: Entry) {
+        guard isCurrent(entry, generation: entry.generation), !entry.model.isBusy, entry.savePanel == nil else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.png]
+        panel.nameFieldStringValue = entry.model.savedURL?.lastPathComponent ?? String(localized: "Screenshot.png")
+        if let saved = entry.model.savedURL { panel.directoryURL = saved.deletingLastPathComponent() }
+        entry.savePanel = panel
+        pause(entry, reason: .saving, active: true)
+        panel.begin { [weak self, weak entry, weak panel] response in
+            Task { @MainActor in
+                guard let self, let entry, let panel, entry.savePanel === panel,
+                      self.isCurrent(entry, generation: entry.generation) else { return }
+                entry.savePanel = nil
+                self.pause(entry, reason: .saving, active: false)
+                guard response == .OK, let url = panel.url else { return }
+                _ = await entry.model.save(to: url)
             }
         }
     }
@@ -208,7 +237,7 @@ private struct ScreenshotCardDisplayFrame: Hashable {
 /// A monotonic active budget: each pause reason is independent and duplicate callbacks are inert.
 struct ScreenshotCardDwell {
     enum Phase: String { case entering, visible, leaving }
-    enum Pause: String, Hashable { case hover, busy, sharing, gesture, dragging }
+    enum Pause: String, Hashable { case hover, busy, sharing, saving, gesture, dragging }
     private(set) var phase: Phase = .entering
     private(set) var remaining: TimeInterval = 5
     private(set) var pauses: Set<Pause> = []
@@ -303,6 +332,23 @@ actor ScreenshotCardExport {
         let result = await operations.copy(capture, board, { [weak self] in self?.isAlive == true && !Task.isCancelled && mayPublish() })
         if !result, isAlive, !Task.isCancelled, mayPublish() { error = String(localized: "The screenshot could not be copied.") }
         return result
+    }
+    /// Save is an explicit user-selected destination; encoding retains the capture's
+    /// pixel dimensions and point density, using the same PNG representation as export.
+    func save(to url: URL) async -> Bool {
+        guard isAlive, !isBusy else { return false }
+        beginBusy(); defer { endBusy() }
+        do {
+            let png = try await operations.encode(capture)
+            guard isAlive, !Task.isCancelled else { return false }
+            try await Task.detached(priority: .userInitiated) { try png.write(to: url, options: .atomic) }.value
+            guard isAlive, !Task.isCancelled else { return false }
+            savedURL = url
+            return true
+        } catch {
+            if isAlive, !Task.isCancelled, !(error is CancellationError) { self.error = error.localizedDescription }
+            return false
+        }
     }
     func exportedFileURL() async throws -> URL {
         guard isAlive else { throw CancellationError() }

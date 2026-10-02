@@ -6,6 +6,43 @@ import Testing
 
 @Suite("Screenshot card interaction", .serialized)
 @MainActor struct ScreenshotCardInteractionTests {
+    @Test("actual card hosts adapt to image aspect and use one untinted native glass surface", arguments: [
+        CGSize(width: 60, height: 30), CGSize(width: 30, height: 60), CGSize(width: 30, height: 600)
+    ])
+    func nativeAspectHost(size: CGSize) throws {
+        let clock = CardClock(), animations = CardAnimations()
+        let card = controller(clock: clock, animations: animations)
+        defer { card.hide(); clock.finish() }
+        let context = try #require(CGContext(data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8,
+            bytesPerRow: Int(size.width) * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let image = try #require(context.makeImage())
+        card.show(capture: CapturedScreenshot(id: UUID(), image: image,
+            pointSize: CGSize(width: size.width / 2, height: size.height / 2), kind: .screenshot, saveToDiskRequested: false))
+        let entry = try #require(card.entries.first)
+        #expect(entry.window.frame.width == (size.width > size.height ? 348 : 208))
+        #expect(entry.window.frame.maxX == 0)
+        let surfaces = entry.host.subviews.compactMap { $0 as? NSGlassEffectView }
+        let glass = try #require(surfaces.first)
+        #expect(surfaces.count == 1 && glass.style == .regular && glass.tintColor == nil)
+    }
+
+    @Test("Save chooser's pause is independent of hover and preserves the remaining dwell")
+    func savePauseBudget() {
+        var dwell = ScreenshotCardDwell()
+        dwell.enter(at: 0)
+        let beganSaving = dwell.setPaused(.saving, active: true, at: 2)
+        #expect(beganSaving)
+        #expect(dwell.remaining == 3 && dwell.deadline == nil)
+        let beganHover = dwell.setPaused(.hover, active: true, at: 10)
+        #expect(beganHover)
+        let endedSaving = dwell.setPaused(.saving, active: false, at: 20)
+        #expect(endedSaving)
+        #expect(dwell.deadline == nil)
+        let endedHover = dwell.setPaused(.hover, active: false, at: 21)
+        #expect(endedHover)
+        #expect(dwell.deadline == 24)
+    }
+
     private func capture(id: UUID = UUID(), originDisplayID: CGDirectDisplayID? = nil) throws -> CapturedScreenshot {
         let context = try #require(CGContext(data: nil, width: 400, height: 200, bitsPerComponent: 8, bytesPerRow: 1600,
             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))

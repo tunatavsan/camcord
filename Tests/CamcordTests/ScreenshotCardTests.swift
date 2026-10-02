@@ -7,6 +7,71 @@ import UniformTypeIdentifiers
 
 @Suite("Typed screenshot card", .serialized)
 @MainActor struct ScreenshotCardTests {
+    @Test("portrait, landscape and long captures fit wholly without a minimum image height", arguments: [
+        CGSize(width: 1920, height: 1080), CGSize(width: 1080, height: 1920),
+        CGSize(width: 600, height: 12_000), CGSize(width: 1920, height: 50)
+    ])
+    func wholeCaptureGeometry(size: CGSize) {
+        let geometry = ScreenshotCardGeometry(sourceSize: size)
+        #expect(geometry.imageSize.width <= 300 && geometry.imageSize.height <= 220)
+        #expect(geometry.canvasSize.width >= 160 && geometry.canvasSize.width <= 300)
+        #expect(geometry.canvasSize.height == geometry.imageSize.height)
+        #expect(abs(geometry.imageSize.width / size.width - geometry.imageSize.height / size.height) < 0.000_001)
+        let compressed = ScreenshotCardGeometry(sourceSize: size, maximumHeight: 35)
+        #expect(compressed.imageSize.height <= 35)
+        #expect(abs(compressed.imageSize.width / size.width - compressed.imageSize.height / size.height) < 0.000_001)
+    }
+
+    @Test("invalid preview bounds remain finite and never divide by zero")
+    func invalidPreviewGeometry() {
+        for size in [CGSize.zero, CGSize(width: CGFloat.infinity, height: 1), CGSize(width: 1, height: -2)] {
+            let geometry = ScreenshotCardGeometry(sourceSize: size)
+            #expect(geometry.imageSize == .zero)
+            #expect(geometry.canvasSize == CGSize(width: 160, height: 0))
+        }
+        #expect(ScreenshotCardGeometry(sourceSize: CGSize(width: 400, height: 200), maximumHeight: -CGFloat.infinity).imageSize == .zero)
+    }
+
+    @Test("explicit Save writes the complete Retina PNG and publishes only its own destination")
+    func explicitSave() async throws {
+        let root = try physicalTemporaryRoot().appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let destination = root.appendingPathComponent("saved.png"), shot = try capture()
+        let model = ScreenshotCardModel(capture: shot)
+        #expect(await model.save(to: destination))
+        #expect(model.savedURL == destination)
+        let source = try #require(CGImageSourceCreateWithURL(destination as CFURL, nil))
+        let properties = try #require(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any])
+        #expect(properties[kCGImagePropertyPixelWidth as String] as? Int == 400)
+        #expect(properties[kCGImagePropertyPixelHeight as String] as? Int == 200)
+        for key in [kCGImagePropertyDPIWidth, kCGImagePropertyDPIHeight] {
+            let density = try #require(properties[key as String] as? NSNumber)
+            #expect(abs(density.doubleValue - 144) < 0.1)
+        }
+        #expect(!model.isBusy && model.error == nil)
+    }
+
+    @Test("a dismissed card cannot finish an encoding Save into the user's destination")
+    func staleSave() async throws {
+        let root = try physicalTemporaryRoot().appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let barrier = CardSaveEncodingBarrier()
+        var operations = ScreenshotCardModel.Operations()
+        operations.encode = { _ in await barrier.encode() }
+        let model = ScreenshotCardModel(capture: try capture(), operations: operations)
+        let destination = root.appendingPathComponent("stale.png")
+        let save = Task { await model.save(to: destination) }
+        while !(await barrier.started) { await Task.yield() }
+        #expect(model.isBusy)
+        model.invalidate()
+        await barrier.release()
+        #expect(!(await save.value))
+        #expect(!FileManager.default.fileExists(atPath: destination.path))
+        #expect(model.savedURL == nil && !model.isBusy)
+    }
+
     private func capture(id: UUID = UUID(), image: CGImage? = nil) throws -> CapturedScreenshot {
         let context = try #require(CGContext(data: nil, width: 400, height: 200, bitsPerComponent: 8, bytesPerRow: 1600,
             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
@@ -274,4 +339,14 @@ import UniformTypeIdentifiers
 private actor CardEncodeCounter {
     private(set) var count = 0
     @discardableResult func record() -> Int { count += 1; return count }
+}
+
+private actor CardSaveEncodingBarrier {
+    private(set) var started = false
+    private var continuation: CheckedContinuation<Data, Never>?
+    func encode() async -> Data {
+        started = true
+        return await withCheckedContinuation { continuation = $0 }
+    }
+    func release() { continuation?.resume(returning: Data([1, 2, 3])); continuation = nil }
 }
