@@ -3,19 +3,18 @@ import AVFoundation
 import KeyboardShortcuts
 import SwiftUI
 
-/// Fast capture entry points. Recording setup and source previews belong to Studio.
+/// Fast capture entry points and recording setup using the ordinary capture services.
 struct CapturePanelView: View {
     @ObservedObject var model: RecordingStateModel
     let actions: PanelActions
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var shortcuts: [CaptureKind: String] = [:]
     @State private var context: PanelPresentation
-    static let panelWidth: CGFloat = 320
-    static let panelHeight: CGFloat = 370
-    static let activeHeight: CGFloat = 370
+    static let panelWidth: CGFloat = 360
+    static let panelHeight: CGFloat = 492
+    static let activeHeight: CGFloat = 492
     static let finishingHeight: CGFloat = 220
     static let finishedHeight: CGFloat = 418
-    // Preserved for independent StageView geometry clients; the palette has no stage.
+    // Geometry used by the independent recording stage.
     static let contextColumnWidth: CGFloat = 248
     static let controlColumnWidth: CGFloat = 276
     static let cardWidth: CGFloat = 296
@@ -28,6 +27,7 @@ struct CapturePanelView: View {
         _context = State(initialValue: PanelPresentation(library: library, defaults: defaults))
     }
 
+    private var canConfigure: Bool { model.state == .idle && !model.isStarting && !model.isArmed }
     private var currentHeight: CGFloat {
         if model.finishedURL != nil { return Self.finishedHeight }
         if model.isFinishing { return Self.finishingHeight }
@@ -35,8 +35,8 @@ struct CapturePanelView: View {
     }
 
     var body: some View {
-        VStack(spacing: Theme.Space.m) {
-            PanelHeader(state: model.state, elapsed: model.elapsed)
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
+            PanelHeader(model: model)
             if let url = model.finishedURL {
                 FinishedCard(url: url, reveal: actions.revealRecording, open: actions.openRecording,
                     renamed: { renamed in if model.finishedURL == url { model.finishedURL = renamed } },
@@ -44,22 +44,12 @@ struct CapturePanelView: View {
             } else if model.isFinishing {
                 FinishingCard().frame(maxHeight: .infinity)
             } else {
-                PanelSectionLabel(title: "Screenshot")
-                PanelCaptureKeys(shortcuts: shortcuts,
-                                 disabledReason: model.isStarting || model.isArmed || model.state != .idle
-                                    ? String(localized: "Finish or cancel the recording before capturing a screenshot") : nil,
-                                 perform: actions.perform)
-                    .disabled(model.isStarting || model.isArmed || model.state != .idle)
-                PanelSectionLabel(title: "Record")
-                PanelContextChips(settings: context.settings, health: model.health,
-                                  state: model.state, actions: actions,
-                                  canChooseSource: model.state == .idle && !model.isStarting && !model.isArmed)
-                PanelRecordingControls(model: model, actions: actions)
-                if let library = context.library {
-                    PanelLastCapture(item: context.latest, image: context.thumbnail,
-                                     loading: library.isLoading, issue: library.loadingIssue,
-                                     open: openCapture)
-                }
+                PanelCaptureKeys(shortcuts: shortcuts, canCapture: canConfigure, perform: actions.perform)
+                PanelRecordingModule(model: model, context: context, actions: actions, canConfigure: canConfigure)
+                PanelRecentCaptures(items: context.recent, images: context.thumbnails,
+                                    loading: context.library?.isLoading == true,
+                                    issue: context.library?.loadingIssue, open: openCapture)
+                Spacer(minLength: 0)
             }
             PanelFooter(actions: actions)
         }
@@ -68,18 +58,18 @@ struct CapturePanelView: View {
         .foregroundStyle(Theme.Palette.ink.color)
         .tint(Theme.Palette.ink.color)
         .modifier(PanelChrome())
-        .animation(Theme.Motion.resolve(Self.panelSpring, reduceMotion: reduceMotion), value: currentHeight)
         .onAppear(perform: panelAppeared)
         .onDisappear { context.synchronize(visible: false) }
         .onChange(of: model.isPanelVisible) { _, visible in
             context.synchronize(visible: visible, reloadSettings: visible)
         }
-        .onChange(of: context.library?.items) { _, _ in
-            context.synchronize(visible: model.isPanelVisible)
-        }
+        .onChange(of: context.library?.items) { _, _ in context.synchronize(visible: model.isPanelVisible) }
         .onChange(of: model.panelOpenToken) { _, _ in
             model.finishedURL = nil
             reloadShortcuts()
+            context.synchronize(visible: model.isPanelVisible, reloadSettings: true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: RecordingSettings.didChangeNotification)) { _ in
             context.synchronize(visible: model.isPanelVisible, reloadSettings: true)
         }
     }
@@ -97,188 +87,151 @@ struct CapturePanelView: View {
 }
 
 private struct PanelHeader: View {
-    let state: RecordingController.UIState
-    let elapsed: String?
+    @ObservedObject var model: RecordingStateModel
     var body: some View {
         HStack(spacing: Theme.Space.s) {
             CamcordBrandMark().frame(width: Theme.Menu.mark, height: Theme.Menu.mark)
             Text("Camcord").font(Theme.Font.bodyStrong)
-            Spacer()
-            if state != .idle {
-                Group {
-                    if state == .paused { Circle().strokeBorder(Theme.Palette.ink.color, lineWidth: 1.5) }
-                    else { Circle().fill(Theme.Palette.record.color) }
-                }.frame(width: 7, height: 7)
-                    .accessibilityHidden(true)
-                if let elapsed {
+            Spacer(minLength: 0)
+            if model.state != .idle {
+                Circle().fill(model.state == .paused ? Theme.Palette.ink3.color : Theme.Palette.record.color)
+                    .frame(width: 6, height: 6).accessibilityHidden(true)
+                Text(model.state == .paused ? "Paused" : "Recording")
+                    .font(Theme.Font.caption).foregroundStyle(Theme.Palette.ink2.color)
+                if let elapsed = model.elapsed {
                     Text(verbatim: elapsed).font(Theme.Font.dataStrong)
-                        .foregroundStyle(state == .paused ? Theme.Palette.ink.color : Theme.Palette.record.color)
-                        .accessibilityLabel(Text(state == .paused ? "Paused" : "Recording"))
-                        .accessibilityValue(Text(verbatim: elapsed))
+                        .accessibilityLabel(Text("Elapsed time"))
                 }
+            } else {
+                Text(model.isFinishing ? "Finalizing…" : model.isArmed ? "Ready to start" : "Capture")
+                    .font(Theme.Font.caption).foregroundStyle(Theme.Palette.ink3.color)
             }
         }
-        .padding(.horizontal, Theme.Space.xs)
-        .frame(height: Theme.Menu.headerHeight)
-    }
-}
-
-private struct PanelSectionLabel: View {
-    let title: LocalizedStringKey
-    var body: some View {
-        Text(title).font(Theme.Font.captionStrong).tracking(0.22)
-            .foregroundStyle(Theme.Palette.ink3.color)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, Theme.Space.xs)
-            .frame(height: Theme.Menu.sectionHeight)
+        .frame(height: 26)
     }
 }
 
 private struct PanelCaptureKeys: View {
     let shortcuts: [CaptureKind: String]
-    let disabledReason: String?
+    let canCapture: Bool
     let perform: (CaptureKind) -> Void
     var body: some View {
         HStack(spacing: Theme.Space.xs) {
             ForEach(CaptureKind.allCases) { kind in
-                PanelCaptureKey(kind: kind, shortcut: shortcuts[kind], disabledReason: disabledReason, action: { perform(kind) })
+                Button { perform(kind) } label: {
+                    VStack(spacing: Theme.Space.s) {
+                        Image(systemName: kind.symbol).font(Theme.Font.row)
+                            .symbolRenderingMode(.monochrome).frame(height: 22)
+                        Text(kind.shortTitle).font(Theme.Font.captionStrong).lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity).frame(height: 66)
+                }
+                .buttonStyle(PanelHoverStyle(radius: Theme.Radius.thumb))
+                .background(Theme.Palette.selection.color, in: .rect(cornerRadius: Theme.Radius.thumb))
+                .accessibilityLabel(Text(kind.actionTitle))
+                .help(Text(verbatim: help(kind)))
             }
         }
-        .padding(Theme.Space.xs)
-        .background(Theme.Menu.inset.color, in: .rect(cornerRadius: Theme.Radius.well))
-        .overlay { RoundedRectangle(cornerRadius: Theme.Radius.well).strokeBorder(Theme.Menu.line.color, lineWidth: 0.5) }
+        .disabled(!canCapture)
+    }
+    private func help(_ kind: CaptureKind) -> String {
+        guard canCapture else { return String(localized: "Finish or cancel the recording before capturing a screenshot") }
+        let title = String(localized: kind.actionTitle)
+        return shortcuts[kind].map { title + " · " + $0 } ?? title
     }
 }
 
-private struct PanelCaptureKey: View {
-    let kind: CaptureKind
-    let shortcut: String?
-    let disabledReason: String?
+private struct PanelRecordingModule: View {
+    @ObservedObject var model: RecordingStateModel
+    let context: PanelPresentation
+    let actions: PanelActions
+    let canConfigure: Bool
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            HStack(spacing: Theme.Space.s) {
+                Menu {
+                    ForEach(PanelRecordingSource.allCases) { source in
+                        Button { context.selectSource(source, canConfigure: canConfigure) } label: {
+                            Label(source.label, systemImage: source.symbol)
+                        }
+                    }
+                } label: {
+                    HStack(spacing: Theme.Space.s) {
+                        Image(systemName: canConfigure ? context.recordingSource.symbol : model.isArmed ? "macwindow" : "record.circle")
+                        Text(canConfigure ? context.recordingSource.label : "Source locked").font(Theme.Font.bodyStrong)
+                        Image(systemName: "chevron.down").font(Theme.Font.caption)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading).frame(height: 36)
+                    .contentShape(.rect)
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden)
+                .disabled(!canConfigure)
+                .help("Choose what the Record button captures")
+                .accessibilityLabel("Recording source")
+                .accessibilityValue(Text(canConfigure ? context.recordingSource.label : "Source locked"))
+                PanelDeviceButton(title: "Camera", symbol: "video", enabled: context.settings?.camera.enabled == true,
+                                  available: canConfigure && context.settings != nil,
+                                  action: { context.toggleCamera(canConfigure: canConfigure) })
+                PanelDeviceButton(title: "Microphone", symbol: "mic", enabled: context.settings?.microphone == true,
+                                  available: canConfigure && context.settings != nil,
+                                  action: { context.toggleMicrophone(canConfigure: canConfigure) })
+            }
+            PanelRecordingControls(model: model, context: context, actions: actions)
+        }
+        .padding(Theme.Space.m)
+        .background(Theme.Palette.selection.color, in: .rect(cornerRadius: Theme.Radius.floating))
+    }
+}
+
+private struct PanelDeviceButton: View {
+    let title: LocalizedStringKey
+    let symbol: String
+    let enabled: Bool
+    let available: Bool
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 5) {
-                Image(systemName: symbol).font(.system(size: Theme.Menu.keySymbolFont, weight: .regular))
-                    .symbolRenderingMode(.monochrome)
-                    .frame(width: Theme.Menu.keySymbol, height: Theme.Menu.keySymbol)
-                Text(kind.shortTitle).font(Theme.Font.caption.weight(.medium))
-            }
-            .frame(maxWidth: .infinity).frame(height: Theme.Menu.keyHeight)
+            Image(systemName: enabled ? symbol : symbol + ".slash")
+                .font(Theme.Font.row).frame(width: 36, height: 36)
+                .foregroundStyle(enabled ? Theme.Palette.ink.color : Theme.Palette.ink3.color)
+                .background(enabled ? Theme.Palette.selectionStrong.color : Theme.Palette.hover.color, in: .circle)
         }
-        .buttonStyle(PanelHoverStyle(radius: Theme.Radius.key))
-        .accessibilityLabel(Text(kind.actionTitle))
-        .help(Text(verbatim: help))
-    }
-    private var symbol: String {
-        kind == .scroll ? "arrow.up.and.down.text.horizontal" : kind.symbol
-    }
-    private var help: String {
-        if let disabledReason { return disabledReason }
-        let title = String(localized: kind.actionTitle)
-        return shortcut.map { title + " · " + $0 } ?? title
-    }
-}
-
-private struct PanelContextChips: View {
-    let settings: RecordingSettings?
-    let health: RecordingHealth?
-    let state: RecordingController.UIState
-    let actions: PanelActions
-    let canChooseSource: Bool
-    private var cameraEnabled: Bool { settings?.camera.enabled == true }
-    private var micEnabled: Bool { settings?.microphone == true }
-    private var levels: AudioLevels? {
-        guard state == .recording, health?.microphone.enabled == true,
-              health?.microphone.isReceiving(at: ProcessInfo.processInfo.systemUptime) == true else { return nil }
-        return health?.microphone.levels
-    }
-    var body: some View {
-        HStack(spacing: Theme.Space.xs + 2) {
-            Menu {
-                Button("Record a region", action: actions.toggleRecording)
-                Button("Record a window", action: actions.recordWindow)
-                Button("Record the screen", action: actions.recordFullScreen)
-            } label: {
-                HStack(spacing: Theme.Space.xs) {
-                    Image(systemName: "rectangle.dashed")
-                    Text("Source").lineLimit(1)
-                    Image(systemName: "chevron.down").font(.system(size: 8))
-                }
-                .frame(maxWidth: .infinity).frame(height: Theme.Menu.chipHeight)
-                .contentShape(.capsule)
-            }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden)
-            .frame(maxWidth: .infinity).frame(height: Theme.Menu.chipHeight)
-            .disabled(!canChooseSource)
-            .modifier(PanelChipSurface())
-            .help(Text(canChooseSource ? "Choose a source for a fast recording" : "Finish or cancel the recording before choosing another source"))
-            Button(action: actions.openStudio) {
-                Label("Camera", systemImage: cameraEnabled || settings == nil ? "video" : "video.slash")
-                    .frame(maxWidth: .infinity).frame(height: Theme.Menu.chipHeight)
-            }
-            .buttonStyle(.plain)
-            .frame(maxWidth: .infinity).frame(height: Theme.Menu.chipHeight)
-            .modifier(PanelChipSurface())
-            .help(Text(verbatim: cameraHelp))
-            .accessibilityValue(Text(settings == nil ? "Setup in Studio" : cameraEnabled ? "Enabled for recording" : "Off"))
-            Button(action: actions.openStudio) {
-                HStack(spacing: Theme.Space.xs) {
-                    Image(systemName: micEnabled || settings == nil ? "mic" : "mic.slash")
-                    if let levels { AudioLevelMeter(levels: levels, active: true, height: 12).frame(width: 15, height: 12).accessibilityHidden(true) }
-                    Text("Mic")
-                }
-                .frame(maxWidth: .infinity).frame(height: Theme.Menu.chipHeight)
-            }
-            .buttonStyle(.plain)
-            .frame(maxWidth: .infinity).frame(height: Theme.Menu.chipHeight)
-            .modifier(PanelChipSurface())
-            .help(Text(verbatim: microphoneHelp))
-            .accessibilityValue(Text(settings == nil ? "Setup in Studio" : micEnabled ? "Enabled for recording" : "Off"))
-        }
-        .font(Theme.Font.caption)
-    }
-    private var cameraHelp: String {
-        guard settings != nil else { return String(localized: "Camera setup is available in Studio") }
-        if cameraEnabled && AVCaptureDevice.authorizationStatus(for: .video) == .denied {
-            return String(localized: "Camera access is denied. Configure access in Studio.")
-        }
-        return cameraEnabled ? String(localized: "Camera enabled for future recordings. Configure in Studio.")
-            : String(localized: "Camera is off. Configure in Studio.")
-    }
-    private var microphoneHelp: String {
-        guard settings != nil else { return String(localized: "Microphone setup is available in Studio") }
-        if micEnabled && AVCaptureDevice.authorizationStatus(for: .audio) == .denied {
-            return String(localized: "Microphone access is denied. Configure access in Studio.")
-        }
-        return micEnabled ? String(localized: "Microphone enabled for future recordings. Configure in Studio.")
-            : String(localized: "Microphone is off. Configure in Studio.")
+        .buttonStyle(.plain).disabled(!available)
+        .accessibilityLabel(Text(title))
+        .accessibilityValue(Text(enabled ? "On" : "Off"))
+        .accessibilityAddTraits(enabled ? .isSelected : [])
+        .help(Text(available ? enabled ? "Disable for the next recording" : "Enable for the next recording" : "Finish or cancel recording to change this setting"))
     }
 }
 
 private struct PanelRecordingControls: View {
     @ObservedObject var model: RecordingStateModel
+    let context: PanelPresentation
     let actions: PanelActions
     var body: some View {
-        HStack(spacing: Theme.Space.xs + 2) {
+        HStack(spacing: Theme.Space.s) {
             if model.isArmed {
-                PanelPrimaryButton(title: "Start", symbol: "record.circle", action: actions.toggleRecording)
                 Button("Cancel", action: actions.cancelArmed).keyboardShortcut(.cancelAction)
                     .buttonStyle(PanelSecondaryStyle())
+                PanelPrimaryButton(title: "Start", symbol: "record.circle", action: actions.toggleRecording)
             } else if model.isStarting {
-                HStack(spacing: Theme.Space.s) {
-                    ProgressView().controlSize(.small)
-                    Text("Preparing recording…").font(Theme.Font.body)
-                }.frame(maxWidth: .infinity)
+                ProgressView().controlSize(.small)
+                Text("Preparing recording…").font(Theme.Font.body)
+                Spacer(minLength: 0)
             } else if model.state != .idle {
                 Button(action: actions.pauseResume) {
                     Label(model.state == .paused ? "Resume" : "Pause", systemImage: model.state == .paused ? "play.fill" : "pause")
+                        .font(Theme.Font.body)
                 }.buttonStyle(PanelSecondaryStyle())
                 PanelPrimaryButton(title: "Stop", symbol: "stop.fill", action: actions.toggleRecording)
             } else {
-                PanelPrimaryButton(title: "Record", symbol: "circle.fill", action: actions.toggleRecording)
+                Text("Recording").font(Theme.Font.caption).foregroundStyle(Theme.Palette.ink3.color)
+                Spacer(minLength: 0)
+                PanelPrimaryButton(title: "Record", symbol: "record.circle",
+                                   action: { context.startRecording(using: actions) })
                     .help(KeyboardShortcuts.getShortcut(for: .toggleRecording)?.description ?? String(localized: "Start recording"))
             }
-        }.frame(height: Theme.Menu.actionHeight)
+        }.frame(height: 32)
     }
 }
 
@@ -288,68 +241,57 @@ private struct PanelPrimaryButton: View {
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 9) {
-                Image(systemName: symbol).font(.system(size: 11))
-                Text(title).font(Theme.Font.rowStrong)
-            }
-            .frame(maxWidth: .infinity).frame(height: Theme.Menu.actionHeight)
+            Label(title, systemImage: symbol).font(Theme.Font.bodyStrong)
+                .padding(.horizontal, Theme.Space.m).frame(height: 32)
         }
         .buttonStyle(PanelPrimaryStyle())
     }
 }
 
-private struct PanelLastCapture: View {
-    let item: CaptureItem?
-    let image: CGImage?
+private struct PanelRecentCaptures: View {
+    let items: [CaptureItem]
+    let images: [String: CGImage]
     let loading: Bool
     let issue: String?
     let open: (CaptureItem) -> Void
     var body: some View {
-        Group {
-            if let item {
-                Button { open(item) } label: {
-                    HStack(spacing: 10) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: Theme.Radius.key).fill(Theme.Menu.inset.color)
-                            if let image {
-                                Image(decorative: image, scale: 1).resizable().scaledToFill()
-                            } else {
-                                Image(systemName: item.kind == .recording ? "video" : "photo")
-                                    .foregroundStyle(Theme.Palette.ink3.color)
-                            }
-                        }
-                        .frame(width: Theme.Menu.thumbnail.width, height: Theme.Menu.thumbnail.height)
-                        .clipShape(.rect(cornerRadius: Theme.Radius.key))
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(verbatim: item.title).font(.system(size: 13, weight: .medium)).lineLimit(1).truncationMode(.middle)
-                            HStack(spacing: Theme.Space.xs) {
-                                Text(kindLabel(item.kind))
-                                Text(verbatim: "·")
-                                Text(verbatim: PanelRelativeDate.string(for: item.createdAt))
-                            }.font(Theme.Font.dataSmall).foregroundStyle(Theme.Palette.ink3.color).lineLimit(1)
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                        Image(systemName: "arrow.up.and.down.and.arrow.left.and.right").font(.system(size: 10))
-                            .foregroundStyle(Theme.Palette.ink3.color).accessibilityHidden(true)
-                    }
-                    .padding(6)
-                }
-                .buttonStyle(PanelHoverStyle(radius: Theme.Radius.well + 2))
-                .onDrag { PanelCaptureDrag(item: item)?.provider() ?? NSItemProvider() }
-                .help("Open this capture or drag its file")
-            } else {
-                HStack(spacing: Theme.Space.s) {
-                    Image(systemName: loading ? "clock" : "photo")
-                    Text(loading ? "Loading captures…" : issue == nil ? "No captures yet" : "Captures unavailable")
-                        .font(Theme.Font.caption)
-                }.foregroundStyle(Theme.Palette.ink3.color).frame(maxWidth: .infinity)
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            Text("Recent captures").font(Theme.Font.captionStrong).foregroundStyle(Theme.Palette.ink3.color)
+                .padding(.bottom, Theme.Space.xs)
+            if items.isEmpty {
+                Label(loading ? "Loading captures…" : issue == nil ? "No captures yet" : "Captures unavailable",
+                      systemImage: loading ? "clock" : "photo")
+                    .font(Theme.Font.caption).foregroundStyle(Theme.Palette.ink3.color)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     .help(Text(verbatim: issue ?? ""))
+            } else {
+                ForEach(items) { item in
+                    Button { open(item) } label: {
+                        HStack(spacing: Theme.Space.s) {
+                            ZStack {
+                                Theme.Palette.well.color
+                                if let image = images[item.id] {
+                                    Image(decorative: image, scale: 1).resizable().scaledToFit()
+                                } else {
+                                    Image(systemName: item.kind == .recording ? "film" : "photo")
+                                        .foregroundStyle(Theme.Palette.ink3.color)
+                                }
+                            }
+                            .frame(width: 64, height: 42).clipShape(.rect(cornerRadius: Theme.Radius.key))
+                            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                                Text(verbatim: item.title).font(Theme.Font.bodyStrong).lineLimit(1)
+                                Text(verbatim: PanelRelativeDate.string(for: item.createdAt))
+                                    .font(Theme.Font.dataSmall).foregroundStyle(Theme.Palette.ink3.color).lineLimit(1)
+                            }.frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                        }.padding(Theme.Space.xs)
+                    }
+                    .buttonStyle(PanelHoverStyle(radius: Theme.Radius.thumb))
+                    .onDrag { PanelCaptureDrag(item: item)?.provider() ?? NSItemProvider() }
+                    .help("Open this capture or drag its file")
+                    .accessibilityLabel(Text(verbatim: item.title))
+                }
             }
         }
-        .frame(height: Theme.Menu.lastHeight)
-        .overlay { RoundedRectangle(cornerRadius: Theme.Radius.well + 2).strokeBorder(Theme.Menu.line.color, lineWidth: 0.5) }
-    }
-    private func kindLabel(_ kind: CaptureItem.Kind) -> LocalizedStringKey {
-        switch kind { case .screenshot: "Screenshot"; case .scrollCapture: "Scroll capture"; case .recording: "Recording" }
     }
 }
 
@@ -372,7 +314,7 @@ private struct PanelFooter: View {
                 HStack(spacing: Theme.Space.m) { Text("Open Camcord"); Text(verbatim: "⌘0").font(Theme.Font.dataSmall).foregroundStyle(Theme.Palette.ink3.color) }
             }
                 .keyboardShortcut("0", modifiers: .command)
-                .buttonStyle(PanelSecondaryStyle()).fixedSize(horizontal: true, vertical: false)
+                .buttonStyle(.plain).fixedSize(horizontal: true, vertical: false)
             Spacer()
             Menu {
                 Button("Library", action: actions.openLibrary)
@@ -384,18 +326,11 @@ private struct PanelFooter: View {
             .menuStyle(.borderlessButton).menuIndicator(.hidden).help("More destinations")
             Button(action: actions.openSettings) {
                 Image(systemName: "gearshape")
-                    .font(.system(size: 11, weight: .regular))
+                    .font(Theme.Font.body)
                     .foregroundStyle(Theme.Palette.ink2.color)
                     .frame(width: Theme.Menu.footerHeight, height: Theme.Menu.footerHeight)
             }.buttonStyle(.plain).help("Settings").accessibilityLabel("Settings")
         }.font(Theme.Font.body).frame(height: Theme.Menu.footerHeight)
-    }
-}
-
-private struct PanelChipSurface: ViewModifier {
-    func body(content: Content) -> some View {
-        content.background(Theme.Menu.inset.color, in: .capsule)
-            .overlay { Capsule().strokeBorder(Theme.Menu.line.color, lineWidth: 0.5) }
     }
 }
 
@@ -414,15 +349,15 @@ private struct PanelPrimaryStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.foregroundStyle(Theme.Palette.onRecord.color)
             .background(configuration.isPressed ? Theme.Palette.recordHover.color : Theme.Palette.record.color,
-                        in: .rect(cornerRadius: Theme.Radius.well))
-            .contentShape(.rect(cornerRadius: Theme.Radius.well))
+                        in: .capsule)
+            .contentShape(.capsule)
     }
 }
 
 private struct PanelSecondaryStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.horizontal, Theme.Space.m)
+        configuration.label
+            .padding(.horizontal, Theme.Space.s).frame(height: 32)
             .background(configuration.isPressed ? Theme.Palette.pressed.color : .clear,
                         in: .rect(cornerRadius: Theme.Radius.well))
             .overlay { RoundedRectangle(cornerRadius: Theme.Radius.well).strokeBorder(Theme.Menu.line.color, lineWidth: 0.5) }
@@ -833,7 +768,6 @@ private struct PanelChrome: ViewModifier {
     @Environment(\.camcordOpaqueMaterialPreview) private var opaquePreview
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.colorSchemeContrast) private var contrast
 
     func body(content: Content) -> some View {
         content.background {
@@ -843,30 +777,17 @@ private struct PanelChrome: ViewModifier {
             } else {
                 // A single native glass region owns the backdrop. SwiftUI controls
                 // remain above it, so their opaque fills are not glass content.
-                PanelGlassBackground(tint: resolvedTint,
-                                     appearance: colorScheme == .dark ? .darkAqua : .aqua)
+                PanelGlassBackground(appearance: colorScheme == .dark ? .darkAqua : .aqua)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
         }
     }
 
-    private var resolvedTint: NSColor {
-        let variant: ThemeColor.Variant
-        if contrast == .increased {
-            variant = colorScheme == .dark ? .highContrastDark : .highContrastLight
-        } else {
-            variant = colorScheme == .dark ? .dark : .light
-        }
-        let value = Theme.Menu.glassTint.value(variant)
-        return NSColor(srgbRed: CGFloat(value.red), green: CGFloat(value.green),
-                       blue: CGFloat(value.blue), alpha: CGFloat(value.alpha))
-    }
 }
 
-/// Menu-local Liquid Glass bridge, with explicit appearance and tint updates.
+/// One untinted system glass region, with stable explicit light/dark appearance.
 private struct PanelGlassBackground: NSViewRepresentable {
-    let tint: NSColor
     let appearance: NSAppearance.Name
 
     func makeNSView(context: Context) -> NSGlassEffectView {
@@ -888,9 +809,9 @@ private struct PanelGlassBackground: NSViewRepresentable {
     }
 
     private func configure(_ view: NSGlassEffectView) {
-        view.style = .regular
-        view.cornerRadius = Theme.Radius.floating
-        view.tintColor = tint
-        view.appearance = NSAppearance(named: appearance)
+        if view.style != .regular { view.style = .regular }
+        if view.cornerRadius != Theme.Radius.floating { view.cornerRadius = Theme.Radius.floating }
+        if view.tintColor != nil { view.tintColor = nil }
+        if view.appearance?.name != appearance { view.appearance = NSAppearance(named: appearance) }
     }
 }

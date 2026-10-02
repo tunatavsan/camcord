@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import QuartzCore
 import SwiftUI
 
 /// A nonactivating palette can accept key focus for controls such as the finished
@@ -60,13 +61,14 @@ final class PanelController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         hostingController = NSHostingController(rootView: CapturePanelView(model: model, actions: actions, library: library, defaults: defaults))
         super.init()
         popover.behavior = .transient
-        popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        popover.animates = false
         popover.delegate = self
         // Keep the controller's preferredContentSize synced to the SwiftUI content's
         // ideal size. Without a definite size the popover lays out in two passes and
         // anchors its beak against the wrong (pre-resize) frame — the panel then opens
         // a whole content-height below the status item instead of right under it.
         hostingController.sizingOptions = [.preferredContentSize]
+        hostingController.view.wantsLayer = true
         popover.contentViewController = hostingController
 
         Publishers.CombineLatest3(model.$state, model.$isFinishing, model.$finishedURL)
@@ -172,12 +174,12 @@ final class PanelController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         }
         if bumpToken { model.panelOpenToken &+= 1 }
         attachHostToPopover()
-        // Read this at every presentation so a live Reduce Motion preference change is
-        // honored without recreating the retained controller.
-        popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        // The retained content layer owns the entrance; avoid a second system animation.
+        popover.animates = false
         popover.behavior = model.state != .idle || model.isStarting || model.isArmed ? .applicationDefined : .transient
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         model.isPanelVisible = popover.isShown
+        if popover.isShown { animateEntrance() }
 
         // A rapid open → close → reopen can reach here before the previous close's
         // popoverDidClose has removed its monitor; drop any stale one first so it can't leak.
@@ -190,7 +192,7 @@ final class PanelController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             // A click landed in another app / the desktop while the panel is open.
             // Global monitors never see our own process's events, so this can't fire
-            // for a status-item click. Animated close (matches the system panels).
+            // for a status-item click.
             self?.popover.performClose(nil)
         }
     }
@@ -225,13 +227,25 @@ final class PanelController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             isFinishing: model.isFinishing,
             finishedURL: model.finishedURL
         )
-        panel.animationBehavior = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? .none : .utilityWindow
+        panel.animationBehavior = .none
+        let wasVisible = panel.isVisible
 
         // `.nonactivatingPanel` keeps the previous application active even when
         // an explicit presentation asks for keyboard focus. Passive completion and
         // status-anchor fallback presentations leave the current key window alone.
         detachedIsPresented = detachedPanelPresenter(panel, focusIfVisible)
         model.isPanelVisible = panel.isVisible
+        if panel.isVisible && !wasVisible { animateEntrance() }
+    }
+
+    private func animateEntrance() {
+        let view = hostingController.view
+        // Finish graph/layout work before the render server moves the retained panel layer.
+        view.layoutSubtreeIfNeeded()
+        guard let layer = view.layer else { return }
+        layer.removeAnimation(forKey: PanelEntranceMotion.offsetKey)
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        layer.add(PanelEntranceMotion.animation(), forKey: PanelEntranceMotion.offsetKey)
     }
 
     private func makeDetachedPanel() -> DetachedControlPanel {
@@ -336,8 +350,8 @@ final class PanelController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         }
 
         guard !NSEqualRects(panel.frame, frame) else { return }
-        let animate = panel.isVisible && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        panel.setFrame(frame, display: panel.isVisible, animate: animate)
+        // State changes resize atomically; the entrance layer owns presentation motion.
+        panel.setFrame(frame, display: panel.isVisible, animate: false)
     }
 
     private func screenAtMouseLocation() -> NSScreen? {
@@ -462,4 +476,17 @@ final class PanelController: NSObject, NSPopoverDelegate, NSWindowDelegate {
 
 private extension NSRect {
     var area: CGFloat { width * height }
+}
+
+private enum PanelEntranceMotion {
+    static let offsetKey = "panelEntranceOffset"
+    static func animation() -> CABasicAnimation {
+        let animation = CABasicAnimation(keyPath: "transform.translation.y")
+        animation.fromValue = 4
+        animation.toValue = 0
+        animation.duration = 0.14
+        animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        animation.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+        return animation
+    }
 }

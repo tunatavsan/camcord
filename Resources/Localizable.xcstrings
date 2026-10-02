@@ -1419,6 +1419,24 @@
         }
       }
     },
+    "Choose what the Record button captures": {
+      "comment": "Menu bar capture panel",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose what the Record button captures"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt düğmesinin neyi kaydedeceğini seçin"
+          }
+        }
+      }
+    },
     "Clear filters": {
       "extractionState": "manual",
       "comment": "Library interface",
@@ -2081,6 +2099,24 @@
         }
       }
     },
+    "Disable for the next recording": {
+      "comment": "Menu bar capture panel",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disable for the next recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sonraki kayıt için kapat"
+          }
+        }
+      }
+    },
     "Discard edits and open": {
       "extractionState": "manual",
       "comment": "Screenshot editor",
@@ -2450,6 +2486,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Verimli · küçük"
+          }
+        }
+      }
+    },
+    "Elapsed time": {
+      "comment": "Menu bar capture panel",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Elapsed time"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geçen süre"
           }
         }
       }
@@ -5384,6 +5438,24 @@
         }
       }
     },
+    "Ready to start": {
+      "comment": "Menu bar capture panel",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ready to start"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Başlamaya hazır"
+          }
+        }
+      }
+    },
     "Ready to test": {
       "extractionState": "manual",
       "comment": "Studio interface",
@@ -5398,6 +5470,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Teste hazır"
+          }
+        }
+      }
+    },
+    "Recent captures": {
+      "comment": "Menu bar capture panel",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recent captures"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Son çekimler"
           }
         }
       }
@@ -6924,6 +7014,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bazı kopyalanan çekimler okunamadı veya Çöp Sepeti’ne taşınamadı. Klasör erişimini kontrol edip tekrar dene."
+          }
+        }
+      }
+    },
+    "Source locked": {
+      "comment": "Menu bar capture panel",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source locked"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaynak kilitli"
           }
         }
       }
@@ -9808,6 +9916,24 @@
         }
       }
     },
+    "Capture": {
+      "comment": "Menu bar capture panel",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capture"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çekim"
+          }
+        }
+      }
+    },
     "Capture Region": {
       "localizations": {
         "en": {
@@ -10300,6 +10426,24 @@
         }
       }
     },
+    "Enable for the next recording": {
+      "comment": "Menu bar capture panel",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable for the next recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sonraki kayıt için aç"
+          }
+        }
+      }
+    },
     "Enabled for recording": {
       "extractionState": "manual",
       "comment": "Capture menu",
@@ -10314,6 +10458,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kayıt için açık"
+          }
+        }
+      }
+    },
+    "Finish or cancel recording to change this setting": {
+      "comment": "Menu bar capture panel",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finish or cancel recording to change this setting"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu ayarı değiştirmek için kaydı bitirin veya iptal edin"
           }
         }
       }

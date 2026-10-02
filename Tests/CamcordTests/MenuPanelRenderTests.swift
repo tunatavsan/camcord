@@ -120,7 +120,7 @@ struct MenuPanelRenderTests {
     private func writeMetadata(window: NSWindow, underlay: NSWindow, model: RecordingStateModel, store: LibraryStore, output: URL) throws {
         let frame = window.frame
         let contentBounds = try #require(window.contentView?.bounds)
-        guard frame.size == CGSize(width: 320, height: 370),
+        guard frame.size == CGSize(width: CapturePanelView.panelWidth, height: CapturePanelView.panelHeight),
               contentBounds.width > 0, contentBounds.height > 0 else {
             throw CocoaError(.featureUnsupported)
         }
@@ -133,7 +133,7 @@ struct MenuPanelRenderTests {
         }
         let state: [String: Any] = ["pid": pid, "executablePath": Bundle.main.executableURL?.path ?? "",
             "appActive": NSApp.isActive, "module": "panel", "actualrecordingState": model.state == .idle ? "idle" : "unexpected",
-            "captureCount": store.items.count, "requestedOuterSize": [320, 370], "panelVisible": model.isPanelVisible,
+            "captureCount": store.items.count, "requestedOuterSize": [CapturePanelView.panelWidth, CapturePanelView.panelHeight], "panelVisible": model.isPanelVisible,
             "appearance": window.effectiveAppearance.name.rawValue,
             "reduceTransparency": NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency,
             "resolvedRecordSRGB": recordSRGB, "resolvedRecordSRGB8": recordSRGB.map { Int(($0 * 255).rounded()) },

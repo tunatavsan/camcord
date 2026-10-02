@@ -29,13 +29,13 @@ struct PanelLayoutTests {
 
     @Test("the capture palette stays compact in every recording state")
     func sizeTable() {
-        #expect(CapturePanelView.panelWidth == 320)
-        #expect(CapturePanelView.panelHeight == 370)
+        #expect(CapturePanelView.panelWidth == 360)
+        #expect(CapturePanelView.panelHeight == 492)
         // Recording status uses the same compact palette footprint as idle capture.
         #expect(CapturePanelView.activeHeight == CapturePanelView.panelHeight)
         for height in [CapturePanelView.panelHeight, CapturePanelView.activeHeight,
                        CapturePanelView.finishingHeight, CapturePanelView.finishedHeight] {
-            #expect(height <= CapturePanelView.finishedHeight)
+            #expect(height <= 520)
         }
 
     }
@@ -206,6 +206,82 @@ struct PanelLayoutTests {
 
 @Suite("Panel actual Library context", .serialized, .timeLimit(.minutes(1))) @MainActor
 struct PanelContextTests {
+    @Test("source choice waits for Record and dispatches the chosen existing action")
+    func sourceChoice() {
+        let context = PanelPresentation(library: nil, defaults: nil)
+        var dispatched: [PanelRecordingSource] = []
+        var actions = PanelActions()
+        actions.toggleRecording = { dispatched.append(.region) }
+        actions.recordWindow = { dispatched.append(.window) }
+        actions.recordFullScreen = { dispatched.append(.screen) }
+        context.synchronize(visible: true)
+        for source in PanelRecordingSource.allCases {
+            let count = dispatched.count
+            context.selectSource(source, canConfigure: true)
+            #expect(context.recordingSource == source)
+            #expect(dispatched.count == count)
+            context.startRecording(using: actions)
+            #expect(dispatched.last == source && dispatched.count == count + 1)
+        }
+        context.selectSource(.window, canConfigure: false)
+        #expect(context.recordingSource == .screen)
+        context.synchronize(visible: false)
+        context.startRecording(using: actions)
+        #expect(dispatched.count == 3)
+        context.synchronize(visible: true)
+        #expect(context.recordingSource == .screen)
+        context.synchronize(visible: false)
+    }
+
+    @Test("device buttons persist only their own idle recording settings in the supplied suite")
+    func deviceSettings() throws {
+        let f = try PanelContextFixture(); defer { f.close() }
+        var expected = RecordingSettings()
+        expected.microphone = false
+        expected.camera.enabled = false
+        expected.microphoneGainDB = 3
+        expected.save(to: f.defaults)
+        let context = PanelPresentation(library: nil, defaults: f.defaults)
+        context.synchronize(visible: true, reloadSettings: true)
+        context.toggleCamera(canConfigure: true)
+        expected.camera.enabled = true
+        #expect(RecordingSettings.load(from: f.defaults) == expected)
+        context.toggleMicrophone(canConfigure: true)
+        expected.microphone = true
+        #expect(RecordingSettings.load(from: f.defaults) == expected)
+        #expect(context.settings == expected)
+        context.toggleCamera(canConfigure: false)
+        context.toggleMicrophone(canConfigure: false)
+        #expect(RecordingSettings.load(from: f.defaults) == expected)
+        context.synchronize(visible: false)
+        context.toggleCamera(canConfigure: true)
+        #expect(RecordingSettings.load(from: f.defaults) == expected)
+    }
+
+    @Test("recent captures use at most three canonical newest files and release thumbnails while hidden")
+    func recentCaptures() async throws {
+        let f = try PanelContextFixture(); defer { f.close() }
+        for index in 1...4 {
+            let url = try f.png("capture-\(index).png")
+            try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(Double(index))], ofItemAtPath: url.path)
+        }
+        let store = f.store(); await store.refresh()
+        store.search = "no matches"; store.filter = .recording
+        let image = try f.image()
+        var loaded = [String]()
+        let context = PanelPresentation(library: store, defaults: f.defaults, loadThumbnail: { item in
+            loaded.append(item.id); return image
+        })
+        context.synchronize(visible: true)
+        #expect(context.recent.map(\.title) == ["capture-4", "capture-3", "capture-2"])
+        while context.thumbnails.count < 3 { try Task.checkCancellation(); await Task.yield() }
+        #expect(loaded == context.recent.map(\.id))
+        #expect(store.filteredItems.isEmpty)
+        context.synchronize(visible: false)
+        #expect(context.recent.isEmpty && context.thumbnails.isEmpty)
+        #expect(store.watcherCount == 0)
+    }
+
     @Test("last capture uses canonical newest despite the Library's filter and opens its existing route")
     func canonicalNewestAndOpen() async throws {
         let f = try PanelContextFixture(); defer { f.close() }
@@ -275,7 +351,7 @@ struct PanelContextTests {
         let old = try #require(store.items.first)
         let gate = PanelThumbnailGate(), fresh = try f.image()
         let context = PanelPresentation(library: store, defaults: f.defaults, loadThumbnail: { item in
-            item.id == old.id ? await gate.wait() : fresh
+            item.id == old.id && !gate.started ? await gate.wait() : fresh
         })
         context.synchronize(visible: true)
         while !gate.started { try Task.checkCancellation(); await Task.yield() }

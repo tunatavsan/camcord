@@ -1,8 +1,27 @@
 import AppKit
 import Observation
+import SwiftUI
 import UniformTypeIdentifiers
 
-/// Read-only panel context. A retained popover host is not evidence of visibility.
+enum PanelRecordingSource: String, CaseIterable, Identifiable {
+    case region, window, screen
+    var id: Self { self }
+    var label: LocalizedStringKey {
+        switch self { case .region: "Region"; case .window: "Window"; case .screen: "Screen" }
+    }
+    var symbol: String {
+        switch self { case .region: "rectangle.dashed"; case .window: "macwindow"; case .screen: "display" }
+    }
+    @MainActor func start(using actions: PanelActions) {
+        switch self {
+        case .region: actions.toggleRecording()
+        case .window: actions.recordWindow()
+        case .screen: actions.recordFullScreen()
+        }
+    }
+}
+
+/// Panel-local setup and recent captures. A retained host is not evidence of visibility.
 @MainActor @Observable
 final class PanelPresentation {
     let library: LibraryStore?
@@ -10,13 +29,16 @@ final class PanelPresentation {
     @ObservationIgnored private let loadThumbnail: @MainActor (CaptureItem) async -> CGImage?
     @ObservationIgnored private var lease: UUID?
     @ObservationIgnored private var request: Task<Void, Never>?
-    @ObservationIgnored private var requestItem: CaptureItem?
+    @ObservationIgnored private var requestedItems = [CaptureItem]()
     @ObservationIgnored private var revision: UInt64 = 0
     private(set) var visible = false
     private(set) var settings: RecordingSettings?
-    private(set) var thumbnail: CGImage?
+    private(set) var thumbnails = [String: CGImage]()
+    private(set) var recordingSource: PanelRecordingSource = .region
 
     var latest: CaptureItem? { visible ? library?.items.first : nil }
+    var recent: [CaptureItem] { visible ? Array(library?.items.prefix(3) ?? []) : [] }
+    var thumbnail: CGImage? { latest.flatMap { thumbnails[$0.id] } }
 
     init(library: LibraryStore?, defaults: UserDefaults?,
          loadThumbnail: (@MainActor (CaptureItem) async -> CGImage?)? = nil) {
@@ -41,21 +63,49 @@ final class PanelPresentation {
             library?.releaseVisibility(lease)
             self.lease = nil
         }
-        let item = latest
-        guard item != requestItem else { return }
+        let items = recent
+        guard items != requestedItems else { return }
         revision &+= 1
         request?.cancel()
         request = nil
-        requestItem = item
-        thumbnail = nil
-        guard let item else { return }
+        requestedItems = items
+        thumbnails = [:]
+        guard !items.isEmpty else { return }
         let token = revision, loader = loadThumbnail
         request = Task { [weak self] in
-            let image = await loader(item)
-            guard let self, !Task.isCancelled, self.visible,
-                  self.revision == token, self.latest == item else { return }
-            self.thumbnail = image
+            for item in items {
+                let image = await loader(item)
+                guard let self, !Task.isCancelled, self.visible,
+                      self.revision == token, self.recent == items else { return }
+                if let image { self.thumbnails[item.id] = image }
+            }
         }
+    }
+
+    func selectSource(_ source: PanelRecordingSource, canConfigure: Bool) {
+        guard visible, canConfigure else { return }
+        recordingSource = source
+    }
+
+    func startRecording(using actions: PanelActions) {
+        guard visible else { return }
+        recordingSource.start(using: actions)
+    }
+
+    func toggleCamera(canConfigure: Bool) {
+        guard visible, canConfigure, let defaults else { return }
+        var settings = RecordingSettings.load(from: defaults)
+        settings.camera.enabled.toggle()
+        settings.save(to: defaults)
+        self.settings = settings
+    }
+
+    func toggleMicrophone(canConfigure: Bool) {
+        guard visible, canConfigure, let defaults else { return }
+        var settings = RecordingSettings.load(from: defaults)
+        settings.microphone.toggle()
+        settings.save(to: defaults)
+        self.settings = settings
     }
 
     func open(_ item: CaptureItem) async { await library?.open(item) }
