@@ -9472,6 +9472,22 @@
         }
       }
     },
+    "The selection could not appear. Try the capture again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selection could not appear. Try the capture again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçim alanı açılamadı. Çekimi yeniden deneyin."
+          }
+        }
+      }
+    },
     "The edit could not be completed": {
       "localizations": {
         "en": {

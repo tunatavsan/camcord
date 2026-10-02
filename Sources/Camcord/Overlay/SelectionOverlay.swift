@@ -45,8 +45,22 @@ final class SelectionPanel: NSPanel {
 /// for the next call to `selectRegion()`.
 @MainActor
 final class SelectionOverlayController: NSObject, SelectionViewDelegate {
+    struct PresentationProbe {
+        var read: @MainActor () -> (visible: Int, total: Int, targetVisible: Bool)
+        var observe: @MainActor (@escaping @MainActor () -> Void) -> (@MainActor () -> Void)
+    }
+
+    struct PresentationTiming {
+        var now: @MainActor () -> ContinuousClock.Instant = { .now }
+        var waitUntil: @MainActor (ContinuousClock.Instant) async throws -> Void = {
+            try await ContinuousClock().sleep(until: $0)
+        }
+    }
+
     private let shareableContentCache: ShareableContentCache
     private let presentation: (@MainActor () -> Void)?
+    private let presentationProbe: PresentationProbe?
+    private let presentationTiming: PresentationTiming
     private let clickedResolver: (@MainActor (CGPoint) async -> SCWindow?)?
     private let frozenResolver: (@MainActor (CGWindowID) async -> SCWindow?)?
 
@@ -64,11 +78,13 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     /// This exists before a hold snapshot arrives, so dragging can be clamped immediately.
     private var constrainedCGFrame: CGRect?
     private var isPresenting = false
-    /// Phase R (G.3 adaptive): set when the 50 ms visibility probe found the ordered
-    /// panels covered — a fullscreen game sits above `.screenSaver`, so the gesture can
-    /// never be drawn. The caller reads it once with `consumeBlindPresentation()` to tell
-    /// this apart from a user cancel and capture without UI instead.
+    /// A timed-out presentation is different from a user cancel. The caller decides whether
+    /// the measured fullscreen context allows capture without selection UI.
     private var presentationWasBlind = false
+    private var presentationGeneration = 0
+    private var cancelPresentationObservation: (@MainActor () -> Void)?
+    private var presentationTimeoutTask: Task<Void, Never>?
+    private static let presentationTimeout = Duration.milliseconds(500)
 
     // Global = AppKit screen space (bottom-left origin, Y up).
     private var dragAnchor: CGPoint?
@@ -101,10 +117,14 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
 
     init(shareableContentCache: ShareableContentCache,
          presentation: (@MainActor () -> Void)? = nil,
+         presentationProbe: PresentationProbe? = nil,
+         presentationTiming: PresentationTiming = PresentationTiming(),
          clickedResolver: (@MainActor (CGPoint) async -> SCWindow?)? = nil,
          frozenResolver: (@MainActor (CGWindowID) async -> SCWindow?)? = nil) {
         self.shareableContentCache = shareableContentCache
         self.presentation = presentation
+        self.presentationProbe = presentationProbe
+        self.presentationTiming = presentationTiming
         self.clickedResolver = clickedResolver
         self.frozenResolver = frozenResolver
     }
@@ -251,7 +271,11 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     private func presentPanels(seedWindowSnap: Bool = true) {
         presentationWasBlind = false
         // A presenter can leave the real continuation/gesture lifecycle offscreen.
-        if let presentation { presentation(); return }
+        if let presentation {
+            presentation()
+            if let presentationProbe { observePresentation(presentationProbe) }
+            return
+        }
         let started = ContinuousClock.now
         // No screens (all displays asleep/detached): without this guard no panel is
         // ever created, so no event could resume the continuation -- selectRegion()
@@ -352,21 +376,19 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         // above .screenSaver. Report whether the panels actually made it on screen.
         TriggerLog.overlay("ordered=\(panels.count) buildMs=\(CaptureCoordinator.elapsedMs(since: started))")
         let ordered = panels
-        let isHoldSession = holdEndHandler != nil
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(50))
-            let visible = ordered.filter { $0.occlusionState.contains(.visible) }.count
-            let targetVisible = probed?.occlusionState.contains(.visible) ?? false
-            TriggerLog.overlay("visible=\(visible)/\(ordered.count) cursorDisplay=\(targetVisible)")
-            // The probe outlives its session (a pick or Esc can land inside the 50 ms), so
-            // only the presentation it was started for may be abandoned.
-            guard self.isPresenting, self.panels.first === ordered.first,
-                Self.presentationIsBlind(orderedPanels: ordered.count, targetVisible: targetVisible, isHoldSession: isHoldSession)
-            else { return }
-            TriggerLog.overlay("blind=1 falling back to a UI-less capture")
-            self.presentationWasBlind = true
-            self.finish(nil)
-        }
+        observePresentation(PresentationProbe(read: {
+            (ordered.filter { Self.windowIsObservedVisible($0) }.count,
+             ordered.count, probed.map { Self.windowIsObservedVisible($0) } ?? false)
+        }, observe: { changed in
+            let observers = ordered.flatMap { panel in
+                [NSWindow.didChangeOcclusionStateNotification, NSWindow.didUpdateNotification].map { name in
+                    NotificationCenter.default.addObserver(forName: name, object: panel, queue: .main) { _ in
+                        MainActor.assumeIsolated { changed() }
+                    }
+                }
+            }
+            return { for observer in observers { NotificationCenter.default.removeObserver(observer) } }
+        }))
 
         // Seed window-snap for the cursor's RESTING position: tracking areas emit no
         // mouseMoved for a cursor already inside the view, so the natural
@@ -389,6 +411,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     }
 
     private func teardown() {
+        stopObservingPresentation()
         // Orphan any in-flight window-snap lookup so it can't write into the next session.
         snapGeneration &+= 1
         clickGeneration &+= 1
@@ -419,15 +442,66 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         activeIsRight = false   // never let a prior right-drag leak into the next session's mode/visual
     }
 
-    /// Pure decision behind the G.3 adaptive fallback: panels were ordered front, the one on
-    /// the cursor's display is not on screen 50 ms later, and this is not a hold session
-    /// (whose panels appear only once the drag crosses the movement threshold, so "not
-    /// visible" is normal there).
+    private func observePresentation(_ probe: PresentationProbe) {
+        stopObservingPresentation()
+        let generation = presentationGeneration
+        let orderedAt = presentationTiming.now()
+        let deadline = orderedAt + Self.presentationTimeout
+        let isHoldSession = holdEndHandler != nil
+        let check: @MainActor (Bool) -> Void = { [weak self] timedOut in
+            guard let self, self.isPresenting, self.presentationGeneration == generation else { return }
+            let state = probe.read()
+            guard state.targetVisible || timedOut else { return }
+            let elapsed = (self.presentationTiming.now() - orderedAt).components
+            let milliseconds = elapsed.seconds * 1000 + elapsed.attoseconds / 1_000_000_000_000_000
+            TriggerLog.overlay("visible=\(state.visible)/\(state.total) cursorDisplay=\(state.targetVisible) observedWindowVisibleMs=\(milliseconds)")
+            self.stopObservingPresentation()
+            if Self.presentationIsBlind(orderedPanels: state.total, targetVisible: state.targetVisible,
+                                        isHoldSession: isHoldSession) {
+                TriggerLog.overlay("blind=1 selection presentation timed out")
+                self.presentationWasBlind = true
+                self.finish(nil)
+            }
+        }
+        cancelPresentationObservation = probe.observe { check(false) }
+        // Ordering can already have delivered an occlusion notification before registration.
+        check(false)
+        guard presentationGeneration == generation else { return }
+        let waitUntil = presentationTiming.waitUntil
+        presentationTimeoutTask = Task { @MainActor in
+            do { try await waitUntil(deadline) } catch { return }
+            guard !Task.isCancelled else { return }
+            check(true)
+        }
+    }
+
+    private func stopObservingPresentation() {
+        presentationGeneration &+= 1
+        presentationTimeoutTask?.cancel()
+        presentationTimeoutTask = nil
+        cancelPresentationObservation?()
+        cancelPresentationObservation = nil
+    }
+
+    /// AppKit's ordered flag alone is not presentation. Require native occlusion visibility
+    /// and the owned panel's onscreen WindowServer record; this does not claim GPU first paint.
+    private static func windowIsObservedVisible(_ panel: SelectionPanel) -> Bool {
+        guard panel.isVisible, panel.occlusionState.contains(.visible), panel.windowNumber > 0,
+              let windows = CGWindowListCopyWindowInfo(.optionIncludingWindow, CGWindowID(panel.windowNumber)) as? [[String: Any]]
+        else { return false }
+        return windows.contains {
+            $0[kCGWindowNumber as String] as? Int == panel.windowNumber
+                && $0[kCGWindowOwnerPID as String] as? pid_t == ProcessInfo.processInfo.processIdentifier
+                && $0[kCGWindowIsOnscreen as String] as? Bool == true
+        }
+    }
+
+    /// A timeout can end an ordinary selection; hold panels are driven by the event tap.
     static func presentationIsBlind(orderedPanels: Int, targetVisible: Bool, isHoldSession: Bool) -> Bool {
         orderedPanels > 0 && !targetVisible && !isHoldSession
     }
 
-    /// True once per blind presentation: the caller falls back to a UI-less capture.
+    /// True once per timed-out presentation; this does not authorize a fullscreen capture.
     func consumeBlindPresentation() -> Bool {
         defer { presentationWasBlind = false }
         return presentationWasBlind

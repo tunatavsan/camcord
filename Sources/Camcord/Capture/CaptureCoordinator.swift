@@ -19,6 +19,12 @@ final class CaptureCoordinator {
         var captureFrozenDesktop: (ResolutionScale, CGPoint) async throws -> FrozenDesktopSnapshot = { scale, anchor in
             try await ScreenshotService.captureFrozenDesktop(resolutionScale: scale, atCGPoint: anchor)
         }
+        var regionCursorPoint: () -> CGPoint? = {
+            guard let height = NSScreen.screens.first?.frame.height else { return nil }
+            return Geometry.appKitToCG(CGRect(origin: NSEvent.mouseLocation, size: .zero),
+                                       primaryScreenHeight: height).origin
+        }
+        var regionFullscreenContext: () -> FullscreenContext = { FullscreenContext.current() }
         var recognize: (CGImage) async throws -> String = { try await TextRecognitionService.read(in: $0).clipboardString }
         var recognitionFinished: () -> Void = {}
         var tagScrollCapture: @Sendable (URL) -> Bool = { CaptureFileRules.tagScrollCapture($0) }
@@ -125,11 +131,11 @@ final class CaptureCoordinator {
     /// contains our own dimming/selection chrome.
     private static let postHideDelay: Duration = .milliseconds(80)
 
-    init(operations: Operations = Operations()) {
+    init(operations: Operations = Operations(), selectionOverlay: SelectionOverlayController? = nil) {
         self.operations = operations
         let cache = ShareableContentCache()
         self.cache = cache
-        overlay = SelectionOverlayController(shareableContentCache: cache)
+        overlay = selectionOverlay ?? SelectionOverlayController(shareableContentCache: cache)
         invalidator = ShareableContentCacheInvalidator(cache: cache)
     }
 
@@ -179,6 +185,8 @@ final class CaptureCoordinator {
         guard preflightScreenCapture("captureRegionInteractive") else { return }
         let acceptedToken = clipboardRequests.begin()
         let settings = operations.screenshotSettings()
+        // Measure before any await or overlay ordering changes the app/window in front.
+        let fullscreenContext = operations.regionFullscreenContext()
         do {
             guard let cursorPoint = currentCursorCGPoint() else {
                 fail("Frozen region capture: no display under the pointer")
@@ -187,17 +195,18 @@ final class CaptureCoordinator {
             // Timed because the first one of these in a process is a suspect for the
             // one-off stall; the file says whether the wait was here or in the overlay.
             let snapshotStart = ContinuousClock.now
-            let snapshot = try await ScreenshotService.captureFrozenDesktop(
-                resolutionScale: settings.resolutionScale,
-                atCGPoint: cursorPoint
-            )
+            let snapshot = try await operations.captureFrozenDesktop(settings.resolutionScale, cursorPoint)
             DiagnosticsLog.append("region frozen-snapshot ms=\(Self.elapsedMs(since: snapshotStart))")
             guard let (selection, mode) = await overlay.selectFrozen(snapshot: snapshot) else {
-                // G.3 adaptive: the overlay never reached the screen (a fullscreen game is
-                // above it), so the trigger would otherwise do nothing. The frozen display
-                // in hand is exactly what the owner wanted a shot of.
                 if overlay.consumeBlindPresentation() {
-                    await performFrozenScreenshot(snapshot, cgRect: snapshot.desktopBounds, sound: .fullScreenShot, acceptedToken: acceptedToken)
+                    if fullscreenContext.isGameLike || fullscreenContext.coversDisplay {
+                        TriggerLog.overlay("UI-less capture allowed by fullscreen context \(fullscreenContext.logLine)")
+                        await performFrozenScreenshot(snapshot, cgRect: snapshot.desktopBounds, sound: .fullScreenShot, acceptedToken: acceptedToken)
+                    } else {
+                        fail("Region selection could not appear; fullscreen fallback refused")
+                        onToast?(ToastRequest(text: String(localized: "The selection could not appear. Try the capture again."),
+                                              systemSymbol: "exclamationmark.triangle", tint: .systemOrange, important: true))
+                    }
                 }
                 return
             }
@@ -548,12 +557,7 @@ final class CaptureCoordinator {
     }
 
     private func currentCursorCGPoint() -> CGPoint? {
-        guard let primaryHeight = NSScreen.screens.first?.frame.height else { return nil }
-        let point = NSEvent.mouseLocation
-        return Geometry.appKitToCG(
-            CGRect(origin: point, size: .zero),
-            primaryScreenHeight: primaryHeight
-        ).origin
+        operations.regionCursorPoint()
     }
 
     private func displayFrame(containingCGPoint point: CGPoint) -> CGRect? {
