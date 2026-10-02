@@ -53,7 +53,34 @@ struct EditorWorkspace: View {
     }
     private var showsStyle: Bool { session.selectedAnnotation != nil || session.tool != .select && session.tool != .crop }
 
+    /// The background inspector is a column on the window's one glass surface, beside the
+    /// canvas: no separate floating panel with its own frame (owner, 2026-10-02).
     var body: some View {
+        withDocumentHandling(HStack(spacing: 0) {
+            workspace
+            if inspectorPresentation.wrappedValue {
+                HStack(spacing: 0) {
+                    PaneDivider()
+                    EditorBackgroundInspector(session: session)
+                        .frame(width: Theme.Editor.inspectorWidth)
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        })
+        .animation(Theme.Motion.resolve(Theme.Motion.panel, reduceMotion: reduceMotion),
+                   value: inspectorPresentation.wrappedValue)
+        .toolbar { toolbarContent }
+        .labelStyle(.iconOnly)
+        .onChange(of: isActive, initial: true) { _, active in
+            activity.update(active: active, session: session, library: services?.library) {
+                await services?.openLatestEditorCaptureIfEmpty()
+            }
+            if !active { quickLook.close() }
+        }
+        .onDisappear { activity.update(active: false, session: session); quickLook.close() }
+    }
+
+    private var workspace: some View {
         ZStack {
             if session.document == nil {
                 EditorEmptyView(services: services, open: { if session.isActive { session.chooseImage() } })
@@ -86,11 +113,9 @@ struct EditorWorkspace: View {
         .disabled(!isActive)
         .allowsHitTesting(isActive)
         .accessibilityHidden(!isActive)
-        .inspector(isPresented: inspectorPresentation) {
-            EditorBackgroundInspector(session: session)
-                .inspectorColumnWidth(Theme.Editor.inspectorWidth)
-        }
-        .toolbar {
+    }
+
+    @ToolbarContentBuilder private var toolbarContent: some ToolbarContent {
             if isActive {
                 ToolbarItemGroup(placement: .navigation) {
                     Button("Undo", systemImage: "arrow.uturn.backward", action: { if session.isActive { session.undo() } })
@@ -129,15 +154,10 @@ struct EditorWorkspace: View {
                     } label: { Label("More", systemImage: "ellipsis") }
                 }
             }
-        }
-        .labelStyle(.iconOnly)
-        .onChange(of: isActive, initial: true) { _, active in
-            activity.update(active: active, session: session, library: services?.library) {
-                await services?.openLatestEditorCaptureIfEmpty()
-            }
-            if !active { quickLook.close() }
-        }
-        .onDisappear { activity.update(active: false, session: session); quickLook.close() }
+    }
+
+    @ViewBuilder private func withDocumentHandling(_ content: some View) -> some View {
+        content
         .alert("The edit could not be completed", isPresented: Binding(get: { isActive && session.error != nil && session.pendingURL == nil && session.pendingCapture == nil }, set: { if isActive && !$0 { session.error = nil } })) {
             Button("Dismiss") { session.error = nil }
         } message: { Text(verbatim: session.error ?? "") }

@@ -66,6 +66,41 @@ extension View {
     }
 }
 
+// MARK: - Signature frame
+
+/// Camcord's signature (owner, 2026-10-02): every glass surface wears the same clear, light
+/// rim. It is NOT an appearance colour: the rim reads the same in light and dark, like the
+/// edge of a pane of glass. A faint outer line keeps it separate from a light backdrop.
+enum SignatureFrame {
+    static let rim = NSColor(white: 1, alpha: 0.42)
+    static let edge = NSColor(white: 0, alpha: 0.10)
+    static let width: CGFloat = 1
+}
+
+private struct SignatureFrameModifier: ViewModifier {
+    let cornerRadius: CGFloat
+    func body(content: Content) -> some View {
+        content.overlay {
+            ZStack {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(Color(nsColor: SignatureFrame.edge), lineWidth: SignatureFrame.width)
+                RoundedRectangle(cornerRadius: max(0, cornerRadius - SignatureFrame.width), style: .continuous)
+                    .strokeBorder(Color(nsColor: SignatureFrame.rim), lineWidth: SignatureFrame.width)
+                    .padding(SignatureFrame.width)
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+    }
+}
+
+extension View {
+    /// Draws the signature rim around a glass surface whose corners are `cornerRadius`.
+    func signatureFrame(cornerRadius: CGFloat) -> some View {
+        modifier(SignatureFrameModifier(cornerRadius: cornerRadius))
+    }
+}
+
 // MARK: - AppKit twin
 
 extension NSGlassEffectView {
@@ -87,13 +122,13 @@ extension NSGlassEffectView {
 
 // MARK: - Window backdrops
 
-/// Passive window surfaces beneath pages. Content uses untinted system Liquid Glass;
-/// thumbnails, previews, video and form cards keep their own opaque surfaces above it.
-/// The native split-view sidebar supplies its own glass; the sidebar case supports legacy clients.
+/// Passive window surfaces beneath pages. The window is one untinted system Liquid Glass
+/// surface; thumbnails, previews, video and form cards keep their own opaque surfaces above it.
+/// The sidebar case supports legacy clients.
 enum WindowBackdrop: CaseIterable, Sendable {
     /// A legacy whole-height sidebar backdrop.
     case sidebar
-    /// An inset content pane matching the native sidebar's glass family.
+    /// The whole window as one glass frame, sidebar and module together.
     case content
 
     /// Legacy material metadata. The content pane is rendered with `glassEffect` instead.
@@ -143,14 +178,22 @@ private struct WindowBackdropModifier: ViewModifier {
         content.background {
             Group {
                 if backdrop == .content {
-                    Group {
-                        if reduceTransparency {
-                            contentShape.fill(backdrop.solid.color)
-                        } else {
-                            Color.clear.glassEffect(.regular, in: contentShape)
+                    // The whole app sits in ONE framed glass panel, the one the native sidebar
+                    // wore (owner, 2026-10-02): inset from the window's edge, its rim visible,
+                    // the sidebar and the module inside it with no gap between them.
+                    ZStack {
+                        Color(nsColor: .windowBackgroundColor)
+                        Group {
+                            if reduceTransparency {
+                                RoundedRectangle(cornerRadius: Theme.Radius.floating, style: .continuous)
+                                    .fill(backdrop.solid.color)
+                            } else {
+                                WindowFrameGlass()
+                            }
                         }
+                        .signatureFrame(cornerRadius: Theme.Radius.floating)
+                        .padding(Theme.Navigation.nativeSidebarInset)
                     }
-                    .padding(Theme.Navigation.nativeSidebarInset)
                 } else if reduceTransparency {
                     backdrop.solid.color
                 } else {
@@ -160,16 +203,27 @@ private struct WindowBackdropModifier: ViewModifier {
                     }
                 }
             }
-            // Preserve the split view's horizontal reservation while extending beneath the titlebar.
-            .ignoresSafeArea(edges: backdrop == .content ? [.top, .bottom] : .all)
+            .ignoresSafeArea()
             .allowsHitTesting(false)
             .accessibilityHidden(true)
         }
     }
 
-    private var contentShape: ConcentricRectangle {
-        ConcentricRectangle(corners: .concentric(minimum: .fixed(Theme.Navigation.nativeSidebarInset)))
+}
+
+/// The app's frame: one system glass panel whose rim is the visible border.
+private struct WindowFrameGlass: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSGlassEffectView {
+        let view = NSGlassEffectView()
+        view.style = .regular
+        view.tintColor = nil
+        view.cornerRadius = Theme.Radius.floating
+        view.contentView = NSView()
+        view.setAccessibilityHidden(true)
+        return view
     }
+
+    func updateNSView(_ view: NSGlassEffectView, context: Context) {}
 }
 
 extension View {

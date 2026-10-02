@@ -106,33 +106,39 @@ struct MainWindowView: View {
 
     private var module: any CamcordModule { ModuleRegistry.module(model.selection) ?? ModuleRegistry.all[0] }
 
+    /// The whole app in one framed glass panel: the sidebar and the module side by side inside
+    /// it, divided by a hairline, never a gap (the system split view would float the sidebar as
+    /// a second panel of its own).
     var body: some View {
-        NavigationSplitView(columnVisibility: $model.sidebarColumnVisibility) {
-            ZStack {
-                if model.selection == .settings {
-                    SettingsSidebar(model: model)
-                        .transition(.opacity)
-                } else {
-                    MainWindowSidebar(selection: $model.selection)
-                        .transition(.opacity)
-                }
+        HStack(spacing: 0) {
+            if model.sidebarVisible {
+                sidebar
+                    .frame(width: Theme.Navigation.sidebarBoundary)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+                PaneDivider()
             }
-            .animation(Theme.Motion.resolve(Theme.Motion.panel, reduceMotion: reduceMotion),
-                       value: model.selection == .settings)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if let library = services?.library { LibrarySidebarFooter(store: library) }
-            }
-            .navigationSplitViewColumnWidth(Theme.Navigation.sidebarWidth)
-        } detail: {
             RetainedModuleStack(selection: model.selection, model: model) { id in
                 RegisteredModuleView(id: id, services: services, studioCallbacks: studioCallbacks)
                     .equatable()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .windowBackdrop(.content)
             .navigationTitle(Text(module.title))
         }
-        .navigationSplitViewStyle(.balanced)
+        // Everything stays inside the frame.
+        .padding([.trailing, .bottom], Theme.Navigation.nativeSidebarInset)
+        .windowBackdrop(.content)
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    model.sidebarVisible.toggle()
+                } label: {
+                    Label { Text("Toggle Sidebar", comment: "Toolbar: show or hide the sidebar") } icon: {
+                        Image(systemName: "sidebar.left")
+                    }
+                }
+                .help(Text("Show or hide the sidebar", comment: "Toolbar help"))
+            }
+        }
         .animation(Theme.Motion.resolve(Theme.Motion.panel, reduceMotion: reduceMotion), value: model.sidebarVisible)
         // AppKit owns the outer minimum height; a content minimum would add toolbar chrome.
         .frame(minWidth: MainWindowGeometry.minimumSize.width)
@@ -146,6 +152,37 @@ struct MainWindowView: View {
         .environment(\.mainWindowLifecycle, lifecycle)
         .background(EditorDocumentEditedBridge(edited: services?.editor.hasUnsavedEdits == true)
             .frame(width: 0, height: 0))
+    }
+
+    private var sidebar: some View {
+        ZStack {
+            if model.selection == .settings {
+                SettingsSidebar(model: model)
+                    .transition(.opacity)
+            } else {
+                MainWindowSidebar(selection: $model.selection)
+                    .transition(.opacity)
+            }
+        }
+        .animation(Theme.Motion.resolve(Theme.Motion.panel, reduceMotion: reduceMotion),
+                   value: model.selection == .settings)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let library = services?.library { LibrarySidebarFooter(store: library) }
+        }
+        // The rows keep the position they had inside the native inset sidebar.
+        .padding(.leading, Theme.Navigation.nativeSidebarInset)
+    }
+}
+
+/// The hairline between two panes of the one glass frame, full height inside it.
+struct PaneDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(Theme.Menu.line.color)
+            .frame(width: 1)
+            .padding(.top, Theme.Navigation.nativeSidebarInset)
+            .ignoresSafeArea(edges: .top)
+            .accessibilityHidden(true)
     }
 }
 

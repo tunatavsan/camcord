@@ -10785,6 +10785,24 @@
           }
         }
       }
+    },
+    "Show or hide the sidebar": {
+      "extractionState": "manual",
+      "comment": "Toolbar help",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show or hide the sidebar"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kenar çubuğunu göster veya gizle"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
