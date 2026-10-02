@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import Observation
 @preconcurrency import ScreenCaptureKit
@@ -40,30 +41,53 @@ struct StudioSessionTests {
         let controller = RecordingController(coordinator: coordinator, defaults: defaults)
         var prompts = 0, probes: [Probe] = []
         let signal = AudioLevels(rmsDBFS: -18, peakDBFS: -6, limited: false)
+        let stops = AsyncStream<Int>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        defer { stops.continuation.finish() }
         let microphone = MicrophoneMonitor(operations: .init(authorize: { prompts += 1; return true }, makeProbe: {
-            let probe = Probe(levels: signal); probes.append(probe); return probe
+            let index = probes.count
+            let probe = Probe(levels: signal, onStop: { stops.continuation.yield(index) })
+            probes.append(probe); return probe
         }, isAuthorized: { true }))
         let session = StudioSession(defaults: defaults, controller: controller, recordingState: .init(), coordinator: coordinator,
                                     microphoneMonitor: microphone,
                                     operations: .init(screenCaptureAuthorized: { false }, content: { _ in throw CancellationError() }))
-        await Task.yield()
+        await session.releaseVisibleResources()
         #expect(probes.isEmpty && prompts == 0)
-        session.setVisibility(moduleVisible: true, windowAllowsPreview: true, captureTransition: false)
-        try await wait { session.microphoneLevels == signal }
+        let levels = AsyncStream<AudioLevels?>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let levelObservation = microphone.$levels.sink { levels.continuation.yield($0) }
+        defer { levelObservation.cancel(); levels.continuation.finish() }
+        await session.setVisibility(moduleVisible: true, windowAllowsPreview: true, captureTransition: false)?.value
+        if session.microphoneLevels != signal {
+            for await value in levels.stream where value == signal { break }
+        }
+        try #require(session.microphoneLevels == signal, "initial passive signal")
         #expect(probes.count == 1 && prompts == 0)
+        try #require(session.microphoneTestRequested)
+        let retirement = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        defer { retirement.continuation.finish() }
+        // Register before the handoff; Observation fires before the actor mutation.
+        withObservationTracking { _ = session.microphoneTestRequested } onChange: {
+            retirement.continuation.yield(())
+            retirement.continuation.finish()
+        }
         let foreign = UUID()
         await microphone.start(owner: foreign, deviceID: "foreign", gainDB: 0)
-        try await wait { !session.microphoneTestRequested }
+        if session.microphoneTestRequested {
+            var changes = retirement.stream.makeAsyncIterator()
+            _ = await changes.next()
+        }
+        try #require(!session.microphoneTestRequested, "foreign lease retires Studio intent")
         await microphone.release(owner: foreign)
-        for _ in 0..<20 { await Task.yield() }
         #expect(probes.count == 2 && !microphone.isRunning && session.microphoneLevels == nil)
-        session.setVisibility(moduleVisible: false, windowAllowsPreview: true, captureTransition: false)
-        session.setVisibility(moduleVisible: true, windowAllowsPreview: true, captureTransition: false)
-        try await wait { session.ownsMicrophoneTest && probes.count == 3 }
+        await session.setVisibility(moduleVisible: false, windowAllowsPreview: true, captureTransition: false)?.value
+        await session.setVisibility(moduleVisible: true, windowAllowsPreview: true, captureTransition: false)?.value
+        try #require(session.ownsMicrophoneTest && probes.count == 3, "reshow acquires the third probe")
         #expect(prompts == 1)
         session.updateSettings { $0.microphone = false }
-        try await wait { !microphone.isRunning && probes[2].stops == 1 }
-        #expect(probes[2].stops == 1)
+        if probes[2].stops == 0 {
+            for await index in stops.stream where index == 2 { break }
+        }
+        #expect(!microphone.isRunning && probes[2].stops == 1)
         await session.releaseVisibleResources()
     }
 
@@ -127,11 +151,15 @@ struct StudioSessionTests {
     private struct RegionProviderFailure: Error {}
     private final class Probe: MicrophoneProbe, @unchecked Sendable {
         private let state = OSAllocatedUnfairLock(initialState: 0)
+        private let onStop: @Sendable () -> Void
         let levels: AudioLevels
-        init(levels: AudioLevels) { self.levels = levels }
+        init(levels: AudioLevels, onStop: @escaping @Sendable () -> Void = {}) {
+            self.levels = levels
+            self.onStop = onStop
+        }
         var stops: Int { state.withLock { $0 } }
         func start(deviceID: String?, gainDB: Double) async throws {}
-        func stop() async { state.withLock { $0 += 1 } }
+        func stop() async { state.withLock { $0 += 1 }; onStop() }
         func updateGain(_ gainDB: Double) {}
         func snapshot() -> MicrophoneProbeSnapshot { .init(levels: levels) }
     }
