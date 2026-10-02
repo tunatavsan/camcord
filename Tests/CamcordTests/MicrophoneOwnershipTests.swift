@@ -64,16 +64,43 @@ struct MicrophoneOwnershipTests {
         func snapshot() -> MicrophoneProbeSnapshot { .init() }
     }
 
+    /// Pauses the physical operation only after its continuation is installed.
+    @MainActor private final class OperationBarrier {
+        private var operation: CheckedContinuation<Void, Never>?
+        private var entry: CheckedContinuation<Void, Never>?
+        private var entered = false
+
+        func suspend() async {
+            await withCheckedContinuation { continuation in
+                operation = continuation
+                entered = true
+                entry?.resume()
+                entry = nil
+            }
+        }
+
+        func waitForEntry() async {
+            guard !entered else { return }
+            await withCheckedContinuation { entry = $0 }
+        }
+
+        func resume() {
+            let continuation = operation
+            operation = nil
+            continuation?.resume()
+        }
+    }
+
     @Test("late physical start and stop completions cannot clear a replacement owner", arguments: [false, true])
     func stalePhysicalOperation(delayedStop: Bool) async throws {
         var probes: [Probe] = []
-        var pending: CheckedContinuation<Void, Never>?
+        let physicalOperation = OperationBarrier()
         let monitor = MicrophoneMonitor(operations: .init(authorize: { true }, makeProbe: {
             let first = probes.isEmpty
             let probe = Probe(startBlock: {
-                if first && !delayedStop { await withCheckedContinuation { pending = $0 } }
+                if first && !delayedStop { await physicalOperation.suspend() }
             }, stopBlock: {
-                if first && delayedStop { await withCheckedContinuation { pending = $0 } }
+                if first && delayedStop { await physicalOperation.suspend() }
             })
             probes.append(probe)
             return probe
@@ -82,11 +109,9 @@ struct MicrophoneOwnershipTests {
         let first = Task { await monitor.start(owner: a, deviceID: "A", gainDB: 1) }
         if delayedStop { await first.value }
         let stopTask = delayedStop ? Task { await monitor.release(owner: a) } : nil
-        let deadline = ContinuousClock.now + .seconds(2)
-        while pending == nil, ContinuousClock.now < deadline { await Task.yield() }
-        try #require(pending != nil)
+        await physicalOperation.waitForEntry()
         await monitor.start(owner: b, deviceID: "B", gainDB: 2)
-        pending?.resume()
+        physicalOperation.resume()
         await first.value
         await stopTask?.value
         #expect(monitor.owns(b) && monitor.isRunning)

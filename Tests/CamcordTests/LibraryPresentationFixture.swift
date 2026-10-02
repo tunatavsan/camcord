@@ -108,7 +108,25 @@ enum LibraryPresentationFixture {
     }
 
     private static func writeMovie(image: CGImage, to url: URL) async throws {
-        let width = 320, height = 200
+        try await LibraryFixtureMovieWriter(image: image, url: url).write()
+    }
+}
+
+/// The offline encoder advances on its own serial queue, independent of UI-test work
+/// on MainActor. AVFoundation objects and mutable pump state are confined to that queue.
+private final class LibraryFixtureMovieWriter: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "camcord.tests.library-fixture-movie")
+    private let image: CGImage
+    private let writer: AVAssetWriter
+    private let input: AVAssetWriterInput
+    private let adaptor: AVAssetWriterInputPixelBufferAdaptor
+    private var frame = 0
+    private var finished = false
+    private static let width = 320, height = 200
+
+    init(image: CGImage, url: URL) throws {
+        self.image = image
+        let width = Self.width, height = Self.height
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264,
             AVVideoWidthKey: width, AVVideoHeightKey: height])
@@ -118,31 +136,66 @@ enum LibraryPresentationFixture {
             kCVPixelBufferWidthKey as String: width, kCVPixelBufferHeightKey as String: height])
         guard writer.canAdd(input) else { throw CocoaError(.fileWriteUnknown) }
         writer.add(input)
-        guard writer.startWriting() else { throw writer.error ?? CocoaError(.fileWriteUnknown) }
-        writer.startSession(atSourceTime: .zero)
-        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-        for frame in 0..<30 {
-            while !input.isReadyForMoreMediaData {
-                guard ContinuousClock.now < deadline else { writer.cancelWriting(); throw CocoaError(.fileWriteUnknown) }
-                await Task.yield()
-            }
-            var buffer: CVPixelBuffer?
-            let status = CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA,
-                [kCVPixelBufferCGImageCompatibilityKey: true, kCVPixelBufferCGBitmapContextCompatibilityKey: true] as CFDictionary, &buffer)
-            guard status == kCVReturnSuccess, let pixel = buffer else { writer.cancelWriting(); throw CocoaError(.fileWriteUnknown) }
-            CVPixelBufferLockBaseAddress(pixel, [])
-            let context = try #require(CGContext(data: CVPixelBufferGetBaseAddress(pixel), width: width, height: height,
-                bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pixel), space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue))
-            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-            CVPixelBufferUnlockBaseAddress(pixel, [])
-            guard adaptor.append(pixel, withPresentationTime: CMTime(value: Int64(frame), timescale: 30)) else {
-                writer.cancelWriting(); throw writer.error ?? CocoaError(.fileWriteUnknown)
+        self.writer = writer
+        self.input = input
+        self.adaptor = adaptor
+    }
+
+    func write() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            queue.async { [self] in
+                guard writer.startWriting() else {
+                    continuation.resume(throwing: writer.error ?? CocoaError(.fileWriteUnknown))
+                    return
+                }
+                writer.startSession(atSourceTime: .zero)
+                input.requestMediaDataWhenReady(on: queue) { [self] in
+                    pump(continuation)
+                }
             }
         }
-        input.markAsFinished()
-        await writer.finishWriting()
-        guard writer.status == .completed else { throw writer.error ?? CocoaError(.fileWriteUnknown) }
+    }
+
+    private func pump(_ continuation: CheckedContinuation<Void, Error>) {
+        guard !finished else { return }
+        do {
+            guard writer.status == .writing else { throw writer.error ?? CocoaError(.fileWriteUnknown) }
+            while input.isReadyForMoreMediaData && frame < 30 {
+                let pixel = try pixelBuffer()
+                guard adaptor.append(pixel, withPresentationTime: CMTime(value: Int64(frame), timescale: 30)) else {
+                    throw writer.error ?? CocoaError(.fileWriteUnknown)
+                }
+                frame += 1
+            }
+            if frame == 30 {
+                finished = true
+                input.markAsFinished()
+                writer.finishWriting { [self] in
+                    if writer.status == .completed { continuation.resume() }
+                    else { continuation.resume(throwing: writer.error ?? CocoaError(.fileWriteUnknown)) }
+                }
+            }
+        } catch {
+            finished = true
+            input.markAsFinished()
+            writer.cancelWriting()
+            continuation.resume(throwing: error)
+        }
+    }
+
+    private func pixelBuffer() throws -> CVPixelBuffer {
+        let width = Self.width, height = Self.height
+        var buffer: CVPixelBuffer?
+        let status = CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA,
+            [kCVPixelBufferCGImageCompatibilityKey: true, kCVPixelBufferCGBitmapContextCompatibilityKey: true] as CFDictionary, &buffer)
+        guard status == kCVReturnSuccess, let pixel = buffer else { throw CocoaError(.fileWriteUnknown) }
+        CVPixelBufferLockBaseAddress(pixel, [])
+        defer { CVPixelBufferUnlockBaseAddress(pixel, []) }
+        let context = try #require(CGContext(data: CVPixelBufferGetBaseAddress(pixel), width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pixel), space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return pixel
     }
 }
 
@@ -175,6 +228,22 @@ struct LibraryPresentationFixtureTests {
         let asset = AVURLAsset(url: movie.url)
         let track = try #require(try await asset.loadTracks(withMediaType: .video).first)
         #expect(try await track.load(.naturalSize) == CGSize(width: 320, height: 200))
+        let reader = try AVAssetReader(asset: asset)
+        let frames = AVAssetReaderTrackOutput(track: track, outputSettings: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+        ])
+        try #require(reader.canAdd(frames))
+        reader.add(frames)
+        try #require(reader.startReading())
+        var frameCount = 0
+        while let sample = frames.copyNextSampleBuffer() {
+            // Reader outputs may also vend zero-sample markers; those are not frames.
+            guard CMSampleBufferGetNumSamples(sample) > 0 else { continue }
+            _ = try #require(CMSampleBufferGetImageBuffer(sample))
+            frameCount += 1
+        }
+        #expect(reader.status == .completed)
+        #expect(frameCount == 30)
         for item in store.items { #expect(await store.thumbnails.image(for: item) != nil) }
         #expect(Set(store.items.map(\.url)) == Set(urls))
         #expect(try LibraryPresentationFixture.facts(store.items, includeHash: true).count == 6)

@@ -16,30 +16,36 @@ final class SettingsRecordingResources {
         self.monitor = monitor
     }
 
-    func updateActivity(_ active: Bool) {
-        guard active != isActive else { return }
+    @discardableResult
+    func updateActivity(_ active: Bool) -> Task<Void, Never>? {
+        guard active != isActive else { return nil }
         isActive = active
-        if active { inputs.start() }
-        else { inputs.stop(); stopTest() }
+        if active { inputs.start(); return nil }
+        inputs.stop()
+        return stopTest()
     }
 
-    func startTest(deviceID: String?, gainDB: Double) {
-        guard isActive else { return }
+    @discardableResult
+    func startTest(deviceID: String?, gainDB: Double) -> Task<Void, Never>? {
+        guard isActive else { return nil }
         if request != nil { stopTest() }
         let token = owner
-        request = Task {
+        let task = Task {
             guard isActive, owner == token, !Task.isCancelled else { return }
             await monitor.start(owner: token, deviceID: deviceID, gainDB: gainDB)
             if !isActive || owner != token || Task.isCancelled { await monitor.release(owner: token) }
         }
+        request = task
+        return task
     }
 
-    func stopTest() {
+    @discardableResult
+    func stopTest() -> Task<Void, Never> {
         request?.cancel()
         request = nil
         let retiringOwner = owner
         owner = UUID()
-        Task { await monitor.release(owner: retiringOwner) }
+        return Task { await monitor.release(owner: retiringOwner) }
     }
 
     isolated deinit {

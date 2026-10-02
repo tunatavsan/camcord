@@ -73,21 +73,25 @@ struct StudioSessionTests {
         var settings = RecordingSettings(); settings.camera.enabled = true; settings.camera.deviceID = "studio"; settings.save(to: defaults)
         let controller = RecordingController(coordinator: coordinator, defaults: defaults)
         var permissions: [Bool] = [], starts = 0, stops = 0
+        // Camera readiness must not wait for the enabled default microphone's hardware.
+        let microphone = MicrophoneMonitor(operations: .init(authorize: { false }, makeProbe: {
+            Probe(levels: .init(rmsDBFS: -18, peakDBFS: -6, limited: false))
+        }, isAuthorized: { true }))
         let monitor = CameraPreviewMonitor(operations: .init(authorize: { permission in permissions.append(permission); return true },
             start: { _, _, _ in starts += 1 }, waitForFirstFrame: { _ in }, stop: { _ in stops += 1 }))
         let session = StudioSession(defaults: defaults, controller: controller, recordingState: .init(), coordinator: coordinator,
+                                    microphoneMonitor: microphone,
                                     cameraMonitor: monitor,
                                     operations: .init(screenCaptureAuthorized: { false }, content: { _ in throw CancellationError() },
                                                       cameraAuthorized: { true }))
-        session.setVisibility(moduleVisible: true, windowAllowsPreview: true, captureTransition: false)
-        try await wait { session.cameraPreviewRequested && monitor.isRunning }
+        await session.setVisibility(moduleVisible: true, windowAllowsPreview: true, captureTransition: false)?.value
+        #expect(session.cameraPreviewRequested && monitor.isRunning)
         #expect(permissions == [false] && starts == 1)
-        session.setVisibility(moduleVisible: false, windowAllowsPreview: true, captureTransition: false)
-        try await wait { !monitor.isRunning }
+        await session.setVisibility(moduleVisible: false, windowAllowsPreview: true, captureTransition: false)?.value
+        #expect(!monitor.isRunning)
         monitor.setVisible(true, owner: "foreign")
         await monitor.start(deviceID: "foreign", format: .auto, requestPermission: true)
-        session.setVisibility(moduleVisible: true, windowAllowsPreview: true, captureTransition: false)
-        for _ in 0..<20 { await Task.yield() }
+        await session.setVisibility(moduleVisible: true, windowAllowsPreview: true, captureTransition: false)?.value
         #expect(!session.cameraPreviewRequested && starts == 2 && stops == 1)
         #expect(permissions == [false, true] && monitor.isRunning)
         await session.releaseVisibleResources()

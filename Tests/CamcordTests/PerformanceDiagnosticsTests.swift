@@ -1,4 +1,5 @@
 import AppKit
+import Synchronization
 import Testing
 @testable import Camcord
 
@@ -52,16 +53,26 @@ struct PerformanceDiagnosticsTests {
         #expect(MainThreadStackSampler.mainThreadFrames(from: "Thread.callStackSymbols") == [])
     }
 
-    @inline(never) private static func mainThreadStackSentinel() {
+    @inline(never) private static func mainThreadStackSentinel() -> MainThreadStackSampler.Result? {
         #expect(Thread.isMainThread)
-        usleep(700_000)
+        let completed = DispatchSemaphore(value: 0)
+        let sampled = Mutex<MainThreadStackSampler.Result?>(nil)
+        // Launch only after this frame exists, then keep it on the actual main thread
+        // until the snapshot finishes. Scheduling latency cannot outlive a fixed sleep.
+        DispatchQueue.global(qos: .utility).async {
+            let result = MainThreadStackSampler.sampleOwnProcess()
+            sampled.withLock { $0 = result }
+            completed.signal()
+        }
+        // Match the sampler's existing deadline; a broken sampler fails rather than
+        // leaving the test process blocked indefinitely.
+        guard completed.wait(timeout: .now() + .seconds(2)) == .success else { return nil }
+        return sampled.withLock { $0 }
     }
 
     @MainActor @Test("system sampler captures a real blocked main-thread frame")
-    func genuineMainThreadStack() async {
-        let sample = Task.detached(priority: .utility) { MainThreadStackSampler.sampleOwnProcess() }
-        Self.mainThreadStackSentinel()
-        let result = await sample.value
+    func genuineMainThreadStack() throws {
+        let result = try #require(Self.mainThreadStackSentinel(), "system sampler exceeded its two-second deadline")
         #expect(result.succeeded)
         #expect(result.frames.contains { $0.contains("mainThreadStackSentinel") })
         #expect(!result.frames.contains { $0.contains("sampleOwnProcess") })

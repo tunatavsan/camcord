@@ -254,18 +254,19 @@ final class StudioSession {
         nativeProducer = nil
     }
 
-    func setVisibility(moduleVisible: Bool, windowAllowsPreview: Bool, captureTransition: Bool) {
+    @discardableResult
+    func setVisibility(moduleVisible: Bool, windowAllowsPreview: Bool, captureTransition: Bool) -> Task<Void, Never>? {
         let new = StudioVisibility(moduleVisible: moduleVisible, windowAllowsPreview: windowAllowsPreview,
                                    captureTransition: captureTransition)
-        guard new != visibility else { return }
+        guard new != visibility else { return nil }
         visibility = new
         deviceSettingsGeneration = UUID()
         if !new.allowsPreview {
-            retireVisibleResources()
+            return retireVisibleResources()
         } else {
             settings = RecordingSettings.load(from: defaults)
             sourceThumbnails.update(choices: thumbnailChoices, visible: true)
-            Task { [weak self] in
+            return Task { [weak self] in
                 await self?.reconcileDevices()
                 await self?.reconcilePreview()
             }
@@ -513,10 +514,10 @@ final class StudioSession {
     func retryPreview() async { issue = nil; resetPreview(); await reconcilePreview() }
     func releaseVisibleResources() async {
         visibility.moduleVisible = false
-        retireVisibleResources()
+        await retireVisibleResources().value
     }
 
-    private func retireVisibleResources() {
+    private func retireVisibleResources() -> Task<Void, Never> {
         deviceSettingsGeneration = UUID()
         sourceGeneration = UUID()
         isRefreshingSources = false
@@ -538,7 +539,7 @@ final class StudioSession {
         stageImage = nil
         updateIdlePreviewConfiguration()
         previewState = .inactive
-        Task { [microphoneMonitor, cameraMonitor] in
+        return Task { [microphoneMonitor, cameraMonitor] in
             await microphoneMonitor.release(owner: oldMicrophoneOwner)
             await cameraMonitor.stopIfUnobserved()
             if let old { await old.stop() }

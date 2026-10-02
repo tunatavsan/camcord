@@ -38,33 +38,31 @@ struct SettingsDeviceTests {
         let resources = SettingsRecordingResources(inputs: inventory, monitor: monitor)
         resources.updateActivity(SettingsActivity.allows(moduleActive: true, windowVisible: nil))
         #expect(loads == 1)
-        resources.startTest(deviceID: nil, gainDB: 4)
-        try await eventually { monitor.isRunning }
+        await resources.startTest(deviceID: nil, gainDB: 4)?.value
+        #expect(monitor.isRunning)
         let firstOwner = resources.owner
         let foreign = UUID()
         await monitor.start(owner: foreign, deviceID: "foreign", gainDB: 7)
-        resources.updateActivity(SettingsActivity.allows(moduleActive: false, windowVisible: true))
+        await resources.updateActivity(SettingsActivity.allows(moduleActive: false, windowVisible: true))?.value
         notifications.post(name: AVCaptureDevice.wasConnectedNotification, object: nil)
         #expect(loads == 1 && resources.owner != firstOwner)
-        resources.startTest(deviceID: nil, gainDB: 20)
-        await Task.yield()
+        #expect(resources.startTest(deviceID: nil, gainDB: 20) == nil)
         #expect(monitor.owns(foreign) && monitor.isRunning && probes.last?.gain == 7)
         #expect(probes.last?.stops == 0)
         resources.updateActivity(true)
         #expect(loads == 2)
-        resources.startTest(deviceID: nil, gainDB: 5)
-        try await eventually { monitor.owns(resources.owner) && monitor.isRunning }
+        await resources.startTest(deviceID: nil, gainDB: 5)?.value
+        #expect(monitor.owns(resources.owner) && monitor.isRunning)
         let ownProbe = try #require(probes.last)
-        resources.updateActivity(SettingsActivity.allows(moduleActive: true, windowVisible: false))
-        // Stopping the retired probe precedes the asynchronous start of the retained owner.
-        try await eventually { monitor.owns(foreign) && monitor.activeOwner == foreign && monitor.isRunning }
+        // Release includes the retired probe's stop and the retained owner's restart.
+        await resources.updateActivity(SettingsActivity.allows(moduleActive: true, windowVisible: false))?.value
+        #expect(monitor.owns(foreign) && monitor.activeOwner == foreign && monitor.isRunning)
         #expect(ownProbe.stops == 1 && probes.last?.gain == 7)
         await monitor.prepareForRecording()
         resources.updateActivity(true)
-        resources.startTest(deviceID: nil, gainDB: 2)
-        await Task.yield()
+        await resources.startTest(deviceID: nil, gainDB: 2)?.value
         #expect(monitor.recordingLocked && !monitor.owns(resources.owner) && !monitor.isRunning)
-        resources.updateActivity(false)
+        await resources.updateActivity(false)?.value
     }
 
     @Test("a hidden Settings authorization cannot reclaim a microphone after rapid return")
