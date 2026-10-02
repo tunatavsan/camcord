@@ -25,13 +25,7 @@ struct LibraryView: View {
 
     private var isActive: Bool { moduleActive && (lifecycle?.allowsLivePreview ?? true) }
 
-    private var inspectorPresentation: Binding<Bool> {
-        Binding(get: { isActive && !store.items.isEmpty && store.showsInspector }, set: { presented in
-            // An automatic empty-state dismissal must preserve the user's inspector intent.
-            guard isActive, !store.items.isEmpty else { return }
-            store.showsInspector = presented
-        })
-    }
+    private var presentsInspector: Bool { isActive && !store.items.isEmpty && store.showsInspector }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -40,7 +34,7 @@ struct LibraryView: View {
                 LibraryFilterBar(items: store.items, filter: $store.filter, search: $store.search)
                     .padding(.bottom, Theme.Library.filterBottom)
             }
-            content
+            contentWithInspector
         }
         .padding(Theme.Space.xl)
         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -61,17 +55,13 @@ struct LibraryView: View {
         .allowsHitTesting(isActive)
         .accessibilityHidden(!isActive)
         .focusable().focused($hasFocus)
+        .focusEffectDisabled()
         .onKeyPress(.space) { guard isActive else { return .ignored }; preview(); return .handled }
         .onKeyPress(.return) { guard isActive else { return .ignored }; beginRename(); return .handled }
         .onDeleteCommand { requestTrash() }
         .onExitCommand { guard isActive else { return }; quickLookURL = nil; store.selection.removeAll() }
         .onMoveCommand { direction in moveSelection(direction) }
         .quickLookPreview($quickLookURL, in: store.selectedItems.map(\.url))
-        .inspector(isPresented: inspectorPresentation) {
-            LibraryInspectorView(items: store.selectedItems, thumbnails: store.thumbnails,
-                                 copy: copySelection, reveal: revealSelection, rename: beginRename, trash: requestTrash)
-                .inspectorColumnWidth(Theme.Library.inspectorWidth)
-        }
         .sheet(isPresented: Binding(get: { isActive && renameID != nil }, set: { if isActive && !$0 { renameID = nil } })) { renameSheet }
         .confirmationDialog("Move selected captures to Trash?", isPresented: Binding(get: { isActive && confirmsTrash }, set: { if isActive { confirmsTrash = $0 } }), titleVisibility: .visible) {
             Button("Move to Trash", role: .destructive) {
@@ -103,17 +93,59 @@ struct LibraryView: View {
         }
         .task(id: isActive) { guard isActive else { return }; await store.enforceRetention() }
     }
+    private var contentWithInspector: some View {
+        GeometryReader { geometry in
+            if presentsInspector {
+                if geometry.size.width >= Theme.Library.gridMinimum + Theme.Library.inspectorWidth + Theme.Space.xl {
+                    HStack(alignment: .top, spacing: Theme.Space.xl) {
+                        content.frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+                        inspector.frame(width: Theme.Library.inspectorWidth)
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: Theme.Space.l) {
+                        content.frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+                        Divider()
+                        inspector.frame(height: min(geometry.size.height * 0.45, Theme.Library.inspectorWidth))
+                    }
+                }
+            } else {
+                content.frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    private var inspector: some View {
+        LibraryInspectorView(items: store.selectedItems, thumbnails: store.thumbnails,
+                             copy: copySelection, reveal: revealSelection, rename: beginRename, trash: requestTrash)
+    }
     private var heading: some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) {
-            Text("Library").font(Theme.Font.display).tracking(Theme.Font.displayTracking)
-            HStack(spacing: Theme.Space.xs) {
-                Text("\(store.items.count) captures")
-                Text(verbatim: "· " + ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file))
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) {
+                    headingTitle
+                    headingSummary
+                }
+                .fixedSize(horizontal: true, vertical: false)
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    headingTitle
+                    headingSummary
+                }
             }
-            .font(Theme.Font.data).foregroundStyle(Theme.Palette.ink3.color).lineLimit(1)
-            Spacer()
-            headingControls
+            Spacer(minLength: 0)
+            headingControls.fixedSize()
         }
+    }
+
+    private var headingTitle: some View {
+        Text("Library").font(Theme.Font.display).tracking(Theme.Font.displayTracking)
+    }
+
+    private var headingSummary: some View {
+        HStack(spacing: Theme.Space.xs) {
+            Text("\(store.items.count) captures")
+            Text(verbatim: "· " + ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file))
+        }
+        .font(Theme.Font.data).foregroundStyle(Theme.Palette.ink3.color).lineLimit(1)
     }
 
     private var headingControls: some View {

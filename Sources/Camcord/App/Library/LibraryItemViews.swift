@@ -32,24 +32,26 @@ struct LibraryCaptureTile<Actions: View>: View {
                                 .padding(Theme.Library.badgeInset)
                         }
                     }
-                HStack(alignment: .firstTextBaseline, spacing: Theme.Library.controlGap) {
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     Text(verbatim: item.title)
                         .font(Theme.Font.body)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .lineLimit(2, reservesSpace: true)
+                        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                     Text(verbatim: LibraryItemFormatting.time(item.createdAt))
                         .font(Theme.Font.dataSmall)
                         .foregroundStyle(Theme.Palette.ink3.color)
-                        .fixedSize()
                 }
                 .padding(.horizontal, Theme.Library.metaInset)
                 .padding(.bottom, Theme.Library.controlGap)
             }
+            .padding(Theme.Library.controlGap)
+            .background(isSelected ? Theme.Palette.selectionStrong.color : .clear,
+                        in: .rect(cornerRadius: Theme.Radius.thumb))
             .contentShape(.rect)
             .overlay {
                 if isSelected {
-                    LibrarySelectionCorners()
-                        .stroke(Theme.Palette.ink.color, lineWidth: Theme.Library.selectionLine)
+                    RoundedRectangle(cornerRadius: Theme.Radius.thumb)
+                        .strokeBorder(Theme.Palette.hairlineStrong.color, lineWidth: 1)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
@@ -96,13 +98,6 @@ private struct LibraryBadgeAppearance: ViewModifier {
             .padding(.horizontal, Theme.Library.badgePadding)
             .frame(height: Theme.Library.badgeHeight)
             .background(Theme.Library.badgeFill, in: .rect(cornerRadius: Theme.Radius.badge))
-    }
-}
-
-private struct LibrarySelectionCorners: Shape {
-    func path(in rect: CGRect) -> Path {
-        ViewfinderMark.brackets(in: rect.insetBy(dx: -Theme.Library.selectionOutset, dy: -Theme.Library.selectionOutset),
-                                arm: Theme.Library.selectionArm, corner: Theme.Library.selectionCorner)
     }
 }
 

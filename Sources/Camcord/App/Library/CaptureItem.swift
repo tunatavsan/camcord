@@ -16,7 +16,20 @@ struct CaptureItem: Identifiable, Hashable, Sendable {
     let duration: Double?     // recordings
     var displayName: String? = nil
 
-    var title: String { displayName ?? url.deletingPathExtension().lastPathComponent }
+    var title: String {
+        if let displayName { return displayName }
+        let stem = url.deletingPathExtension().lastPathComponent
+        // UUIDs identify clipboard-cache files on disk; they are not useful display names.
+        // Saved filenames and explicit cache names remain authoritative.
+        guard origin == .clipboardCache, UUID(uuidString: stem) != nil else { return stem }
+        let kindName: String
+        switch kind {
+        case .screenshot: kindName = String(localized: "Screenshot")
+        case .scrollCapture: kindName = String(localized: "Scroll capture")
+        case .recording: kindName = String(localized: "Recording")
+        }
+        return kindName + " " + createdAt.formatted(date: .abbreviated, time: .shortened)
+    }
 }
 
 @MainActor protocol CaptureLibraryStore: AnyObject, Observable {

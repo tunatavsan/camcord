@@ -43,6 +43,38 @@ private struct LibraryFixture {
 
 @Suite("Library actual file paths", .timeLimit(.minutes(1))) @MainActor
 struct LibraryStoreTests {
+    @Test("Generated cache titles describe the capture and preserve explicit names")
+    func generatedTitles() {
+        let uuid = "00112233-4455-6677-8899-AABBCCDDEEFF"
+        let url = URL(fileURLWithPath: "/unused/" + uuid + ".png")
+        let date = Date(timeIntervalSince1970: 1_796_000_000)
+        let kinds: [CaptureItem.Kind] = [.screenshot, .scrollCapture, .recording]
+        for kind in kinds {
+            var item = CaptureItem(id: uuid, url: url, kind: kind, origin: .clipboardCache,
+                                   createdAt: date, byteSize: 0, pixelSize: nil, duration: nil)
+            let kindName: String
+            switch kind {
+            case .screenshot: kindName = String(localized: "Screenshot")
+            case .scrollCapture: kindName = String(localized: "Scroll capture")
+            case .recording: kindName = String(localized: "Recording")
+            }
+            #expect(item.title.hasPrefix(kindName + " "))
+            #expect(item.title.contains(date.formatted(date: .abbreviated, time: .shortened)))
+            #expect(!item.title.contains(uuid))
+            item.displayName = "A chosen name"
+            #expect(item.title == "A chosen name")
+            item.displayName = uuid
+            #expect(item.title == uuid)
+        }
+        let saved = CaptureItem(id: "saved", url: url, kind: .screenshot, origin: .savedFile,
+                                createdAt: date, byteSize: 0, pixelSize: nil, duration: nil)
+        #expect(saved.title == uuid)
+        let personal = CaptureItem(id: "personal", url: URL(fileURLWithPath: "/unused/Trip notes.png"),
+                                   kind: .screenshot, origin: .savedFile, createdAt: date,
+                                   byteSize: 0, pixelSize: nil, duration: nil)
+        #expect(personal.title == "Trip notes")
+    }
+
     @Test("scan deduplicates path spelling and excludes nested, symlink, foreign cache children")
     func scanBoundary() async throws {
         let f = try LibraryFixture(); defer { f.cleanup() }
@@ -80,9 +112,12 @@ struct LibraryStoreTests {
         let item = try #require(store.items.first); store.selection = [item.id]
         try await store.rename(item.id, to: "A useful title")
         #expect(store.items.first?.displayName == "A useful title")
+        #expect(store.items.first?.title == "A useful title")
         #expect(store.items.first?.url == url)
         #expect(store.selection == [item.id])
         #expect(try Data(contentsOf: url) == before)
+        await store.refresh()
+        #expect(store.items.first?.title == "A useful title")
     }
     @Test("rename refuses traversal/overwrite and reconciles selected saved-path identity")
     func savedRename() async throws {

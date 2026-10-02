@@ -13,29 +13,33 @@ struct LibraryGridContent<Tile: View>: View {
     let tile: (CaptureItem) -> Tile
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: Theme.Library.groupGap) {
-                    ForEach(groups) { group in
-                        VStack(alignment: .leading, spacing: Theme.Library.headerGap) {
-                            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-                                Text(verbatim: group.title)
-                                    .font(Theme.Font.captionStrong)
-                                    .tracking(Theme.Font.headerTracking)
-                                Text(verbatim: String(group.items.count)).font(Theme.Font.dataSmall)
-                            }
-                            .foregroundStyle(Theme.Palette.ink3.color)
-                            LazyVGrid(columns: [GridItem(.adaptive(minimum: Theme.Library.gridMinimum), spacing: Theme.Space.l)],
-                                      spacing: Theme.Library.gridRowGap) {
-                                ForEach(group.items) { item in tile(item).id(item.id) }
+        GeometryReader { geometry in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: Theme.Library.groupGap) {
+                        ForEach(groups) { group in
+                            VStack(alignment: .leading, spacing: Theme.Library.headerGap) {
+                                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                                    Text(verbatim: group.title)
+                                        .font(Theme.Font.captionStrong)
+                                        .tracking(Theme.Font.headerTracking)
+                                    Text(verbatim: String(group.items.count)).font(Theme.Font.dataSmall)
+                                }
+                                .foregroundStyle(Theme.Palette.ink3.color)
+                                LazyVGrid(columns: [GridItem(.adaptive(minimum: min(Theme.Library.gridMinimum, max(geometry.size.width, 1))), spacing: Theme.Space.l)],
+                                          spacing: Theme.Library.gridRowGap) {
+                                    ForEach(group.items) { item in
+                                        tile(item).frame(minWidth: 0, maxWidth: .infinity).id(item.id)
+                                    }
+                                }
                             }
                         }
                     }
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                    .padding(.bottom, Theme.Space.s)
                 }
-                .padding(.bottom, Theme.Library.selectionOutset)
+                .onChange(of: newestID) { _, id in if let id { proxy.scrollTo(id, anchor: .top) } }
             }
-            .scrollClipDisabled()
-            .onChange(of: newestID) { _, id in if let id { proxy.scrollTo(id, anchor: .top) } }
         }
         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -51,11 +55,14 @@ struct LibraryFilterBar: View {
             HStack(spacing: Theme.Space.m) {
                 chips.fixedSize()
                 Spacer(minLength: 0)
-                searchField
+                searchField.frame(width: Theme.Library.searchWidth)
             }
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(maxWidth: .infinity, alignment: .leading)
             VStack(alignment: .leading, spacing: Theme.Space.m) {
                 ScrollView(.horizontal) { chips.fixedSize() }
                     .frame(height: Theme.Library.controlHeight)
+                    .scrollIndicators(.hidden)
                 searchField
             }
         }
@@ -95,7 +102,8 @@ struct LibraryFilterBar: View {
             TextField("Search captures", text: $search).textFieldStyle(.plain).font(Theme.Font.body)
         }
         .padding(.horizontal, Theme.Library.searchInset)
-        .frame(width: Theme.Library.searchWidth, height: Theme.Library.controlHeight)
+        .frame(minWidth: 0, maxWidth: .infinity)
+        .frame(height: Theme.Library.controlHeight)
         .background(Theme.Palette.surface.color, in: Capsule())
         .overlay(Capsule().strokeBorder(Theme.Palette.hairline.color))
     }

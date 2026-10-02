@@ -34,13 +34,9 @@ struct LibraryInspectorView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, Theme.Library.inspectorInset)
-            .padding(.top, Theme.Space.xl)
-            .padding(.bottom, Theme.Library.inspectorInset)
+            .padding(.bottom, Theme.Space.l)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.Palette.surface.color)
-        .overlay(alignment: .leading) { Rectangle().fill(Theme.Palette.hairline.color).frame(width: 1).accessibilityHidden(true) }
     }
 }
 
