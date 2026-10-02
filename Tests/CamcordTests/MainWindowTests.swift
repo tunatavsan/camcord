@@ -15,18 +15,23 @@ private actor MainWindowEditorDecodeGate {
 
 @MainActor private struct RetainedModuleTestShell: View {
     @Bindable var model: MainWindowModel
+    var externalValue = 0
     var body: some View {
-        RetainedModuleStack(selection: model.selection, model: model) { RetainedModuleTestPage(id: $0) }
+        RetainedModuleStack(selection: model.selection, model: model) {
+            RetainedModuleTestPage(id: $0, externalValue: externalValue)
+        }
     }
 }
 
 @MainActor private struct RetainedModuleTestPage: View {
     let id: ModuleID
+    var externalValue = 0
     @State private var identity = UUID()
     @State private var edits = 0
     @Environment(\.mainWindowModuleActive) private var active
     var body: some View {
-        RetainedModuleProbe(id: id, identity: identity, edits: edits, active: active) { edits += 1 }
+        RetainedModuleProbe(id: id, identity: identity, edits: edits, active: active,
+                            externalValue: externalValue) { edits += 1 }
     }
 }
 
@@ -35,12 +40,14 @@ private actor MainWindowEditorDecodeGate {
     let identity: UUID
     let edits: Int
     let active: Bool
+    var externalValue = 0
     let edit: () -> Void
     final class ProbeView: NSButton {
         var module = ModuleID.library
         var identity = UUID()
         var edits = 0
         var active = false
+        var externalValue = 0
         var resigns = 0
         override var acceptsFirstResponder: Bool { true }
         override func resignFirstResponder() -> Bool { resigns += 1; return super.resignFirstResponder() }
@@ -54,7 +61,21 @@ private actor MainWindowEditorDecodeGate {
     }
     func updateNSView(_ view: ProbeView, context: Context) {
         view.module = id; view.identity = identity; view.edits = edits; view.active = active
+        view.externalValue = externalValue
         view.edit = edit; view.isEnabled = context.environment.isEnabled
+    }
+}
+
+/// Snapshot reads occur in the production Studio bodies; the supplied data owns no devices.
+@MainActor private final class MainWindowStudioBodyProbe: StudioPresentationProvider {
+    private(set) var reads = 0
+    var snapshot: StudioPresentationSnapshot {
+        reads += 1
+        return .init(provenance: "Main window test", sources: [], thumbnails: [:], selectedSource: nil,
+                     stageImage: nil, canvasSize: CGSize(width: 1280, height: 800), previewState: .inactive,
+                     settings: RecordingSettings(), systemAudioLevels: nil, microphoneLevels: nil,
+                     recordingState: .idle, elapsed: nil, canRecord: false,
+                     cameraName: "", cameraFormat: "", microphoneName: "", finishedFile: nil)
     }
 }
 
@@ -76,13 +97,13 @@ struct MainWindowTests {
         (view as? RetainedModuleProbe.ProbeView).map { [$0] } ?? view.subviews.flatMap(moduleProbes)
     }
 
-    private func settle(_ host: NSView, until predicate: () -> Bool) async throws {
+    private func settle(_ host: NSView, stage: String = "expected state", until predicate: () -> Bool) async throws {
         for _ in 0..<100 {
             host.layoutSubtreeIfNeeded()
             if predicate() { return }
             try await Task.sleep(for: .milliseconds(5))
         }
-        #expect(predicate(), "The retained module tree did not reach the expected state")
+        #expect(predicate(), "The retained module tree did not reach \(stage)")
     }
 
     @Test("visited modules retain view identity and local edits, inactive controls stop immediately")
@@ -123,6 +144,98 @@ struct MainWindowTests {
         try await settle(reopened) { moduleProbes(in: reopened).count == 1 }
         let fresh = try #require(moduleProbes(in: reopened).first)
         #expect(fresh.identity != identity && fresh.edits == 0)
+    }
+
+    @Test("retained generic content still receives changed external inputs without replacing native or local state")
+    func retainedModuleExternalInput() async throws {
+        _ = NSApplication.shared
+        let defaults = try freshDefaults()
+        defer { defaults.removePersistentDomain(forName: Self.suiteName) }
+        let model = MainWindowModel(defaults: defaults)
+        let host = NSHostingView(rootView: RetainedModuleTestShell(model: model))
+        host.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        let window = offscreenWindow(); window.contentView = host
+        defer { window.contentView = nil }
+        try await settle(host) { moduleProbes(in: host).count == 1 }
+        let first = try #require(moduleProbes(in: host).first)
+        let identity = first.identity
+        first.changeValue()
+        try await settle(host) { first.edits == 1 }
+        model.select(.studio)
+        try await settle(host) { moduleProbes(in: host).count == 2 }
+        host.rootView = RetainedModuleTestShell(model: model, externalValue: 42)
+        try await settle(host) { moduleProbes(in: host).allSatisfy { $0.externalValue == 42 } }
+        #expect(moduleProbes(in: host).contains { $0 === first })
+        #expect(first.identity == identity && first.edits == 1 && !first.active && !first.isEnabled)
+        #expect(moduleProbes(in: host).filter(\.active).map(\.module) == [.studio])
+    }
+
+    @Test("Library and Editor switches leave visited hidden Studio and Settings production bodies untouched")
+    func registeredModuleIsolation() async throws {
+        _ = NSApplication.shared
+        let defaults = try freshDefaults()
+        defer { defaults.removePersistentDomain(forName: Self.suiteName) }
+        let cache = FileManager.default.temporaryDirectory.appendingPathComponent("mainwindow-isolation-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: cache) }
+        var hardwareCalls = 0
+        let coordinator = CaptureCoordinator(operations: .init(screenCaptureAuthorized: { hardwareCalls += 1; return false }, feedback: false))
+        let recording = RecordingController(coordinator: coordinator, defaults: defaults)
+        let engine = EventTapEngine(coordinator: coordinator, recordingController: recording,
+            bindings: TapBindings(mouseButton3: nil, mouseButton4: nil, mouseButton5: nil, doubleTapRightCommand: nil), buttonIsDown: { _ in false })
+        let editor = EditorSession(defaults: defaults)
+        let services = AppServices(defaults: defaults, coordinator: coordinator, recordingController: recording,
+            eventTapEngine: engine, recordingState: RecordingStateModel(),
+            library: LibraryStore(defaults: defaults, roots: [], cacheDirectory: cache), editor: editor)
+        defer { editor.stop() }
+        let model = MainWindowModel(defaults: defaults)
+        let studioProbe = MainWindowStudioBodyProbe(), settingsProbe = SettingsKeyRecorder()
+        SettingsKeyRecorder.active = settingsProbe
+        defer { SettingsKeyRecorder.active = nil }
+        let lifecycle = MainWindowLifecycle(), window = offscreenWindow()
+        // The existing native fixture supplies visibility without ordering a real window.
+        window.fixtureVisible = true
+        lifecycle.update(window: window, temporarilyHidden: false)
+        window.fixtureVisible = false
+        let host = NSHostingView(rootView: MainWindowView(model: model, services: services, lifecycle: lifecycle,
+            studioPresentationProvider: studioProbe).transaction { $0.disablesAnimations = true })
+        host.frame = NSRect(x: 0, y: 0, width: 960, height: 700)
+        window.contentView = host
+        defer { window.contentView = nil }
+        for id in [ModuleID.studio, .settings, .edit, .library] {
+            model.select(id)
+            try await settle(host, stage: "warm \(id.rawValue) layout") {
+                model.performanceDiagnostics.generation(for: .module(id)) == nil
+            }
+        }
+        #expect(studioProbe.reads > 0 && !settingsProbe.stores.isEmpty)
+        let settingsStore = try #require(settingsProbe.stores.last)
+        let studioReads = studioProbe.reads, settingsBodies = settingsProbe.stores.count
+        for id in [ModuleID.edit, .library, .edit, .library] {
+            model.select(id)
+            try await settle(host, stage: "isolated \(id.rawValue) layout") {
+                model.performanceDiagnostics.generation(for: .module(id)) == nil
+            }
+            #expect(studioProbe.reads == studioReads)
+            #expect(settingsProbe.stores.count == settingsBodies)
+        }
+        // The outgoing and incoming modules still receive their real active flag.
+        model.select(.studio)
+        try await settle(host, stage: "Studio re-entry activity") {
+            model.performanceDiagnostics.generation(for: .module(.studio)) == nil && studioProbe.reads > studioReads
+        }
+        let oldFeedback = settingsStore.feedbackSounds
+        FeedbackSound.setEnabled(!oldFeedback, in: defaults)
+        #expect(settingsStore.feedbackSounds == oldFeedback)
+        model.select(.settings)
+        try await settle(host, stage: "Settings re-entry refresh") {
+            model.performanceDiagnostics.generation(for: .module(.settings)) == nil
+                && settingsStore.feedbackSounds == !oldFeedback
+        }
+        #expect(settingsProbe.stores.allSatisfy { $0 === settingsStore })
+        #expect(services.studioSession.previewState == .inactive && services.studioSession.stageImage == nil)
+        #expect(!services.studioSession.microphoneTestRequested && !services.studioSession.cameraPreviewRequested)
+        #expect(!services.studioSession.systemAudioTestRequested && !recording.isBusy && hardwareCalls == 0)
+        #expect(!window.isVisible && !window.isKeyWindow)
     }
 
     @Test("module selection clears the retained window responder without activating or touching another window")

@@ -87,6 +87,7 @@ struct MainWindowView: View {
     let services: AppServices?
     let lifecycle: MainWindowLifecycle?
     let studioPresentationProvider: (any StudioPresentationProvider)?
+    private let studioCallbacks: StudioRuntimeCallbacks
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(model: MainWindowModel, services: AppServices? = nil, lifecycle: MainWindowLifecycle? = nil,
@@ -95,6 +96,7 @@ struct MainWindowView: View {
         self.services = services
         self.lifecycle = lifecycle
         self.studioPresentationProvider = studioPresentationProvider
+        studioCallbacks = StudioRuntimeCallbacks(services: services)
     }
 
     /// A window of its own for offscreen renders and tests.
@@ -123,7 +125,8 @@ struct MainWindowView: View {
             .navigationSplitViewColumnWidth(Theme.Navigation.sidebarWidth)
         } detail: {
             RetainedModuleStack(selection: model.selection, model: model) { id in
-                if let module = ModuleRegistry.module(id) { module.makeView() }
+                RegisteredModuleView(id: id, services: services, studioCallbacks: studioCallbacks)
+                    .equatable()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .windowBackdrop(.content)
@@ -138,13 +141,43 @@ struct MainWindowView: View {
         .environment(\.screenshotEditorSession, services?.editor)
         .environment(\.studioSession, services?.studioSession)
         .environment(\.studioPresentationProvider, studioPresentationProvider)
-        .environment(\.studioSelectRegionAction, StudioRuntimeCallbacks.regionAction(services))
-        .environment(\.studioClipboardClaim, StudioRuntimeCallbacks.clipboardClaim(services))
         .modifier(EditorOpeningConfirmationModifier(session: services?.editor))
         .environment(\.mainWindowModel, model)
         .environment(\.mainWindowLifecycle, lifecycle)
         .background(EditorDocumentEditedBridge(edited: services?.editor.hasUnsavedEdits == true)
             .frame(width: 0, height: 0))
+    }
+}
+
+/// The registry's fixed modules do not depend on the window's current selection. Their own
+/// environment and observed state still update; only recreating the registered content is skipped.
+struct RegisteredModuleView: View, Equatable {
+    let id: ModuleID
+    private let servicesIdentity: ObjectIdentifier?
+    private let callbacksIdentity: ObjectIdentifier?
+    private let studioCallbacks: StudioRuntimeCallbacks?
+
+    init(id: ModuleID, services: AppServices?, studioCallbacks: StudioRuntimeCallbacks) {
+        self.id = id
+        servicesIdentity = services.map(ObjectIdentifier.init)
+        self.studioCallbacks = id == .studio ? studioCallbacks : nil
+        callbacksIdentity = id == .studio ? ObjectIdentifier(studioCallbacks) : nil
+    }
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.id == rhs.id && lhs.servicesIdentity == rhs.servicesIdentity && lhs.callbacksIdentity == rhs.callbacksIdentity
+    }
+
+    @ViewBuilder var body: some View {
+        if let module = ModuleRegistry.module(id) {
+            if id == .studio {
+                module.makeView()
+                    .environment(\.studioSelectRegionAction, studioCallbacks?.selectRegion)
+                    .environment(\.studioClipboardClaim, studioCallbacks?.claimClipboard)
+            } else {
+                module.makeView()
+            }
+        }
     }
 }
 
