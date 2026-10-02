@@ -42,6 +42,8 @@ final class MainWindowModel {
         willSet {
             if selection == .settings, newValue != settingsGroup {
                 performanceDiagnostics.request(.settings(newValue))
+                // Retained shortcut fields must end editing before their page becomes hidden.
+                selectionWillChange?()
             }
         }
         didSet { defaults.set(settingsGroup.rawValue, forKey: SettingsGroup.defaultsKey) }

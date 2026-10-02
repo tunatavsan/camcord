@@ -156,6 +156,13 @@ struct MainWindowTests {
         #expect(other.firstResponder === otherResponder)
         let settings = try #require(moduleProbes(in: host).first { $0.module == .settings })
         #expect(window.makeFirstResponder(settings))
+        let pageResigns = settings.resigns
+        model.settingsGroup = model.settingsGroup == .input ? .general : .input
+        // Retire the native shortcut responder before its retained page becomes hidden.
+        #expect(window.firstResponder !== settings)
+        #expect(settings.resigns == pageResigns + 1)
+        #expect(other.firstResponder === otherResponder)
+        #expect(window.makeFirstResponder(settings))
         let settingsResigns = settings.resigns
         window.fixtureVisible = false
         lifecycle.update(window: nil, temporarilyHidden: false)

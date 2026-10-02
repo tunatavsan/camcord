@@ -12,6 +12,52 @@ import Testing
 
 @MainActor @Observable private final class SettingsLayoutSelection {
     var group = SettingsGroup.general
+    var moduleActive = true
+}
+
+@MainActor private struct RetainedSettingsLayoutShell: View {
+    let selection: SettingsLayoutSelection
+    var body: some View {
+        RetainedSettingsPageStack(selection: selection.group) { group in
+            RetainedSettingsLayoutPage(group: group)
+        }
+        .environment(\.mainWindowModuleActive, selection.moduleActive)
+        .transaction { $0.disablesAnimations = true }
+    }
+}
+
+@MainActor private struct RetainedSettingsLayoutPage: View {
+    let group: SettingsGroup
+    @State private var identity = UUID()
+    @State private var edits = 0
+    private var activity = SettingsActivity()
+
+    init(group: SettingsGroup) { self.group = group }
+
+    var body: some View {
+        SettingsRetentionProbe(group: group, identity: identity, edits: edits, active: activity.isActive) { edits += 1 }
+    }
+}
+
+@MainActor private struct SettingsRetentionProbe: NSViewRepresentable {
+    let group: SettingsGroup
+    let identity: UUID
+    let edits: Int
+    let active: Bool
+    let edit: () -> Void
+    final class ProbeView: NSButton {
+        var group = SettingsGroup.general
+        var identity = UUID()
+        var edits = 0
+        var active = false
+        var edit: (() -> Void)?
+        @objc func changeValue() { edit?() }
+    }
+    func makeNSView(context: Context) -> ProbeView { ProbeView() }
+    func updateNSView(_ view: ProbeView, context: Context) {
+        view.group = group; view.identity = identity; view.edits = edits; view.active = active
+        view.edit = edit; view.isEnabled = context.environment.isEnabled
+    }
 }
 
 @MainActor private struct SettingsLayoutShell: View {
@@ -70,7 +116,43 @@ struct SettingsLayoutTests {
         }
     }
 
-    @Test("changing Settings groups starts the new page at the top without changing stored settings")
+    @Test("visited Settings pages retain their identity and edits while hidden pages and modules become inactive")
+    func retainedPageActivity() async throws {
+        _ = NSApplication.shared
+        let selection = SettingsLayoutSelection()
+        let host = NSHostingView(rootView: RetainedSettingsLayoutShell(selection: selection))
+        host.frame = NSRect(x: 0, y: 0, width: 900, height: 640)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.contentView = nil }
+        try await settle(host) { descendants(of: SettingsRetentionProbe.ProbeView.self, in: host).count == 1 }
+        let first = try #require(descendants(of: SettingsRetentionProbe.ProbeView.self, in: host).first)
+        let identity = first.identity
+        first.changeValue()
+        try await settle(host) { first.edits == 1 }
+        for group in SettingsGroup.allCases + [.input, .general] {
+            selection.group = group
+            try await settle(host, reason: "only selected page active") {
+                let probes = descendants(of: SettingsRetentionProbe.ProbeView.self, in: host)
+                return probes.filter(\.active).map(\.group) == [group]
+                    && probes.allSatisfy { $0.isEnabled == $0.active }
+            }
+        }
+        let probes = descendants(of: SettingsRetentionProbe.ProbeView.self, in: host)
+        #expect(probes.count == SettingsGroup.allCases.count)
+        let revisited = try #require(probes.first { $0.group == .general })
+        #expect(revisited === first && revisited.identity == identity && revisited.edits == 1)
+        selection.moduleActive = false
+        try await settle(host) { probes.allSatisfy { !$0.active && !$0.isEnabled } }
+        selection.group = .input
+        try await settle(host) { probes.allSatisfy { !$0.active && !$0.isEnabled } }
+        selection.moduleActive = true
+        try await settle(host) { probes.filter(\.active).map(\.group) == [.input] }
+        #expect(probes.count == SettingsGroup.allCases.count)
+        #expect(!window.isVisible && !window.isKeyWindow && !window.isMainWindow)
+    }
+
+    @Test("revisiting retained Settings scroll views resets to the top without changing stored settings")
     func groupScrollReset() async throws {
         _ = NSApplication.shared
         let suite = "camcord.settings.layout.\(UUID().uuidString)"
@@ -94,13 +176,18 @@ struct SettingsLayoutTests {
         first.contentView.scroll(to: NSPoint(x: 0, y: 100))
         first.reflectScrolledClipView(first.contentView)
         #expect(first.contentView.bounds.minY > 50)
-        for group in [SettingsGroup.screenshot, .general] {
+        var retained: [SettingsGroup: NSScrollView] = [.general: first]
+        for group in [SettingsGroup.screenshot, .general, .screenshot, .general] {
             selection.group = group
-            try await settle(host, reason: "new \(group.rawValue) page at the top") {
+            try await settle(host, reason: "retained \(group.rawValue) page at the top") {
                 let scrolls = descendants(of: NSScrollView.self, in: host)
-                return scrolls.count == 1 && abs(scrolls[0].contentView.bounds.minY) < 0.5
+                let selected = retained[group] ?? scrolls.first { candidate in !retained.values.contains { $0 === candidate } }
+                return scrolls.count == 2 && selected.map { abs($0.contentView.bounds.minY) < 0.5 } == true
             }
-            let scroll = try #require(descendants(of: NSScrollView.self, in: host).first)
+            let scrolls = descendants(of: NSScrollView.self, in: host)
+            let scroll = try #require(retained[group] ?? scrolls.first { candidate in !retained.values.contains { $0 === candidate } })
+            retained[group] = scroll
+            #expect(scrolls.contains { $0 === first })
             #expect(abs(scroll.contentView.bounds.minY) < 0.5)
             scroll.contentView.scroll(to: NSPoint(x: 0, y: 80))
             scroll.reflectScrolledClipView(scroll.contentView)

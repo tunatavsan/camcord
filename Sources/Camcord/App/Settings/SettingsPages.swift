@@ -56,9 +56,6 @@ struct SettingsModuleView: View {
 }
 
 struct SettingsPageView: View {
-    @Environment(\.mainWindowModel) private var windowModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private var activity = SettingsActivity()
     let group: SettingsGroup
     let store: SettingsStore
 
@@ -66,19 +63,10 @@ struct SettingsPageView: View {
 
     var body: some View {
         let _ = SettingsKeyRecorder.active?.recordStore(store)
-        ZStack(alignment: .top) {
-            page
-                .background(PerformanceLayoutCompletionBridge(target: .settings(group),
-                    active: activity.isActive, diagnostics: windowModel?.performanceDiagnostics))
-                // Only the selected page gets a fresh scroll position; the module and store stay alive.
-                .id(group)
-                .transition(.opacity)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .animation(Theme.Motion.resolve(Theme.Motion.moduleSwitch, reduceMotion: reduceMotion), value: group)
+        RetainedSettingsPageStack(selection: group) { page(for: $0) }
     }
 
-    private var page: some View {
+    private func page(for group: SettingsGroup) -> some View {
         Group {
             switch group {
         case .general: GeneralSettingsPage(store: store)
@@ -90,6 +78,49 @@ struct SettingsPageView: View {
         case .permissions: PermissionsSettingsPage(store: store)
             }
         }
+    }
+}
+
+/// Only visited pages are mounted; stable group identity keeps their native controls and local state warm.
+struct RetainedSettingsPageStack<Content: View>: View {
+    let selection: SettingsGroup
+    private let content: (SettingsGroup) -> Content
+    @State private var visited: Set<SettingsGroup>
+    @Environment(\.mainWindowModel) private var windowModel
+    @Environment(\.mainWindowModuleActive) private var moduleActive
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private var activity = SettingsActivity()
+
+    init(selection: SettingsGroup, @ViewBuilder content: @escaping (SettingsGroup) -> Content) {
+        self.selection = selection
+        self.content = content
+        _visited = State(initialValue: [selection])
+    }
+
+    private var mountedPages: [SettingsGroup] {
+        SettingsGroup.allCases.filter { visited.contains($0) || $0 == selection }
+    }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            ForEach(mountedPages) { group in
+                let selected = group == selection
+                let active = selected && moduleActive
+                content(group)
+                    .background(PerformanceLayoutCompletionBridge(target: .settings(group),
+                        active: selected && activity.isActive, diagnostics: windowModel?.performanceDiagnostics))
+                    .environment(\.mainWindowModuleActive, active)
+                    .environment(\.formPageSelected, selected)
+                    .disabled(!active)
+                    .allowsHitTesting(active)
+                    .accessibilityHidden(!active)
+                    .opacity(selected ? 1 : 0)
+                    .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .animation(Theme.Motion.resolve(Theme.Motion.moduleSwitch, reduceMotion: reduceMotion), value: selection)
+        .onChange(of: selection) { _, group in visited.insert(group) }
     }
 }
 

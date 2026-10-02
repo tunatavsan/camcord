@@ -1,5 +1,10 @@
 import SwiftUI
 
+extension EnvironmentValues {
+    /// Selection resets scrolling independently of window/module activity.
+    @Entry var formPageSelected = true
+}
+
 // The prototype's settings page (ref `settings-*`): a display title, then cards of rows — a
 // label (with an optional note under it) on the left, the control on the right, hairlines
 // between rows. Cards are opaque content on the frosted window (K1.G, NOTE-2).
@@ -8,6 +13,8 @@ import SwiftUI
 struct FormPage<Content: View>: View {
     let title: LocalizedStringResource
     @ViewBuilder var content: Content
+    @Environment(\.formPageSelected) private var selected
+    @State private var scrollPosition = ScrollPosition(edge: .top)
 
     var body: some View {
         ScrollView {
@@ -26,6 +33,14 @@ struct FormPage<Content: View>: View {
             .frame(maxWidth: .infinity, alignment: .top)
         }
         .scrollIndicators(.automatic)
+        .scrollPosition($scrollPosition)
+        .onChange(of: selected) { _, selected in
+            guard selected else { return }
+            // The page fades in, but a previously scrolled document resets without a scrolling animation.
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { scrollPosition.scrollTo(edge: .top) }
+        }
     }
 }
 
