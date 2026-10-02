@@ -95,20 +95,21 @@ struct ComponentKitTests {
         #expect(InkNavigation.move(from: "x", by: 1, in: [String]()) == "x")
     }
 
-    @Test("window backdrops: a translucent tint over a system material, opaque under Reduce Transparency")
+    @Test("window panels share an opaque, readable fallback under Reduce Transparency")
     func windowBackdrops() {
         for backdrop in WindowBackdrop.allCases {
             for variant in ThemeColor.Variant.allCases {
-                #expect(backdrop.tint.value(variant).alpha < 1, "\(backdrop) \(variant)")
-                #expect(backdrop.solid.value(variant).alpha == 1, "\(backdrop) \(variant)")
+                let solid = backdrop.solid.value(variant)
+                #expect(solid.alpha == 1, "\(backdrop) \(variant)")
+                #expect(solid == WindowBackdrop.sidebar.solid.value(variant), "\(backdrop) \(variant)")
+                #expect(ThemeColor.RGBA.contrast(Theme.Palette.ink.value(variant), solid) >= 4.5,
+                        "\(backdrop) \(variant)")
             }
         }
+        // The legacy sidebar helper retains its existing material/tint contract.
         #expect(WindowBackdrop.sidebar.material == .sidebar)
-        #expect(WindowBackdrop.content.material == .underWindowBackground)
-        // The sidebar reads lighter than the content, in both appearances.
-        for variant in [ThemeColor.Variant.dark, .light] {
-            let sidebar = WindowBackdrop.sidebar.tint.value(variant), content = WindowBackdrop.content.tint.value(variant)
-            #expect(variant == .dark ? sidebar.luminance > content.luminance : sidebar.luminance < content.luminance)
+        for variant in ThemeColor.Variant.allCases {
+            #expect(WindowBackdrop.sidebar.tint.value(variant).alpha < 1)
         }
     }
 }

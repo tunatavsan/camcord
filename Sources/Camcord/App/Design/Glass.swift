@@ -85,18 +85,18 @@ extension NSGlassEffectView {
     }
 }
 
-// MARK: - Window backdrops (KARAR-2 §3, NOTE-2)
+// MARK: - Window backdrops
 
-/// The main window's frosted backdrops: a behind-window system material (the desktop faintly
-/// visible through it) under a token tint that sets how much frost there is. Not glass on
-/// content: thumbnails, previews, video and form cards stay opaque on top of it. Each backdrop is
-/// ONE token, so "more or less frost" is a one-line change.
+/// Passive window surfaces beneath pages. Content uses untinted system Liquid Glass;
+/// thumbnails, previews, video and form cards keep their own opaque surfaces above it.
+/// The native split-view sidebar supplies its own glass; the sidebar case supports legacy clients.
 enum WindowBackdrop: CaseIterable, Sendable {
-    /// The whole-height sidebar, lighter (the owner's reference: a lighter frosted pane).
+    /// A legacy whole-height sidebar backdrop.
     case sidebar
-    /// The content area behind pages: lightly frosted graphite.
+    /// An inset content pane matching the native sidebar's glass family.
     case content
 
+    /// Legacy material metadata. The content pane is rendered with `glassEffect` instead.
     var material: NSVisualEffectView.Material {
         switch self {
         case .sidebar: .sidebar
@@ -104,7 +104,7 @@ enum WindowBackdrop: CaseIterable, Sendable {
         }
     }
 
-    /// The tint over the material. Its alpha is the frost dial.
+    /// Legacy tint metadata; the content pane never applies a tint.
     var tint: ThemeColor {
         switch self {
         case .sidebar: Theme.Palette.backdropSidebar
@@ -112,12 +112,9 @@ enum WindowBackdrop: CaseIterable, Sendable {
         }
     }
 
-    /// Reduce Transparency: the opaque window colours.
+    /// Reduce Transparency uses the same opaque panel colour in both window regions.
     var solid: ThemeColor {
-        switch self {
-        case .sidebar: Theme.Palette.glassSolidSidebar
-        case .content: Theme.Palette.window
-        }
+        Theme.Palette.glassSolidSidebar
     }
 }
 
@@ -145,7 +142,16 @@ private struct WindowBackdropModifier: ViewModifier {
     func body(content: Content) -> some View {
         content.background {
             Group {
-                if reduceTransparency {
+                if backdrop == .content {
+                    Group {
+                        if reduceTransparency {
+                            contentShape.fill(backdrop.solid.color)
+                        } else {
+                            Color.clear.glassEffect(.regular, in: contentShape)
+                        }
+                    }
+                    .padding(Theme.Navigation.nativeSidebarInset)
+                } else if reduceTransparency {
                     backdrop.solid.color
                 } else {
                     ZStack {
@@ -154,15 +160,20 @@ private struct WindowBackdropModifier: ViewModifier {
                     }
                 }
             }
-            // Detail frost reaches the transparent titlebar, while preserving the native
-            // split view's horizontal sidebar reservation. Other sidebar clients keep their edges.
+            // Preserve the split view's horizontal reservation while extending beneath the titlebar.
             .ignoresSafeArea(edges: backdrop == .content ? [.top, .bottom] : .all)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
         }
+    }
+
+    private var contentShape: ConcentricRectangle {
+        ConcentricRectangle(corners: .concentric(minimum: .fixed(Theme.Navigation.nativeSidebarInset)))
     }
 }
 
 extension View {
-    /// Paints a frosted window backdrop behind this view (see `WindowBackdrop`).
+    /// Places a passive system backdrop behind this view (see `WindowBackdrop`).
     func windowBackdrop(_ backdrop: WindowBackdrop) -> some View {
         modifier(WindowBackdropModifier(backdrop: backdrop))
     }
