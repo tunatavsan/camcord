@@ -186,11 +186,24 @@ struct PaneGlass: NSViewRepresentable {
         view.cornerRadius = cornerRadius
         view.contentView = NSView()
         view.setAccessibilityHidden(true)
+        view.adoptSidebarGlass()
         return view
     }
 
     func updateNSView(_ view: NSGlassEffectView, context: Context) {
         if view.cornerRadius != cornerRadius { view.cornerRadius = cornerRadius }
+    }
+}
+
+extension NSGlassEffectView {
+    /// The variant the native floating sidebar's glass carries (read from the live view tree,
+    /// macOS 26): a panel glass without the lensing seams a large plain glass bends across its
+    /// interior, which shimmer as the window moves. Not public API, so it is applied only when
+    /// the view still answers to it; otherwise the glass stays plain.
+    func adoptSidebarGlass() {
+        guard responds(to: NSSelectorFromString("set_variant:")) else { return }
+        setValue(16, forKey: "_variant")
+        if responds(to: NSSelectorFromString("set_adaptiveAppearance:")) { setValue(1, forKey: "_adaptiveAppearance") }
     }
 }
 

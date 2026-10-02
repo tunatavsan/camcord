@@ -820,6 +820,7 @@ private struct PanelGlassBackground: NSViewRepresentable {
         let view = NSGlassEffectView()
         view.contentView = NSView()
         view.setAccessibilityHidden(true)
+        view.adoptSidebarGlass()
         configure(view)
         return view
     }
