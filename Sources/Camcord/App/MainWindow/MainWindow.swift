@@ -151,28 +151,28 @@ struct MainWindowView: View {
 }
 
 /// The sidebar is always shown (owner, 2026-10-02), so the split view's own toggle is hidden.
-/// Hidden, not removed: `toolbar(removing: .sidebarToggle)` narrows and shortens the native
-/// sidebar. SwiftUI re-adds toolbar items as modules change, so every addition is checked.
+/// Hidden, not removed: `toolbar(removing: .sidebarToggle)` narrows the native sidebar to
+/// 148 pt even with a fixed column width. SwiftUI re-creates the item as the toolbar changes,
+/// so the window re-checks it on every update; the check is a few items, and idempotent.
 enum SidebarToggleSuppressor {
-    static let identifier = "com.apple.SwiftUI.navigationSplitView.toggleSidebar"
-    @MainActor private static var observer: NSObjectProtocol?
+    @MainActor private static var observers: [ObjectIdentifier: NSObjectProtocol] = [:]
 
-    @MainActor static func start() {
-        guard observer == nil else { return }
-        observer = NotificationCenter.default.addObserver(forName: NSToolbar.willAddItemNotification,
-                                                          object: nil, queue: .main) { note in
-            let item = note.userInfo?["item"] as? NSToolbarItem
-            MainActor.assumeIsolated { if let item { hide(item) } }
+    @MainActor static func watch(_ window: NSWindow) {
+        hideToggles(in: window.toolbar)
+        let key = ObjectIdentifier(window)
+        guard observers[key] == nil else { return }
+        observers[key] = NotificationCenter.default.addObserver(forName: NSWindow.didUpdateNotification,
+                                                                object: window, queue: .main) { [weak window] _ in
+            MainActor.assumeIsolated { hideToggles(in: window?.toolbar) }
         }
     }
 
     @MainActor static func hideToggles(in toolbar: NSToolbar?) {
-        start()
-        toolbar?.items.forEach(hide)
+        for item in toolbar?.items ?? [] where isToggle(item) && !item.isHidden { item.isHidden = true }
     }
 
-    @MainActor private static func hide(_ item: NSToolbarItem) {
-        if item.itemIdentifier.rawValue == identifier, !item.isHidden { item.isHidden = true }
+    @MainActor static func isToggle(_ item: NSToolbarItem) -> Bool {
+        item.itemIdentifier == .toggleSidebar || item.itemIdentifier.rawValue.localizedCaseInsensitiveContains("toggleSidebar")
     }
 }
 
@@ -707,8 +707,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         window.contentViewController = host
         window.setFrame(frame, display: false)
         observeMinimum(in: window)
-        // And once more after the first layout pass has built the toolbar's items.
-        DispatchQueue.main.async { [weak window] in SidebarToggleSuppressor.hideToggles(in: window?.toolbar) }
+        SidebarToggleSuppressor.watch(window)
     }
 
     private func observeMinimum(in window: NSWindow) {
@@ -724,7 +723,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
             },
             // SwiftUI installs (and replaces) the toolbar after the content mounts.
             window.observe(\.toolbar, options: [.initial, .new]) { window, _ in
-                MainActor.assumeIsolated { SidebarToggleSuppressor.hideToggles(in: window.toolbar) }
+                MainActor.assumeIsolated { SidebarToggleSuppressor.watch(window) }
             }
         ]
         enforceMinimum(in: window)
