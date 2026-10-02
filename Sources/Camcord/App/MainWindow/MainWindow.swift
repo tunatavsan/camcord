@@ -89,6 +89,7 @@ struct MainWindowView: View {
     let studioPresentationProvider: (any StudioPresentationProvider)?
     private let studioCallbacks: StudioRuntimeCallbacks
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     init(model: MainWindowModel, services: AppServices? = nil, lifecycle: MainWindowLifecycle? = nil,
          studioPresentationProvider: (any StudioPresentationProvider)? = nil) {
@@ -134,6 +135,10 @@ struct MainWindowView: View {
             .navigationTitle(Text(module.title))
         }
         .navigationSplitViewStyle(.balanced)
+        // One frosted tray under the whole window; the sidebar and the module float on it.
+        .background {
+            if !reduceTransparency { TrayBlur().ignoresSafeArea() }
+        }
         .animation(Theme.Motion.resolve(Theme.Motion.panel, reduceMotion: reduceMotion), value: model.sidebarVisible)
         // AppKit owns the outer minimum height; a content minimum would add toolbar chrome.
         .frame(minWidth: MainWindowGeometry.minimumSize.width)

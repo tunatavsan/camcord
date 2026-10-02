@@ -207,6 +207,55 @@ extension NSGlassEffectView {
     }
 }
 
+/// The window's tray (owner, 2026-10-02: "one tray"): a single untinted blur of whatever lies
+/// behind the window, under every glass panel, so the sidebar, the module and any later pane
+/// float on one frosted surface. It is how the system frosts the floating sidebar's alleyway
+/// (a backdrop layer with a blur filter), stretched across the whole window. Not public API:
+/// without it the window simply has no tray.
+struct TrayBlur: NSViewRepresentable {
+    var cornerRadius: CGFloat = 0
+
+    func makeNSView(context: Context) -> TrayBlurView { TrayBlurView(cornerRadius: cornerRadius) }
+    func updateNSView(_ view: TrayBlurView, context: Context) {}
+}
+
+final class TrayBlurView: NSView {
+    static let radius = 20.0
+
+    init(cornerRadius: CGFloat) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        setAccessibilityHidden(true)
+        guard let layer, let backdrop = Self.makeBackdrop() else { return }
+        layer.cornerRadius = cornerRadius
+        layer.cornerCurve = .continuous
+        layer.masksToBounds = cornerRadius > 0
+        backdrop.frame = bounds
+        backdrop.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+        layer.addSublayer(backdrop)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    private static func makeBackdrop() -> CALayer? {
+        guard let layerClass = NSClassFromString("CABackdropLayer") as? CALayer.Type,
+              let filterClass = NSClassFromString("CAFilter") as? NSObject.Type,
+              filterClass.responds(to: NSSelectorFromString("filterWithType:")),
+              let blur = filterClass.perform(NSSelectorFromString("filterWithType:"), with: "gaussianBlur")?
+                .takeUnretainedValue() as? NSObject
+        else { return nil }
+        blur.setValue(radius, forKey: "inputRadius")
+        blur.setValue(true, forKey: "inputNormalizeEdges")
+        let backdrop = layerClass.init()
+        guard backdrop.responds(to: NSSelectorFromString("setWindowServerAware:")) else { return nil }
+        backdrop.filters = [blur]
+        backdrop.setValue(true, forKey: "windowServerAware")
+        return backdrop
+    }
+}
+
 extension View {
     /// Places a passive system backdrop behind this view (see `WindowBackdrop`).
     func windowBackdrop(_ backdrop: WindowBackdrop) -> some View {

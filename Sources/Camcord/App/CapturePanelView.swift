@@ -803,9 +803,12 @@ private struct PanelChrome: ViewModifier {
             } else {
                 // The left sidebar's own recipe: one untinted native glass region, nothing
                 // behind it. SwiftUI controls remain above it, so their fills are not glass content.
-                PanelGlassBackground(appearance: colorScheme == .dark ? .darkAqua : .aqua)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
+                ZStack {
+                    TrayBlur(cornerRadius: Theme.Radius.floating)
+                    PanelGlassBackground(appearance: colorScheme == .dark ? .darkAqua : .aqua)
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
             }
         }
     }
