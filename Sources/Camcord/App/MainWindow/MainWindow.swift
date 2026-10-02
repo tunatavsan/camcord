@@ -711,7 +711,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     }
 
     private func makeWindow() -> NSWindow {
-        let window = windowFactory?() ?? NSWindow(
+        let window = windowFactory?() ?? DiagnosticMainWindow(
             contentRect: NSRect(origin: .zero, size: MainWindowGeometry.minimumSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
@@ -742,6 +742,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
             visibleFrame: visibleFrame(window),
             defaults: defaults, autosaveName: autosaveName)
         if let initialFrame { window.setFrame(initialFrame, display: false) }
+        if windowFactory == nil { ActivationPerformanceDiagnostics.shared.register(window: window) }
         return window
     }
 

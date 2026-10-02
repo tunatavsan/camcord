@@ -23,6 +23,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var liveCheck: LiveCheck?
     private var firstRun: FirstRunWindowController?
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        ActivationPerformanceDiagnostics.shared.didBecomeActive()
+    }
+
+    func applicationDidResignActive(_ notification: Notification) {
+        ActivationPerformanceDiagnostics.shared.didResignActive()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
         MainRunLoopHangMonitor.shared.start()

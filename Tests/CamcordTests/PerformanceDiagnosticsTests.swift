@@ -1,10 +1,72 @@
 import AppKit
+import QuartzCore
 import Synchronization
 import Testing
 @testable import Camcord
 
 @Suite("Performance diagnostics", .serialized)
 struct PerformanceDiagnosticsTests {
+    @Test("activation needs an eligible owned window; no display does not complete it")
+    func activationWithoutDisplay() throws {
+        var tracker = ActivationDisplayTracker()
+        #expect(tracker.begin(eligible: false).isEmpty)
+        #expect(tracker.generation == nil)
+        #expect(tracker.begin(eligible: true) == [.began(1)])
+        let generation = try #require(tracker.generation)
+        #expect(tracker.displayReturned(generation: nil, eligible: true).isEmpty)
+        #expect(tracker.displayReturned(generation: generation, eligible: false).isEmpty)
+        #expect(tracker.generation == generation)
+        #expect(tracker.displayReturned(generation: generation, eligible: true)
+                == [.ended(generation, .displayPassReturned)])
+        #expect(tracker.generation == nil)
+        #expect(tracker.displayReturned(generation: generation, eligible: true).isEmpty)
+    }
+
+    @Test("a newer activation supersedes the interval; the older display cannot close it")
+    func activationGeneration() throws {
+        var tracker = ActivationDisplayTracker()
+        _ = tracker.begin(eligible: true)
+        let previous = try #require(tracker.generation)
+        #expect(tracker.begin(eligible: true) == [.ended(previous, .superseded), .began(2)])
+        #expect(tracker.displayReturned(generation: previous, eligible: true).isEmpty)
+        #expect(tracker.generation == 2)
+        #expect(tracker.displayReturned(generation: 2, eligible: true) == [.ended(2, .displayPassReturned)])
+    }
+
+    @Test("resign or loss of the eligible window cancels instead of fabricating display")
+    func activationCancellation() {
+        var tracker = ActivationDisplayTracker()
+        _ = tracker.begin(eligible: true)
+        #expect(tracker.cancel() == [.ended(1, .cancelled)])
+        #expect(tracker.cancel().isEmpty)
+        #expect(tracker.displayReturned(generation: 1, eligible: true).isEmpty)
+        _ = tracker.begin(eligible: true)
+        #expect(tracker.begin(eligible: false) == [.ended(2, .cancelled)])
+        #expect(tracker.generation == nil)
+    }
+
+    @MainActor @Test("layer scale snapshot records numeric scales and caps traversal")
+    func boundedLayerScaleSnapshot() {
+        let root = CALayer()
+        root.contentsScale = 2
+        let child = CALayer()
+        child.contentsScale = 1
+        child.shouldRasterize = true
+        child.rasterizationScale = 3
+        root.addSublayer(child)
+        let small = LayerScaleSummary.capture(root: root)
+        #expect(small.count == 2)
+        #expect(small.minimumScale == 1 && small.maximumScale == 2)
+        #expect(small.rasterizedLayers == 1)
+        #expect(small.minimumRasterizationScale == 3 && small.maximumRasterizationScale == 3)
+        #expect(!small.truncated && small.invalidScales == 0)
+        for _ in 0..<LayerScaleSummary.maximumLayers { root.addSublayer(CALayer()) }
+        let bounded = LayerScaleSummary.capture(root: root)
+        #expect(bounded.count == LayerScaleSummary.maximumLayers)
+        #expect(bounded.truncated)
+        #expect(LayerScaleSummary.capture(root: nil).count == 0)
+    }
+
     @Test("waiting time is excluded; a busy span is reported once above 50ms")
     func busyRunLoopSpan() {
         var tracker = RunLoopStallTracker()

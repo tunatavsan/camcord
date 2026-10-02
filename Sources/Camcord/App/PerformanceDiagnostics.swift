@@ -1,8 +1,193 @@
 import AppKit
 import CoreFoundation
+import QuartzCore
 import os
 import SwiftUI
 import Synchronization
+
+/// This state machine closes only a matching, observed AppKit display pass.
+/// It deliberately makes no assertion about Core Animation commit or presentation.
+struct ActivationDisplayTracker {
+    enum Outcome: String { case superseded, cancelled, displayPassReturned = "AppKit-display-pass-returned" }
+    enum Event: Equatable {
+        case began(UInt64)
+        case ended(UInt64, Outcome)
+    }
+    private var sequence: UInt64 = 0
+    private(set) var generation: UInt64?
+
+    mutating func begin(eligible: Bool) -> [Event] {
+        var events = cancel(outcome: eligible ? .superseded : .cancelled)
+        guard eligible else { return events }
+        sequence &+= 1
+        generation = sequence
+        events.append(.began(sequence))
+        return events
+    }
+
+    mutating func cancel(outcome: Outcome = .cancelled) -> [Event] {
+        guard let generation else { return [] }
+        self.generation = nil
+        return [.ended(generation, outcome)]
+    }
+
+    mutating func displayReturned(generation: UInt64?, eligible: Bool) -> [Event] {
+        guard eligible, let generation, self.generation == generation else { return [] }
+        self.generation = nil
+        return [.ended(generation, .displayPassReturned)]
+    }
+}
+
+/// Numeric, bounded snapshot. Invalid scales are counted rather than logged as NaN/Inf.
+struct LayerScaleSummary {
+    static let maximumLayers = 512
+    private(set) var count = 0
+    private(set) var invalidScales = 0
+    private(set) var minimumScale: Double = 0
+    private(set) var maximumScale: Double = 0
+    private(set) var rasterizedLayers = 0
+    private(set) var minimumRasterizationScale: Double = 0
+    private(set) var maximumRasterizationScale: Double = 0
+    private(set) var truncated = false
+
+    @MainActor static func capture(root: CALayer?) -> Self {
+        var result = Self()
+        guard let root else { return result }
+        var pending = [root]
+        var seen = Set<ObjectIdentifier>()
+        while let layer = pending.popLast() {
+            guard seen.insert(ObjectIdentifier(layer)).inserted else { continue }
+            guard result.count < maximumLayers else { result.truncated = true; break }
+            result.count += 1
+            let scale = Double(layer.contentsScale)
+            if scale.isFinite && scale > 0 {
+                result.minimumScale = result.minimumScale == 0 ? scale : min(result.minimumScale, scale)
+                result.maximumScale = max(result.maximumScale, scale)
+            } else { result.invalidScales += 1 }
+            if layer.shouldRasterize {
+                result.rasterizedLayers += 1
+                let rasterScale = Double(layer.rasterizationScale)
+                if rasterScale.isFinite && rasterScale > 0 {
+                    result.minimumRasterizationScale = result.minimumRasterizationScale == 0
+                        ? rasterScale : min(result.minimumRasterizationScale, rasterScale)
+                    result.maximumRasterizationScale = max(result.maximumRasterizationScale, rasterScale)
+                } else { result.invalidScales += 1 }
+            }
+            if let children = layer.sublayers {
+                let capacity = maximumLayers - result.count - pending.count
+                if children.count > max(0, capacity) { result.truncated = true }
+                pending.append(contentsOf: children.prefix(max(0, capacity)))
+            }
+        }
+        return result
+    }
+}
+
+/// Owned by the app delegate, with only the controller's explicitly registered window eligible.
+/// Natural display callbacks can be absent for a retained SwiftUI layer tree; no timeout,
+/// layout callback, forced redraw or window-update notification substitutes for a display.
+@MainActor
+final class ActivationPerformanceDiagnostics {
+    static let shared = ActivationPerformanceDiagnostics()
+    private let log = OSLog(subsystem: "dev.tavsan.camcord", category: .pointsOfInterest)
+    private weak var window: NSWindow?
+    private var tracker = ActivationDisplayTracker()
+    private var intervals: [UInt64: OSSignpostID] = [:]
+
+    func register(window: NSWindow?) {
+        guard self.window !== window else { return }
+        emit(tracker.cancel())
+        self.window = window
+    }
+
+    func didBecomeActive() {
+        observeCost(phase: "activation") {
+            emit(tracker.begin(eligible: window?.isVisible == true && window?.isMiniaturized == false))
+        }
+    }
+
+    func didResignActive() { observeCost(phase: "resign") { emit(tracker.cancel()) } }
+
+    func willClose(window: NSWindow) {
+        guard self.window === window else { return }
+        emit(tracker.cancel())
+    }
+
+    func displayGeneration(window: NSWindow, needsDisplay: Bool) -> UInt64? {
+        guard self.window === window, window.isVisible, !window.isMiniaturized, needsDisplay else { return nil }
+        return tracker.generation
+    }
+
+    func displayReturned(window: NSWindow, generation: UInt64?) {
+        guard let generation else { return }
+        observeCost(phase: "display") {
+            let events = tracker.displayReturned(generation: generation,
+                eligible: self.window === window && window.isVisible && !window.isMiniaturized)
+            emit(events)
+            if !events.isEmpty { recordRetina(window: window) }
+        }
+    }
+
+    private func emit(_ events: [ActivationDisplayTracker.Event]) {
+        for event in events {
+            switch event {
+            case .began(let generation):
+                let id = OSSignpostID(log: log)
+                intervals[generation] = id
+                os_signpost(.begin, log: log, name: "ActivationToAppKitDisplay", signpostID: id,
+                            "generation=%llu", generation)
+            case .ended(let generation, let outcome):
+                guard let id = intervals.removeValue(forKey: generation) else { continue }
+                os_signpost(.end, log: log, name: "ActivationToAppKitDisplay", signpostID: id,
+                            "generation=%llu outcome=%{public}@", generation, outcome.rawValue)
+            }
+        }
+    }
+
+    private func observeCost(phase: String, _ operation: () -> Void) {
+        let id = OSSignpostID(log: log)
+        os_signpost(.begin, log: log, name: "ActivationObserverCost", signpostID: id, "%{public}@", phase)
+        operation()
+        os_signpost(.end, log: log, name: "ActivationObserverCost", signpostID: id, "%{public}@", phase)
+    }
+
+    private func recordRetina(window: NSWindow) {
+        let backing = window.contentView.map { $0.convertToBacking($0.bounds).size } ?? .zero
+        let layers = LayerScaleSummary.capture(root: window.contentView?.layer)
+        let finite: (CGFloat) -> Double = { $0.isFinite ? Double($0) : 0 }
+        os_signpost(.event, log: log, name: "ActivationRetinaSnapshot",
+                    "backing_scale=%{public}f width_px=%{public}f height_px=%{public}f layers=%d invalid=%d min_scale=%{public}f max_scale=%{public}f rasterized=%d min_raster_scale=%{public}f max_raster_scale=%{public}f truncated=%d",
+                    finite(window.backingScaleFactor), finite(backing.width), finite(backing.height),
+                    layers.count, layers.invalidScales, layers.minimumScale, layers.maximumScale,
+                    layers.rasterizedLayers, layers.minimumRasterizationScale, layers.maximumRasterizationScale,
+                    layers.truncated ? 1 : 0)
+    }
+}
+
+/// Wraps only naturally invoked AppKit drawing passes. The end is CPU-side display-return,
+/// not a rendered whole frame or a compositor/GPU presentation timestamp.
+@MainActor
+final class DiagnosticMainWindow: NSWindow {
+    private var displayDepth = 0
+
+    override func display() { observeDisplay { super.display() } }
+    override func displayIfNeeded() { observeDisplay { super.displayIfNeeded() } }
+    override func close() {
+        ActivationPerformanceDiagnostics.shared.willClose(window: self)
+        super.close()
+    }
+
+    private func observeDisplay(_ operation: () -> Void) {
+        let generation = displayDepth == 0
+            ? ActivationPerformanceDiagnostics.shared.displayGeneration(window: self, needsDisplay: viewsNeedDisplay) : nil
+        displayDepth += 1
+        operation()
+        displayDepth -= 1
+        if displayDepth == 0 {
+            ActivationPerformanceDiagnostics.shared.displayReturned(window: self, generation: generation)
+        }
+    }
+}
 
 /// Request-to-mounted-layout intervals; the visual transition has its own duration.
 /// Fixed identifiers contain no document, device, window or owner data.
