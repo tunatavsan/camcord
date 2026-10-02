@@ -66,41 +66,6 @@ extension View {
     }
 }
 
-// MARK: - Signature frame
-
-/// Camcord's signature (owner, 2026-10-02): every glass surface wears the same clear, light
-/// rim. It is NOT an appearance colour: the rim reads the same in light and dark, like the
-/// edge of a pane of glass. A faint outer line keeps it separate from a light backdrop.
-enum SignatureFrame {
-    static let rim = NSColor(white: 1, alpha: 0.42)
-    static let edge = NSColor(white: 0, alpha: 0.10)
-    static let width: CGFloat = 1
-}
-
-private struct SignatureFrameModifier: ViewModifier {
-    let cornerRadius: CGFloat
-    func body(content: Content) -> some View {
-        content.overlay {
-            ZStack {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(Color(nsColor: SignatureFrame.edge), lineWidth: SignatureFrame.width)
-                RoundedRectangle(cornerRadius: max(0, cornerRadius - SignatureFrame.width), style: .continuous)
-                    .strokeBorder(Color(nsColor: SignatureFrame.rim), lineWidth: SignatureFrame.width)
-                    .padding(SignatureFrame.width)
-            }
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-        }
-    }
-}
-
-extension View {
-    /// Draws the signature rim around a glass surface whose corners are `cornerRadius`.
-    func signatureFrame(cornerRadius: CGFloat) -> some View {
-        modifier(SignatureFrameModifier(cornerRadius: cornerRadius))
-    }
-}
-
 // MARK: - AppKit twin
 
 extension NSGlassEffectView {
@@ -155,18 +120,19 @@ enum WindowBackdrop: CaseIterable, Sendable {
 
 private struct WindowBackdropView: NSViewRepresentable {
     let backdrop: WindowBackdrop
+    var material: NSVisualEffectView.Material?
 
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
         view.blendingMode = .behindWindow
         // Active even while the window is not key: the frost must not flatten to grey.
         view.state = .active
-        view.material = backdrop.material
+        view.material = material ?? backdrop.material
         return view
     }
 
     func updateNSView(_ view: NSVisualEffectView, context: Context) {
-        view.material = backdrop.material
+        view.material = material ?? backdrop.material
     }
 }
 
@@ -181,18 +147,20 @@ private struct WindowBackdropModifier: ViewModifier {
                     // The whole app sits in ONE framed glass panel, the one the native sidebar
                     // wore (owner, 2026-10-02): inset from the window's edge, its rim visible,
                     // the sidebar and the module inside it with no gap between them.
+                    // Built like the system's floating sidebar: a translucent window base and
+                    // one untinted system glass panel inset over it. The glass draws its own
+                    // rim; nothing opaque sits behind it, so the desktop shows through.
                     ZStack {
-                        Color(nsColor: .windowBackgroundColor)
-                        Group {
-                            if reduceTransparency {
-                                RoundedRectangle(cornerRadius: Theme.Radius.floating, style: .continuous)
-                                    .fill(backdrop.solid.color)
-                            } else {
-                                WindowFrameGlass()
-                            }
+                        if reduceTransparency {
+                            backdrop.solid.color
+                            RoundedRectangle(cornerRadius: Theme.Radius.floating, style: .continuous)
+                                .fill(Theme.Palette.surface.color)
+                                .padding(Theme.Navigation.nativeSidebarInset)
+                        } else {
+                            WindowBackdropView(backdrop: .sidebar, material: .windowBackground)
+                            WindowFrameGlass()
+                                .padding(Theme.Navigation.nativeSidebarInset)
                         }
-                        .signatureFrame(cornerRadius: Theme.Radius.floating)
-                        .padding(Theme.Navigation.nativeSidebarInset)
                     }
                 } else if reduceTransparency {
                     backdrop.solid.color
