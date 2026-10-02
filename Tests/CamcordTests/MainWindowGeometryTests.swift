@@ -53,11 +53,11 @@ struct MainWindowGeometryTests {
     func missingAutosave() throws {
         try withDefaults { defaults in
             let frame = MainWindowGeometry.initialFrame(savedFrameDescriptor: nil, visibleFrame: usable,
-                legacyFrameSizes: [MainWindowGeometry.legacyContentSize], defaults: defaults, autosaveName: nil)
+                defaults: defaults, autosaveName: nil)
             #expect(frame == MainWindowGeometry.defaultFrame(in: usable))
             #expect(defaults.object(forKey: MainWindowGeometry.migrationKey(for: "test")) == nil)
             #expect(MainWindowGeometry.initialFrame(savedFrameDescriptor: nil, visibleFrame: usable,
-                legacyFrameSizes: [], defaults: defaults, autosaveName: "test") == frame)
+                defaults: defaults, autosaveName: "test") == frame)
             #expect(defaults.bool(forKey: MainWindowGeometry.migrationKey(for: "test")))
         }
     }
@@ -78,10 +78,10 @@ struct MainWindowGeometryTests {
                 defaults.set(old, forKey: "NSWindow Frame test")
                 defaults.set("preserved", forKey: "unrelated-setting")
                 let migrate = MainWindowGeometry.initialFrame(savedFrameDescriptor: old, visibleFrame: usable,
-                    legacyFrameSizes: [MainWindowGeometry.legacyContentSize, converted], defaults: defaults, autosaveName: "test")
+                    defaults: defaults, autosaveName: "test")
                 #expect(migrate == MainWindowGeometry.defaultFrame(in: usable))
                 #expect(MainWindowGeometry.initialFrame(savedFrameDescriptor: old, visibleFrame: usable,
-                    legacyFrameSizes: [MainWindowGeometry.legacyContentSize, converted], defaults: defaults, autosaveName: "test") == nil)
+                    defaults: defaults, autosaveName: "test") == nil)
                 #expect(defaults.string(forKey: "NSWindow Frame test") == old)
                 #expect(defaults.string(forKey: "unrelated-setting") == "preserved")
             }
@@ -89,47 +89,97 @@ struct MainWindowGeometryTests {
         #expect(!native.isVisible && !native.isKeyWindow)
     }
 
-    @Test("Manual frames including the owner's size preserve their saved origin and bypass future migration")
+    @Test("A saved frame smaller in both dimensions grows once and centers on its restored display")
+    func smallerSavedFrameMigration() throws {
+        let display = NSRect(x: -1800, y: 48, width: 1800, height: 1130)
+        try withDefaults { defaults in
+            let old = descriptor(NSRect(x: -1700, y: 150, width: 1315, height: 792))
+            defaults.set(old, forKey: "NSWindow Frame test")
+            defaults.set("preserved", forKey: "unrelated-setting")
+            let frame = MainWindowGeometry.initialFrame(savedFrameDescriptor: old, visibleFrame: display,
+                defaults: defaults, autosaveName: "test")
+            #expect(frame == NSRect(x: -1620, y: 163, width: 1440, height: 900))
+            #expect(defaults.bool(forKey: MainWindowGeometry.migrationKey(for: "test")))
+            #expect(defaults.object(forKey: "MainWindowDefaultFrameMigration.test") == nil)
+            #expect(MainWindowGeometry.initialFrame(savedFrameDescriptor: old, visibleFrame: display,
+                defaults: defaults, autosaveName: "test") == nil)
+            #expect(defaults.string(forKey: "NSWindow Frame test") == old)
+            #expect(defaults.string(forKey: "unrelated-setting") == "preserved")
+        }
+    }
+
+    @Test("A manual smaller frame saved after migration stays unchanged on the next opening")
+    func manualResizeAfterMigration() throws {
+        let display = NSRect(x: 0, y: 48, width: 1800, height: 1130)
+        try withDefaults { defaults in
+            let old = descriptor(NSRect(x: 100, y: 150, width: 1315, height: 792))
+            let first = MainWindowGeometry.initialFrame(savedFrameDescriptor: old, visibleFrame: display,
+                defaults: defaults, autosaveName: "test")
+            #expect(first?.size == NSSize(width: 1440, height: 900))
+            let manual = NSRect(x: 240, y: 180, width: 1100, height: 700)
+            let saved = descriptor(manual)
+            defaults.set(saved, forKey: "NSWindow Frame test")
+            #expect(MainWindowGeometry.initialFrame(savedFrameDescriptor: defaults.string(forKey: "NSWindow Frame test"),
+                visibleFrame: display, defaults: defaults, autosaveName: "test") == nil)
+            #expect(MainWindowGeometry.savedFrame(from: defaults.string(forKey: "NSWindow Frame test")) == manual)
+            #expect(defaults.bool(forKey: MainWindowGeometry.migrationKey(for: "test")))
+        }
+    }
+
+    @Test("The existing migration flag does not block the independent v2 saved-frame assessment")
+    func previousMigrationFlag() throws {
+        let display = NSRect(x: 0, y: 48, width: 1800, height: 1130)
+        try withDefaults { defaults in
+            let previousKey = "MainWindowDefaultFrameMigration.test"
+            defaults.set(1, forKey: previousKey)
+            let old = descriptor(NSRect(x: 100, y: 150, width: 1315, height: 792))
+            defaults.set(old, forKey: "NSWindow Frame test")
+            let frame = MainWindowGeometry.initialFrame(savedFrameDescriptor: old, visibleFrame: display,
+                defaults: defaults, autosaveName: "test")
+            #expect(frame == NSRect(x: 180, y: 163, width: 1440, height: 900))
+            #expect(defaults.integer(forKey: previousKey) == 1)
+            #expect(defaults.bool(forKey: MainWindowGeometry.migrationKey(for: "test")))
+            #expect(defaults.string(forKey: "NSWindow Frame test") == old)
+        }
+    }
+
+    @Test("Saved frames at or above either default dimension keep their origin and bypass future migration")
     func manualFrames() throws {
-        for frame in [NSRect(x: -1530, y: -100, width: 1315, height: 792),
-                      NSRect(x: 80, y: 140, width: 1182, height: 762)] {
+        let display = NSRect(x: -1800, y: 48, width: 1800, height: 1130)
+        for frame in [NSRect(x: -1530, y: 100, width: 1441, height: 792),
+                      NSRect(x: -1530, y: 100, width: 1315, height: 901),
+                      NSRect(x: -1530, y: 100, width: 1440, height: 792),
+                      NSRect(x: -1530, y: 100, width: 1315, height: 900)] {
             try withDefaults { defaults in
                 let old = descriptor(frame)
                 defaults.set(old, forKey: "NSWindow Frame test")
                 #expect(MainWindowGeometry.savedFrame(from: old) == frame)
-                #expect(MainWindowGeometry.initialFrame(savedFrameDescriptor: old, visibleFrame: usable,
-                    legacyFrameSizes: [MainWindowGeometry.legacyContentSize], defaults: defaults, autosaveName: "test") == nil)
+                #expect(MainWindowGeometry.initialFrame(savedFrameDescriptor: old, visibleFrame: display,
+                    defaults: defaults, autosaveName: "test") == nil)
                 #expect(defaults.string(forKey: "NSWindow Frame test") == old)
+                #expect(defaults.bool(forKey: MainWindowGeometry.migrationKey(for: "test")))
                 // A later manual resize to the exact old default remains the owner's choice.
                 let later = descriptor(NSRect(origin: frame.origin, size: MainWindowGeometry.legacyContentSize))
-                #expect(MainWindowGeometry.initialFrame(savedFrameDescriptor: later, visibleFrame: usable,
-                    legacyFrameSizes: [MainWindowGeometry.legacyContentSize], defaults: defaults, autosaveName: "test") == nil)
+                #expect(MainWindowGeometry.initialFrame(savedFrameDescriptor: later, visibleFrame: display,
+                    defaults: defaults, autosaveName: "test") == nil)
             }
         }
     }
 
-    @Test("Legacy matching permits at most one point and rejects malformed descriptors")
-    func matchingTolerance() throws {
-        for delta in [CGFloat(1), CGFloat(1.01)] {
-            try withDefaults { defaults in
-                let old = descriptor(NSRect(x: 5, y: 8, width: 1180 + delta, height: 760 - delta))
-                let frame = MainWindowGeometry.initialFrame(savedFrameDescriptor: old, visibleFrame: usable,
-                    legacyFrameSizes: [MainWindowGeometry.legacyContentSize], defaults: defaults, autosaveName: "test")
-                #expect((frame != nil) == (delta <= 1))
-            }
-        }
+    @Test("Malformed saved frame descriptors are rejected")
+    func malformedDescriptors() {
         for invalid in ["", "not a frame", "0 0 1180", "0 0 nan 760", "0 0 -1180 760"] {
             #expect(MainWindowGeometry.savedFrame(from: invalid) == nil)
         }
     }
 
-    @Test("A migrated legacy frame follows the current display after its original display is unplugged")
+    @Test("A smaller saved frame centers on the current display after its original display is unplugged")
     func unpluggedDisplay() throws {
         try withDefaults { defaults in
-            let old = descriptor(NSRect(x: -1900, y: -1200, width: 1180, height: 760))
+            let old = descriptor(NSRect(x: -1900, y: -1200, width: 1000, height: 650))
             let remaining = NSRect(x: 0, y: 50, width: 1440, height: 850)
             let frame = MainWindowGeometry.initialFrame(savedFrameDescriptor: old, visibleFrame: remaining,
-                legacyFrameSizes: [MainWindowGeometry.legacyContentSize], defaults: defaults, autosaveName: "test")
+                defaults: defaults, autosaveName: "test")
             #expect(frame == NSRect(x: 144, y: 135, width: 1152, height: 680))
         }
     }

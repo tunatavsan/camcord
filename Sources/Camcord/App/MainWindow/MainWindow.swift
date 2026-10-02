@@ -496,14 +496,13 @@ enum MainWindowGeometry {
     }
 
     static func migrationKey(for autosaveName: String) -> String {
-        "MainWindowDefaultFrameMigration.\(autosaveName)"
+        "MainWindowDefaultFrameMigration.\(autosaveName).v2"
     }
 
     /// Nil leaves AppKit's restored frame alone. The flag records the first assessment even
     /// when a manual frame wins, so later manual resizing to the old size is never migrated.
     static func initialFrame(savedFrameDescriptor: String?, visibleFrame: NSRect?,
-                             legacyFrameSizes: [NSSize], defaults: UserDefaults,
-                             autosaveName: String?) -> NSRect? {
+                             defaults: UserDefaults, autosaveName: String?) -> NSRect? {
         let preferred = defaultFrame(in: visibleFrame)
         guard let autosaveName else { return preferred }
         let key = migrationKey(for: autosaveName)
@@ -511,9 +510,7 @@ enum MainWindowGeometry {
         if !assessed { defaults.set(true, forKey: key) }
         guard let saved = savedFrame(from: savedFrameDescriptor) else { return preferred }
         guard !assessed else { return nil }
-        return legacyFrameSizes.contains {
-            abs(saved.width - $0.width) <= 1 && abs(saved.height - $0.height) <= 1
-        } ? preferred : nil
+        return saved.width < preferred.width && saved.height < preferred.height ? preferred : nil
     }
 
     static func savedFrame(from descriptor: String?) -> NSRect? {
@@ -733,18 +730,16 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         let autosaveName = windowFactory == nil ? frameAutosaveKey : nil
         // Read before registering autosave, which itself restores the old frame.
         let descriptor = autosaveName.flatMap { defaults.string(forKey: "NSWindow Frame \($0)") }
-        let legacyFrameSizes = [MainWindowGeometry.legacyContentSize,
-            window.frameRect(forContentRect: NSRect(origin: .zero, size: MainWindowGeometry.legacyContentSize)).size]
         window.setFrame(MainWindowGeometry.defaultFrame(in: visibleFrame(window)), display: false)
         // After the first placement, so a saved frame wins over the centred default.
         if let autosaveName {
             window.setFrameAutosaveName(autosaveName)
             window.setFrameUsingName(autosaveName)
         }
-        // Resolve the display after native restoration: a legacy frame may belong to an
+        // Resolve the display after native restoration: a saved frame may belong to an
         // attached secondary screen, or AppKit may have relocated it after a hot unplug.
         let initialFrame = MainWindowGeometry.initialFrame(savedFrameDescriptor: descriptor,
-            visibleFrame: visibleFrame(window), legacyFrameSizes: legacyFrameSizes,
+            visibleFrame: visibleFrame(window),
             defaults: defaults, autosaveName: autosaveName)
         if let initialFrame { window.setFrame(initialFrame, display: false) }
         return window
