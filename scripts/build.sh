@@ -160,6 +160,9 @@ for icon_key in CFBundleIconName CFBundleIconFile; do
     plutil -replace "$icon_key" -string "$icon_value" "$APP/Contents/Info.plist"
 done
 cp Resources/MenuBarIcon.svg "$APP/Contents/Resources/MenuBarIcon.svg"
+# Preserve the font's license alongside the unmodified variable face.
+mkdir -p "$APP/Contents/Resources/Fonts"
+cp 'Resources/Fonts/DMSans[opsz,wght].ttf' Resources/Fonts/OFL.txt "$APP/Contents/Resources/Fonts/"
 
 # Bundle.module resolves resources outside Contents/Resources. Copy localized
 # resources explicitly so the app remains portable after leaving the build machine.

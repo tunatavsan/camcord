@@ -299,7 +299,7 @@ enum EditorRenderer {
     /// A short stored box must still contain the first line at its requested font size.
     static func textLayoutRect(_ annotation: EditorAnnotation, pixelScale: CGSize) -> CGRect {
         guard annotation.kind == .text else { return annotation.rect }
-        let font = NSFont.systemFont(ofSize:annotation.style.fontSize,weight:.semibold)
+        let font = Theme.Font.ns.text(annotation.style.fontSize, weight: .semibold)
         let lineHeight = ceil(font.ascender - font.descender + font.leading)
         let inset: CGFloat = annotation.style.textBackground ? 8 : 0
         var rect = annotation.rect
@@ -397,8 +397,7 @@ enum EditorRenderer {
 
     private static func drawText(_ text: String, rect: CGRect, size: CGFloat, color: CGColor,
                                  context: CGContext, centered: Bool = false, outlined: Bool = false) {
-        let system = NSFont.systemFont(ofSize: size, weight: centered ? .bold : .semibold)
-        let font = centered ? NSFont(descriptor: system.fontDescriptor.withDesign(.rounded) ?? system.fontDescriptor, size: size) ?? system : system
+        let font = Theme.Font.ns.text(size, weight: .semibold)
         let attributes: [NSAttributedString.Key: Any] = [
             NSAttributedString.Key(kCTFontAttributeName as String): font,
             NSAttributedString.Key(kCTForegroundColorAttributeName as String): color

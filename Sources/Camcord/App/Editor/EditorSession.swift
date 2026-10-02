@@ -285,7 +285,7 @@ final class EditorSession {
         let available = CGSize(width: max(0, document.bounds.maxX - annotation.rect.minX),
                                height: max(0, document.bounds.maxY - annotation.rect.minY))
         guard available.width > 0, available.height > 0 else { return annotation.rect }
-        let font = NSFont.systemFont(ofSize: annotation.style.fontSize, weight: .semibold)
+        let font = Theme.Font.ns.text(annotation.style.fontSize, weight: .semibold)
         let string = NSAttributedString(string: annotation.text, attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font])
         let setter = CTFramesetterCreateWithAttributedString(string)
         let padding = annotation.style.textBackground ? CGSize(width: 16, height: 8) : .zero

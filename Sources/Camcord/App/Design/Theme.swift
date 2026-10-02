@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import SwiftUI
 
 // Camcord's design tokens (docs/design/native/SPEC.md §2, docs/RUN-UI-2.md K1–K3). Colour, type,
@@ -271,52 +272,59 @@ extension Theme {
 // MARK: - Type
 
 extension Theme {
-    /// SF Pro Text 11 / 13 / 15 / 20 + one display size; SF Mono tabular for all data (K1, K2.3).
+    /// DM Sans for text; SF Mono for data because this face has no tabular-number feature.
     enum Font {
-        static let caption = SwiftUI.Font.system(size: Size.caption)
-        static let captionStrong = SwiftUI.Font.system(size: Size.caption, weight: .semibold)
-        static let body = SwiftUI.Font.system(size: Size.body)
-        static let bodyStrong = SwiftUI.Font.system(size: Size.body, weight: .semibold)
-        static let row = SwiftUI.Font.system(size: Size.row)
-        static let rowStrong = SwiftUI.Font.system(size: Size.row, weight: .semibold)
+        static let caption = text(Size.caption)
+        static let captionStrong = text(Size.caption, weight: .semibold)
+        static let body = text(Size.body)
+        static let bodyStrong = text(Size.body, weight: .semibold)
+        static let row = text(Size.row)
+        static let rowStrong = text(Size.row, weight: .semibold)
         static let sidebarSymbol = SwiftUI.Font.system(size: Navigation.symbolSize, weight: .regular)
-        static let sidebarBrand = SwiftUI.Font.system(size: Size.row, weight: .semibold)
-        static let sidebarSection = SwiftUI.Font.system(size: Size.caption, weight: .medium)
-        static let title = SwiftUI.Font.system(size: Size.title, weight: .semibold)
-        static let display = SwiftUI.Font.system(size: Size.display, weight: .semibold)
+        static let sidebarBrand = text(Size.row, weight: .semibold)
+        static let sidebarSection = text(Size.caption, weight: .medium)
+        static let title = text(Size.title, weight: .semibold)
+        static let display = text(Size.display, weight: .semibold)
         static let timecode = SwiftUI.Font.system(size: Size.display, weight: .light, design: .monospaced).monospacedDigit()
         static let countdown = SwiftUI.Font.system(size: Size.countdown, weight: .light, design: .monospaced).monospacedDigit()
         static let data = SwiftUI.Font.system(size: Size.data, design: .monospaced).monospacedDigit()
         static let dataSmall = SwiftUI.Font.system(size: Size.caption, design: .monospaced).monospacedDigit()
         static let dataStrong = SwiftUI.Font.system(size: Size.data, weight: .semibold, design: .monospaced).monospacedDigit()
         /// Tracking for the display size and for uppercase-free section headers.
-        static let displayTracking: CGFloat = -0.6
+        static let displayTracking: CGFloat = 0
         static let headerTracking: CGFloat = 0.2
 
+        /// SwiftUI wraps the exact AppKit face, including its weight and optical-size axes.
+        static func text(_ size: CGFloat, weight: NSFont.Weight = .regular,
+                         fonts: BundledFonts = .application) -> SwiftUI.Font {
+            SwiftUI.Font(ns.text(size, weight: weight, fonts: fonts) as CTFont)
+        }
+
         enum Size {
-            static let caption: CGFloat = 11
-            static let body: CGFloat = 13
-            static let row: CGFloat = 15
+            static let caption: CGFloat = 12
+            static let body: CGFloat = 14
+            static let row: CGFloat = 16
             static let title: CGFloat = 20
-            static let display: CGFloat = 30
+            static let display: CGFloat = 28
             static let data: CGFloat = 12
             static let countdown: CGFloat = 64
         }
 
-        /// AppKit twins, for the hub, the status item and the overlays.
+        /// AppKit twins, for the hub, the status item, annotations and the overlays.
         enum ns {
-            static func text(_ size: CGFloat, weight: NSFont.Weight = .regular) -> NSFont {
-                NSFont.systemFont(ofSize: size, weight: weight)
+            static func text(_ size: CGFloat, weight: NSFont.Weight = .regular,
+                             fonts: BundledFonts = .application) -> NSFont {
+                fonts.text(size, weight: weight)
             }
             static func mono(_ size: CGFloat, weight: NSFont.Weight = .regular) -> NSFont {
-                NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight)
+                NSFont.monospacedSystemFont(ofSize: size, weight: weight)
             }
             static var caption: NSFont { text(Size.caption) }
             static var body: NSFont { text(Size.body) }
             static var bodyStrong: NSFont { text(Size.body, weight: .semibold) }
-            static var data: NSFont { NSFont.monospacedSystemFont(ofSize: Size.data, weight: .regular) }
-            static var dataStrong: NSFont { NSFont.monospacedSystemFont(ofSize: Size.data, weight: .semibold) }
-            static var pill: NSFont { NSFont.monospacedSystemFont(ofSize: Size.caption, weight: .semibold) }
+            static var data: NSFont { mono(Size.data) }
+            static var dataStrong: NSFont { mono(Size.data, weight: .semibold) }
+            static var pill: NSFont { mono(Size.caption, weight: .semibold) }
         }
     }
 }

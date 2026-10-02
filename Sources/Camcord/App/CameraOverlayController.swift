@@ -854,7 +854,7 @@ final class FloatingCameraView: NSView {
             image.draw(in: bounds, from: crop, operation: .copy, fraction: 1)
         } else {
             let text = NSAttributedString(string: message, attributes: [
-                .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+                .font: Theme.Font.ns.text(Theme.Font.Size.caption, weight: .medium),
                 .foregroundColor: NSColor.white.withAlphaComponent(0.72),
             ])
             let textSize = text.size()
