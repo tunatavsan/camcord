@@ -115,6 +115,17 @@ final class ScrollStitcher {
     }
     /// Baseline for the next comparison, including a move still awaiting confirmation.
     var firstFrame: Frame? { pending?.frame ?? reference ?? warmup.last }
+    /// How `image` sits against the frame the next `add` compares with, changing nothing: a
+    /// driver measures the real shift first and commits only a frame it knows how to place.
+    func probe(_ image: CGImage, predicted: Int) -> (still: Bool, motion: Motion)? {
+        guard let f = Self.makeFrame(image), let ref = detected ? (pending?.frame ?? reference) : warmup.last,
+              ref.height == f.height, ref.width == f.width else { return nil }
+        let shared = Self.staticBands(ref, f)
+        let header = max(headerH, shared.header), footer = max(footerH, shared.footer)
+        if Self.isStill(ref, f, headerH: header, footerH: footer) { return (true, .none) }
+        return (false, Self.measureMotion(from: ref, to: f, headerH: header, footerH: footer, predicted: predicted).0)
+    }
+
     /// Sticky bands detected during warm-up (0 until then) — a caller comparing two frames
     /// outside `add` must exclude the same rows or a tall sticky header reads as no motion.
     var detectedBands: (header: Int, footer: Int) { (headerH, footerH) }
@@ -173,7 +184,11 @@ final class ScrollStitcher {
 
         if !detected {
             if let previous = warmup.last {
-                (lastMotion, lastScore) = Self.measureMotion(from: previous, to: f, predicted: predictedOffset)
+                // Bands are not known yet, but a toolbar or a sticky header that two frames share
+                // exactly would otherwise drown the motion of everything below it.
+                let bands = Self.staticBands(previous, f)
+                (lastMotion, lastScore) = Self.measureMotion(from: previous, to: f, headerH: bands.header,
+                                                             footerH: bands.footer, predicted: predictedOffset)
             }
             warmup.append(f)
             warmupPredictions.append(predictedOffset)
@@ -413,7 +428,9 @@ final class ScrollStitcher {
         guard warmup.count >= bandDetectFrames else { return false }
         var moves = 0
         for i in 1..<warmup.count where warmup[i].height == warmup[i - 1].height {
-            if case .down = Self.motion(from: warmup[i - 1], to: warmup[i], predicted: warmupPredictions[i]) {
+            let bands = Self.staticBands(warmup[i - 1], warmup[i])
+            if case .down = Self.motion(from: warmup[i - 1], to: warmup[i], headerH: bands.header, footerH: bands.footer,
+                                        predicted: warmupPredictions[i]) {
                 moves += 1
             }
         }
@@ -621,6 +638,20 @@ final class ScrollStitcher {
     }
 
     // MARK: - Pixel helpers
+
+    /// The rows at the top and the bottom that two frames share exactly: a toolbar, a sticky
+    /// header or footer, while the rest may have moved. Capped, so a page with a plain top or
+    /// bottom never reads as all band.
+    static func staticBands(_ a: Frame, _ b: Frame) -> (header: Int, footer: Int) {
+        guard a.height == b.height, a.width == b.width, a.height > 0 else { return (0, 0) }
+        let cap = a.height * 2 / 5
+        func same(_ row: Int) -> Bool { regionMAD(a.sig, b.sig, from: row, to: row + 1) <= staticLimit }
+        var header = 0
+        while header < cap, same(header) { header += 1 }
+        var footer = 0
+        while footer < cap, same(a.height - 1 - footer) { footer += 1 }
+        return (header, footer)
+    }
 
     /// True when `b` shows what `a` shows — the page has not moved between them (a live
     /// caret, a fading scroll bar and anti-aliasing stay under the same limit `add` uses).

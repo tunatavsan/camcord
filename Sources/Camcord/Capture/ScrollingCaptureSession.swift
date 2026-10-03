@@ -39,6 +39,12 @@ actor ScrollStitchWorker {
         stitcher = ScrollStitcher(maxTotalHeight: caps.height, maxTotalPixels: caps.pixels)
     }
 
+    /// How a frame sits against the stitch's own reference, changing nothing.
+    func probe(_ image: CGImage, predicted: Int) -> (still: Bool, motion: ScrollStitcher.Motion)? {
+        workHook?()
+        return stitcher.probe(image, predicted: predicted)
+    }
+
     /// How `to` sits relative to `from`: the same view (still), or moved, measured the way `add`
     /// measures it.
     func compare(_ from: CGImage, _ to: CGImage, header: Int, footer: Int,
@@ -46,8 +52,10 @@ actor ScrollStitchWorker {
         workHook?()
         guard let a = ScrollStitcher.makeFrame(from), let b = ScrollStitcher.makeFrame(to) else { return (false, .none) }
         if ScrollStitcher.isStill(a, b, headerH: header, footerH: footer) { return (true, .none) }
-        return (false, ScrollStitcher.motion(from: a, to: b, headerH: header, footerH: footer, predicted: predicted,
-                                             minimumShift: 2))
+        // A toolbar or sticky band the two frames share stays out of the measurement.
+        let bands = ScrollStitcher.staticBands(a, b)
+        return (false, ScrollStitcher.motion(from: a, to: b, headerH: max(header, bands.header),
+                                             footerH: max(footer, bands.footer), predicted: predicted, minimumShift: 2))
     }
 
     func add(_ image: CGImage, predictedOffset: Int) -> Update {
@@ -392,7 +400,8 @@ final class ScrollingCaptureSession {
             if await worker.compare(start, top, header: 0, footer: 0, predicted: 0).still { return nil }
             return (top, startPosition ?? 0, startPosition != nil)
         }
-        let stepPoints = region.height * 0.8
+        // Half the region: a toolbar or a sticky header still leaves overlap to measure.
+        let stepPoints = region.height * 0.5
         var previous = start
         var distance: CGFloat = 0
         var exact = true
@@ -434,54 +443,70 @@ final class ScrollingCaptureSession {
     }
 
     /// Down one settled step at a time, back to where the owner started (or, started at the
-    /// top, to the page end). The last step is exactly what remains, and the frame it lands on
-    /// is checked against the frame the owner started from.
+    /// top, to the page end). Each frame is measured against the stitch before it is committed,
+    /// so a step that went wrong is taken back instead of stitched. The last step is exactly
+    /// what remains, and the frame it lands on is checked against the one the owner started from.
     private func descend(_ actuator: any ScrollActuator, to boundary: Boundary?, run: Int) async {
-        var stepPoints = region.height * (actuator.route == "ax" ? 0.7 : 0.6)
+        // Steps are a share of what actually scrolls: the region less its fixed bands. Small
+        // until the stitch has found those bands, then longer.
+        let cruise: CGFloat = actuator.route == "ax" ? 0.6 : 0.5
+        var share: CGFloat = 0.35
         var descended: CGFloat = 0
         var stalls = 0
         var verified = false
         var searching = false
         for _ in 0..<Self.maxAutoSteps {
             guard autoAlive(run) else { return }
+            let scrolling = max(region.height * 0.3,
+                                region.height - CGFloat(stitchState.header + stitchState.footer) / scale)
+            let stepPoints = max(8, scrolling * share)
             var length = stepPoints
             var last = false
             if let boundary, !searching {
                 // The scroll bar reads exactly where the page is; otherwise the measured steps say.
                 let remaining = actuator.position().map { boundary.distance - $0 } ?? (boundary.distance - descended)
-                if remaining <= stepPoints * 1.4 {
+                if remaining <= stepPoints {
                     length = max(1, remaining)
                     last = true
+                } else if remaining < stepPoints * 1.4 {
+                    // Never leave a sliver for the end: split what remains in two.
+                    length = remaining / 2
                 }
             }
-            if searching { length = region.height * 0.25 }
+            if searching { length = scrolling * 0.25 }
             guard let frame = await step(actuator, by: length, run: run), autoAlive(run) else { return }
-            guard let outcome = await stitch(frame, predictedPx: Int((length * scale).rounded()),
-                                             sessionGeneration: generation), autoAlive(run) else { return }
-            switch outcome {
-            case .appended, .buffered, .baselined:
-                autoFrame = frame
-                stalls = 0
-                verified = true
-                descended += stitchState.offset > 0 ? CGFloat(stitchState.offset) / scale : length
-            case .noMotion:
+            var measured = await worker.probe(frame, predicted: Int((length * scale).rounded()))
+            if let first = measured, !first.still, first.motion == .none {
+                // The page moved other than asked (its end clamped the step): look without a guess.
+                measured = await worker.probe(frame, predicted: 0)
+            }
+            guard autoAlive(run), let measured else { return }
+            if measured.still {
                 stalls += 1
                 if stalls >= 2 { finishAuto(reason: "page-end"); return }
                 // A page may still be loading what comes next.
                 try? await Task.sleep(for: .milliseconds(900))
                 continue
-            case .movedUp:
+            }
+            switch measured.motion {
+            case .down(let pixels, _):
+                guard let outcome = await stitch(frame, predictedPx: pixels, sessionGeneration: generation),
+                      autoAlive(run) else { return }
+                if outcome == .atCap { return }
+                stalls = 0
+                verified = true
+                descended += CGFloat(pixels) / scale
+                if outcome == .appended { share = max(share, cruise) }
+            case .up:
                 // Before the first measured advance this can only be a wheel running the other way.
                 if !verified { actuator.reverse(); verified = true; logAuto("reversed") }
                 continue
-            case .ignored:
-                // Too far for the overlap: smaller steps from here on.
-                stepPoints = max(region.height * 0.25, stepPoints * 0.6)
-                autoFrame = frame
-                descended += length
+            case .none:
+                // Too far to place: take the step back and try a shorter one.
+                logAuto("step-back points=\(Int(length))")
+                guard await step(actuator, by: -length, run: run) != nil, autoAlive(run) else { return }
+                share = max(0.15, share * 0.5)
                 continue
-            case .atCap:
-                return
             }
             guard let boundary, last || searching else { continue }
             let atStart = await worker.compare(frame, boundary.frame, header: stitchState.header,

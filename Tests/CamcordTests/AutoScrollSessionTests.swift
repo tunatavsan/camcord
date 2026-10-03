@@ -18,29 +18,45 @@ struct AutoScrollSessionTests {
         private(set) var offset: Int
         private var sign: CGFloat
         let jumps: Bool
+        /// Rows of a toolbar over the page that never scroll.
+        let header: Int
+        private let pageBytes: [UInt8]
+        private let toolbar: [UInt8]
         private(set) var steps = 0
 
-        init(height: Int, startingAt offset: Int, reversed: Bool = false, jumps: Bool = false) {
+        init(height: Int, startingAt offset: Int, reversed: Bool = false, jumps: Bool = false, header: Int = 0) {
             self.height = height
             self.offset = offset
             sign = reversed ? -1 : 1
             self.jumps = jumps
-            let width = 40
-            let bytes = (0..<(width * height)).map { index -> UInt8 in
-                var z = UInt64((index / width) * 40_503 + (index % width) * 92_821) &+ 0x9E3779B97F4A7C15
+            self.header = header
+            pageBytes = Self.noise(rows: height, seed: 0)
+            toolbar = Self.noise(rows: header, seed: 7_777)
+            full = Self.image(pageBytes, rows: height)
+        }
+
+        static func noise(rows: Int, seed: Int) -> [UInt8] {
+            (0..<(40 * rows)).map { index -> UInt8 in
+                var z = UInt64((index / 40 + seed) * 40_503 + (index % 40) * 92_821) &+ 0x9E3779B97F4A7C15
                 z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
                 z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
                 return UInt8(truncatingIfNeeded: z ^ (z >> 31)) % 220
             }
-            full = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: width,
-                           space: CGColorSpaceCreateDeviceGray(),
-                           bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
-                           provider: CGDataProvider(data: Data(bytes) as CFData)!, decode: nil,
-                           shouldInterpolate: false, intent: .defaultIntent)!
+        }
+        static func image(_ bytes: [UInt8], rows: Int) -> CGImage {
+            CGImage(width: 40, height: rows, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: 40,
+                    space: CGColorSpaceCreateDeviceGray(),
+                    bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
+                    provider: CGDataProvider(data: Data(bytes) as CFData)!, decode: nil,
+                    shouldInterpolate: false, intent: .defaultIntent)!
         }
 
-        var maxOffset: Int { height - viewport }
-        func frame() -> CGImage { full.cropping(to: CGRect(x: 0, y: offset, width: 40, height: viewport))! }
+        var maxOffset: Int { height - (viewport - header) }
+        func frame() -> CGImage {
+            let content = viewport - header
+            let rows = pageBytes[(offset * 40)..<((offset + content) * 40)]
+            return Self.image(toolbar + rows, rows: viewport)
+        }
 
         func scroll(by points: CGFloat) async -> Bool {
             steps += 1
@@ -111,6 +127,15 @@ struct AutoScrollSessionTests {
         let image = try #require(await autoCapture(page))
         #expect(page.offset == 640)
         #expect(abs(image.height - (640 + page.viewport)) <= 2)
+    }
+
+    @Test("a toolbar that never scrolls does not keep the stitch from starting, and appears once")
+    func stickyToolbar() async throws {
+        let page = Page(height: 1_400, startingAt: 640, header: 30)
+        let image = try #require(await autoCapture(page))
+        #expect(page.offset == 640)
+        // The toolbar once, then the page from its top down to the bottom of where it started.
+        #expect(abs(image.height - (30 + 640 + 90)) <= 3, "captured \(image.height) rows")
     }
 
     @Test("stopping it leaves the page where it is and the capture open")
