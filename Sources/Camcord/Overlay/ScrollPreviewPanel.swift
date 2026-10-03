@@ -159,6 +159,9 @@ private final class ScrollPreviewView: NSView {
     private var hint: (text: String, warning: Bool)?
     private var hintGeneration = 0
     private var hoverControl: ScrollHUDFocusable?
+    /// Leaving a control waits a beat before the HUD lets go of it, so moving from one control
+    /// to the next goes straight across instead of flashing the state in between.
+    private var hoverRelease = 0
     private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
     /// Esc and synthesized scrolling both need the app to be trusted for Accessibility.
     private var trusted: Bool { AXIsProcessTrusted() }
@@ -168,22 +171,25 @@ private final class ScrollPreviewView: NSView {
         self.compact = compact
         let tint = NSColor.black.withAlphaComponent(0.16)
         let controls: [NSView] = [cancelButton, autoButton]
+        // The tray is a ring; on it stand cards of Liquid Glass, the Dock's own material, so
+        // what lies behind the HUD stays behind it: the capture in one, the controls with a
+        // full-size Done in another.
         if compact {
             well = nil
-            surface = TraySurface(content: ScrollHUDCompactLayout(leading: controls, status: status, trailing: doneButton),
-                                  shadowRadius: 10, cornerRadius: nil, tint: tint)
+            let body = ScrollHUDCard()
+            body.contentView = ScrollHUDCompactLayout(leading: controls, status: status, trailing: doneButton)
+            surface = TraySurface(content: ScrollHUDTray(cards: [body], capsule: true), shadowRadius: 10, cornerRadius: nil, tint: tint)
         } else {
             let well = ScrollHUDWell(status: status)
             self.well = well
-            let cell = NSGlassEffectView()
-            cell.style = .clear
-            cell.tintColor = tint
-            cell.cornerRadius = Theme.Radius.well
+            let capture = ScrollHUDCard()
+            capture.contentView = ScrollHUDWellHolder(well: well)
             let row = ScrollHUDControls()
             row.place(leading: controls, trailing: doneButton)
-            cell.contentView = row
-            surface = TraySurface(content: ScrollHUDLayout(well: well, controls: cell), shadowRadius: 10,
-                                  cornerRadius: Theme.Radius.floating, tint: tint)
+            let controlsCard = ScrollHUDCard()
+            controlsCard.contentView = row
+            surface = TraySurface(content: ScrollHUDTray(cards: [capture, controlsCard], capsule: false), shadowRadius: 10,
+                                  cornerRadius: ScrollHUDTray.radius, tint: tint)
         }
         super.init(frame: frameRect)
         wantsLayer = true
@@ -199,9 +205,20 @@ private final class ScrollPreviewView: NSView {
         for control in all {
             control.onHover = { [weak self, weak control] inside in
                 guard let self, let control else { return }
-                for other in all { other.setFocus(inside ? other === control : nil, reduceMotion: self.reduceMotion) }
-                self.hoverControl = inside && control !== self.doneButton ? control : nil
-                self.refreshStatus()
+                self.hoverRelease &+= 1
+                if inside {
+                    for other in all { other.setFocus(other === control, reduceMotion: self.reduceMotion) }
+                    self.hoverControl = control === self.doneButton ? nil : control
+                    self.refreshStatus()
+                    return
+                }
+                let release = self.hoverRelease
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+                    guard let self, self.hoverRelease == release else { return }
+                    for other in all { other.setFocus(nil, reduceMotion: self.reduceMotion) }
+                    self.hoverControl = nil
+                    self.refreshStatus()
+                }
             }
         }
         setAccessibilityElement(true)
@@ -368,26 +385,60 @@ private final class ScrollPreviewView: NSView {
     }
 }
 
-/// The full tray's two parts, a ring in from its edge: the capture above, the controls below.
-private final class ScrollHUDLayout: NSView {
+/// One card of Liquid Glass on the tray: plain glass, as the Dock wears it.
+private final class ScrollHUDCard: NSGlassEffectView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        style = .regular
+    }
+    required init?(coder: NSCoder) { nil }
+}
+
+/// The tray and its cards, a ring in from its edge and a ring apart. In the full tray the
+/// capture card takes the height the controls card leaves; corners nest: tray, card, well.
+private final class ScrollHUDTray: NSView {
     static let ring: CGFloat = 8
+    static let radius: CGFloat = 24
     static let controlsHeight: CGFloat = 52
-    private let well: NSView
-    private let controls: NSView
-    init(well: NSView, controls: NSView) {
-        self.well = well
-        self.controls = controls
+    private let cards: [NSGlassEffectView]
+    private let capsule: Bool
+    init(cards: [NSGlassEffectView], capsule: Bool) {
+        self.cards = cards
+        self.capsule = capsule
         super.init(frame: .zero)
-        addSubview(well)
-        addSubview(controls)
+        for card in cards { addSubview(card) }
     }
     required init?(coder: NSCoder) { nil }
     override func layout() {
         super.layout()
-        let inner = bounds.insetBy(dx: Self.ring, dy: Self.ring)
-        controls.frame = CGRect(x: inner.minX, y: inner.minY, width: inner.width, height: Self.controlsHeight)
-        well.frame = CGRect(x: inner.minX, y: inner.minY + Self.controlsHeight + Self.ring,
-                            width: inner.width, height: inner.height - Self.controlsHeight - Self.ring)
+        let ring = capsule ? 5 : Self.ring
+        let inner = bounds.insetBy(dx: ring, dy: ring)
+        if capsule, let body = cards.first {
+            body.frame = inner
+            body.cornerRadius = inner.height / 2
+            return
+        }
+        guard cards.count == 2 else { return }
+        cards[1].frame = CGRect(x: inner.minX, y: inner.minY, width: inner.width, height: Self.controlsHeight)
+        cards[0].frame = CGRect(x: inner.minX, y: inner.minY + Self.controlsHeight + ring,
+                                width: inner.width, height: inner.height - Self.controlsHeight - ring)
+        for card in cards { card.cornerRadius = Self.radius - ring }
+    }
+}
+
+/// The capture card's content: the well a ring in from the glass.
+private final class ScrollHUDWellHolder: NSView {
+    static let inset: CGFloat = 6
+    private let well: NSView
+    init(well: NSView) {
+        self.well = well
+        super.init(frame: .zero)
+        addSubview(well)
+    }
+    required init?(coder: NSCoder) { nil }
+    override func layout() {
+        super.layout()
+        well.frame = bounds.insetBy(dx: Self.inset, dy: Self.inset)
     }
 }
 
@@ -413,8 +464,8 @@ private final class ScrollHUDControls: NSView {
     }
 }
 
-/// The capsule: bare controls on the tray like the recording hub's, the state on glass
-/// between them and Done.
+/// The capsule: bare controls on its glass body like the recording hub's, the state on a
+/// chip between them and Done.
 private final class ScrollHUDCompactLayout: NSView {
     private let leading: [NSView]
     private let status: ScrollHUDStatusChip
@@ -433,12 +484,12 @@ private final class ScrollHUDCompactLayout: NSView {
         super.layout()
         let side: CGFloat = 36
         for (index, view) in leading.enumerated() {
-            view.frame = CGRect(x: 12 + CGFloat(index) * (side + 2), y: (bounds.height - side) / 2, width: side, height: side)
+            view.frame = CGRect(x: 8 + CGFloat(index) * (side + 2), y: (bounds.height - side) / 2, width: side, height: side)
         }
-        let pill = CGSize(width: 96, height: 36)
-        trailing.frame = CGRect(x: bounds.width - 10 - pill.width, y: (bounds.height - pill.height) / 2,
+        let pill = CGSize(width: 96, height: 34)
+        trailing.frame = CGRect(x: bounds.width - 6 - pill.width, y: (bounds.height - pill.height) / 2,
                                 width: pill.width, height: pill.height)
-        let start = 12 + CGFloat(leading.count) * (side + 2) + 6
+        let start = 8 + CGFloat(leading.count) * (side + 2) + 6
         status.maxWidth = trailing.frame.minX - 10 - start
         status.anchor = CGPoint(x: start, y: bounds.midY + ScrollHUDStatusChip.height / 2)
     }
