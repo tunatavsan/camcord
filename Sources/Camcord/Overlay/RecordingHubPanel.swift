@@ -218,6 +218,7 @@ final class RecordingHubPanel {
     var onStop: (() -> Void)?
     var onPauseResume: (() -> Void)?
     var onTogglePreview: (() -> Void)?
+    var onToggleCamera: (() -> Void)?
     var onCancel: (() -> Void)?
     /// Fires as the pointer arrives on and leaves the hub — the recording frame rides on
     /// this, so hovering the hub is what reveals it.
@@ -400,6 +401,11 @@ final class RecordingHubPanel {
     var screen: NSScreen? { panel.screen }
     var hostView: NSView { view }
 
+    func setCamera(on: Bool, available: Bool) {
+        view.cameraAvailable = available
+        view.cameraOn = on
+    }
+
     func setMicLevel(_ dbfs: Double?) {
         view.micLevel = RecordingHubLayout.micFraction(dbfs: dbfs)
     }
@@ -539,6 +545,7 @@ final class RecordingHubPanel {
         case .start: onStop?()
         case .pause: onPauseResume?()
         case .preview: onTogglePreview?()
+        case .camera: onToggleCamera?()
         case .cancel: onCancel?()
         case .elapsed, .divider, .micLevel: break
         }

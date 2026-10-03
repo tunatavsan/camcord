@@ -208,8 +208,8 @@ struct RecordingHubPanelTests {
         }
         #expect(view.appearance?.name == .darkAqua)
         #expect(views(TraySurface.self, in: view).count == 1)
-        // The time pill (which is also Stop), pause and the camera.
-        #expect(views(HubChip.self, in: view).count == 3)
+        // The time pill (which is also Stop), pause, the camera in the file and its preview.
+        #expect(views(HubChip.self, in: view).count == 4)
         #expect(hub.panelForTesting.alphaValue == 1)
         let windowSize = hub.panelForTesting.frame.size
 

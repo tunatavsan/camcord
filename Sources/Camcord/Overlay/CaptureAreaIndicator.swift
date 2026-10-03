@@ -237,6 +237,15 @@ final class CaptureAreaIndicator {
         }
     }
 
+    /// The hub's camera control: whether the camera is in the recording, and whether it can
+    /// change now. Every hub shown takes the latest state.
+    var onToggleCamera: (() -> Void)?
+    private var cameraState: (on: Bool, available: Bool) = (false, true)
+    func updateHubCamera(on: Bool, available: Bool) {
+        cameraState = (on, available)
+        hub?.setCamera(on: on, available: available)
+    }
+
     /// Başlat: the armed hub stays and turns into the recording one while the stream starts;
     /// its controls answer nothing until the recording is live.
     private var handingOff = false
@@ -450,6 +459,8 @@ final class CaptureAreaIndicator {
         hub.onStop = onStop
         hub.onPauseResume = onPauseResume
         hub.onTogglePreview = onTogglePreview
+        hub.onToggleCamera = { [weak self] in self?.onToggleCamera?() }
+        hub.setCamera(on: cameraState.on, available: cameraState.available)
         hub.onCancel = onCancel
         hub.onHoverChange = { [weak self] hovering in
             guard let self else { return }

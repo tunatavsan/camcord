@@ -19,12 +19,14 @@ enum RecordingHubItem: Equatable, Sendable {
     case pause
     case stop
     case preview
+    /// Whether the camera is in the recording at all (the preview only shows it to the owner).
+    case camera
     case micLevel
     case cancel
 
     var isControl: Bool {
         switch self {
-        case .start, .pause, .stop, .preview, .cancel: true
+        case .start, .pause, .stop, .preview, .camera, .cancel: true
         case .elapsed, .divider, .micLevel: false
         }
     }
@@ -63,8 +65,8 @@ enum RecordingHubLayout {
 
     static func items(mode: RecordingHubMode) -> [RecordingHubItem] {
         mode.isArmed
-            ? [.start, .divider, .cancel, .preview]
-            : [.elapsed, .divider, .pause, .preview, .micLevel]
+            ? [.start, .divider, .cancel, .camera, .preview]
+            : [.elapsed, .divider, .pause, .camera, .preview, .micLevel]
     }
 
     /// The identity cell — the one thing the hub shows while collapsed.
@@ -77,7 +79,7 @@ enum RecordingHubLayout {
         case .elapsed: timePill
         case .start: disc + startLabelZone
         case .divider: dividerZone
-        case .pause, .stop, .preview, .cancel: button
+        case .pause, .stop, .preview, .camera, .cancel: button
         case .micLevel: meterZone
         }
     }
@@ -110,8 +112,8 @@ enum RecordingHubLayout {
     /// Stop sits next to the time it ends; Başlat's label is part of its own cell.
     static func centeredItems(mode: RecordingHubMode) -> (left: [RecordingHubItem], right: [RecordingHubItem]) {
         mode.isArmed
-            ? ([.cancel, .divider], [.divider, .preview])
-            : ([.pause, .divider], [.divider, .preview, .micLevel])
+            ? ([.cancel, .divider], [.divider, .camera, .preview])
+            : ([.micLevel, .pause, .divider], [.divider, .camera, .preview])
     }
 
     /// How far the open capsule reaches either side of the identity's centre: half the
@@ -135,18 +137,28 @@ enum RecordingHubLayout {
         let split = centeredItems(mode: mode)
         let identity = identity(mode: mode)
         let y = verticalCenter - disc / 2
+        let leftWidth = split.left.reduce(0) { $0 + width(of: $1) }
+        let rightWidth = split.right.reduce(0) { $0 + width(of: $1) }
+        let side = max(leftWidth, rightWidth)
+        // The shorter side's controls widen to share its slack: the capsule stays centred on
+        // the identity and no empty band sits at one end.
+        func widths(_ items: [RecordingHubItem], total: CGFloat) -> [CGFloat] {
+            let controls = items.filter(\.isControl).count
+            let extra = controls > 0 ? (side - total) / CGFloat(controls) : 0
+            return items.map { width(of: $0) + ($0.isControl ? extra : 0) }
+        }
         var cells: [(item: RecordingHubItem, rect: CGRect)] = []
         let identityRect = CGRect(x: center - width(of: identity) / 2, y: y, width: width(of: identity), height: disc)
         var leftEdge = identityRect.minX
-        for item in split.left.reversed() {
-            leftEdge -= width(of: item)
-            cells.insert((item, CGRect(x: leftEdge, y: y, width: width(of: item), height: disc)), at: 0)
+        for (item, w) in zip(split.left, widths(split.left, total: leftWidth)).reversed() {
+            leftEdge -= w
+            cells.insert((item, CGRect(x: leftEdge, y: y, width: w, height: disc)), at: 0)
         }
         cells.append((identity, identityRect))
         var rightEdge = identityRect.maxX
-        for item in split.right {
-            cells.append((item, CGRect(x: rightEdge, y: y, width: width(of: item), height: disc)))
-            rightEdge += width(of: item)
+        for (item, w) in zip(split.right, widths(split.right, total: rightWidth)) {
+            cells.append((item, CGRect(x: rightEdge, y: y, width: w, height: disc)))
+            rightEdge += w
         }
         return cells
     }
@@ -207,12 +219,20 @@ final class RecordingHubView: NSView {
             setAccessibilityValue(elapsed)
         }
     }
+    /// The owner's own view of the camera: the tile on screen, never what is recorded.
     var previewVisible = false {
         didSet {
             guard previewVisible != oldValue else { return }
-            chips[.preview]?.setCamera(on: previewVisible)
+            chips[.preview]?.setPreview(on: previewVisible)
             rebuildAccessibility()
         }
+    }
+    /// Whether the camera is in the recording, and whether it can be changed now.
+    var cameraOn = false {
+        didSet { if cameraOn != oldValue { chips[.camera]?.setCamera(on: cameraOn, available: cameraAvailable) } }
+    }
+    var cameraAvailable = true {
+        didSet { if cameraAvailable != oldValue { chips[.camera]?.setCamera(on: cameraOn, available: cameraAvailable) } }
     }
     var micLevel: CGFloat = 0 {
         didSet { if abs(micLevel - oldValue) > 0.02 { meter.setLevel(micLevel) } }
@@ -334,7 +354,11 @@ final class RecordingHubView: NSView {
                 break
             case .preview:
                 let chip = HubChip(kind: .button, symbol: nil, tint: Self.neutral, bare: true)
-                chip.setCamera(on: previewVisible)
+                chip.setPreview(on: previewVisible)
+                chips[item] = chip
+            case .camera:
+                let chip = HubChip(kind: .button, symbol: nil, tint: Self.neutral, bare: true)
+                chip.setCamera(on: cameraOn, available: cameraAvailable)
                 chips[item] = chip
             case .cancel:
                 chips[item] = HubChip(kind: .button, symbol: "xmark", tint: Self.neutral, bare: true)
@@ -505,7 +529,8 @@ final class RecordingHubView: NSView {
         case .start: String(localized: "Start")
         case .pause: mode == .paused ? String(localized: "Resume") : String(localized: "Pause")
         case .stop: "Kaydı durdur"
-        case .preview: previewVisible ? "Kamerayı kapat" : "Kamerayı göster"
+        case .preview: previewVisible ? "Önizlemeyi gizle" : "Önizlemeyi göster"
+        case .camera: "Kamerayı kayda al ya da çıkar"
         case .cancel: String(localized: "Cancel")
         case .elapsed: "Geçen süre"
         case .micLevel: "Mikrofon seviyesi"
@@ -648,13 +673,19 @@ private final class HubContent: NSView {
         if let symbol { setSymbol(symbol, color: symbolColor) }
     }
 
-    /// The camera as the panel shows it: on, solid with a small green light; off, struck
-    /// through and quiet.
-    func setCamera(on: Bool) {
+    /// The camera in the recording, as the panel shows it: on, solid with a small green light;
+    /// off, struck through and quiet. Unavailable (recording started without it), it is faint.
+    func setCamera(on: Bool, available: Bool = true) {
         setSymbol(on ? "video.fill" : "video.slash", color: on ? .white : NSColor.white.withAlphaComponent(0.5))
         CATransaction.begin(); CATransaction.setAnimationDuration(0.18)
         light.opacity = on ? 1 : 0
+        layer?.opacity = available ? 1 : 0.35
         CATransaction.commit()
+        toolTip = available ? nil : "Bu kayıt kamerasız başladı"
+    }
+    /// The owner's preview of the camera: an eye, open or closed.
+    func setPreview(on: Bool) {
+        setSymbol(on ? "eye.fill" : "eye.slash", color: on ? .white : NSColor.white.withAlphaComponent(0.5))
     }
     required init?(coder: NSCoder) { nil }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -734,20 +765,26 @@ private final class HubContent: NSView {
         guard lifted != was, let layer else { return }
         CATransaction.begin(); CATransaction.setDisableActions(true)
         if kind == .identity {
+            // The time slides up and away while Stop rises into its place: two faces, one motion.
             let fromStop = stopFace.presentation()?.opacity ?? stopFace.opacity
             stopFace.opacity = lifted ? 1 : 0
             timeFace.opacity = lifted ? 0 : 1
-            let fade = CABasicAnimation(keyPath: "opacity")
-            fade.fromValue = fromStop; fade.toValue = stopFace.opacity; fade.duration = lifted ? 0.16 : 0.2
-            stopFace.add(fade, forKey: "stop-fade")
-            let back = CABasicAnimation(keyPath: "opacity")
-            back.fromValue = 1 - fromStop; back.toValue = timeFace.opacity; back.duration = fade.duration
-            timeFace.add(back, forKey: "time-fade")
-            if lifted {
-                let bloom = CASpringAnimation.card(keyPath: "transform.scale", from: 0.94, to: 1, response: 0.3, dampingRatio: 0.6)
-                bloom.preferFullRefreshRate(on: screen)
-                stopFace.add(bloom, forKey: "stop-bloom")
-            }
+            let travel: CGFloat = bounds.height * 0.55
+            let stopFrom = (stopFace.presentation()?.value(forKeyPath: "transform.translation.y") as? CGFloat) ?? (lifted ? -travel : 0)
+            let timeFrom = (timeFace.presentation()?.value(forKeyPath: "transform.translation.y") as? CGFloat) ?? (lifted ? 0 : travel)
+            stopFace.setValue(lifted ? 0 : -travel, forKeyPath: "transform.translation.y")
+            timeFace.setValue(lifted ? travel : 0, forKeyPath: "transform.translation.y")
+            let stopMove = CASpringAnimation.card(keyPath: "transform.translation.y", from: lifted ? -travel : stopFrom,
+                                                  to: lifted ? 0 : -travel, response: 0.34, dampingRatio: 0.78)
+            let timeMove = CASpringAnimation.card(keyPath: "transform.translation.y", from: lifted ? timeFrom : travel,
+                                                  to: lifted ? travel : 0, response: 0.34, dampingRatio: 0.78)
+            let stopFade = CABasicAnimation(keyPath: "opacity")
+            stopFade.fromValue = fromStop; stopFade.toValue = stopFace.opacity; stopFade.duration = 0.18
+            let timeFade = CABasicAnimation(keyPath: "opacity")
+            timeFade.fromValue = 1 - fromStop; timeFade.toValue = timeFace.opacity; timeFade.duration = 0.18
+            for animation in [stopMove, timeMove, stopFade, timeFade] { animation.preferFullRefreshRate(on: screen) }
+            stopFace.add(stopMove, forKey: "stop-move"); stopFace.add(stopFade, forKey: "stop-fade")
+            timeFace.add(timeMove, forKey: "time-move"); timeFace.add(timeFade, forKey: "time-fade")
             CATransaction.commit()
             return
         }
@@ -758,11 +795,18 @@ private final class HubContent: NSView {
         swell.preferFullRefreshRate(on: screen)
         lift.add(swell, forKey: "hub-swell")
         if bare {
+            // Like the panel's tools: brighter, and a glow in the symbol's own shape, never a disc.
             let fromOpacity = lift.presentation()?.opacity ?? lift.opacity
             lift.opacity = lifted ? 1 : Self.bareRest
             let brighten = CABasicAnimation(keyPath: "opacity")
             brighten.fromValue = fromOpacity; brighten.toValue = lift.opacity; brighten.duration = 0.16
             lift.add(brighten, forKey: "hub-brighten")
+            icon.shadowRadius = 5
+            let fromGlow = icon.presentation()?.shadowOpacity ?? icon.shadowOpacity
+            icon.shadowOpacity = lifted ? 0.75 : 0
+            let glow = CABasicAnimation(keyPath: "shadowOpacity")
+            glow.fromValue = fromGlow; glow.toValue = icon.shadowOpacity; glow.duration = 0.16
+            icon.add(glow, forKey: "hub-icon-glow")
         } else {
             layer.shadowColor = Theme.Palette.record.ns.cgColor
             layer.shadowRadius = 10

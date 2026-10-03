@@ -131,6 +131,9 @@ final class RecordingController: NSObject {
     /// Whether the live recording has a microphone track: a cue played through the speakers
     /// could reach it, so resuming stays silent then.
     private var recordsMicrophone = false
+    /// Whether the live recording was started with the camera: only then can the hub take it
+    /// out of the file and put it back, live.
+    private var recordsCamera = false
     /// Latches once a limit fires so the 1 Hz timer can't spawn a second auto-stop.
     private var didHitLimit = false
 
@@ -171,6 +174,7 @@ final class RecordingController: NSObject {
         CameraOverlayController.shared.onPlacementChange = { [weak self] options in
             self?.engine.updateCameraOptions(options)
         }
+        indicator.onToggleCamera = { [weak self] in self?.toggleCameraInRecording() }
         engine.onAudioMixFailure = { [weak self] _ in self?.audioMixFailed = true }
         engine.onUnexpectedStop = { [weak self] salvagedURL, error in
             self?.handleUnexpectedStop(salvagedURL: salvagedURL, error: error)
@@ -371,6 +375,7 @@ final class RecordingController: NSObject {
             )
         }
         // The frame is the placement frame, not the window glow, so it is always drawn.
+        pushCameraState()
         indicator.showRecordingWindow(window.windowID, initialCGRect: window.frame, showsBorder: true,
                                       mode: .armed, color: .systemRed,
                                       onCancel: { [weak self] in self?.cancelArmed() }) { [weak self] in
@@ -767,6 +772,7 @@ final class RecordingController: NSObject {
             let codec = settings.resolvedCodec
             let limitBytes: Int64 = codec.isProRes ? 3000 * 1024 * 1024 : 500 * 1024 * 1024
             recordsMicrophone = settings.microphone
+            recordsCamera = settings.camera.enabled
             activeLimits = ActiveLimits(
                 maxSeconds: settings.maxDurationMinutes > 0 ? Double(settings.maxDurationMinutes) * 60 : 0,
                 diskGuard: settings.stopWhenDiskLow,
@@ -810,6 +816,7 @@ final class RecordingController: NSObject {
                 )
             }
             indicator.updateHub(elapsed: Self.formatElapsed(0))
+            pushCameraState()
             onToast?(ToastRequest(text: "Kayıt başladı", systemSymbol: "record.circle.fill", tint: .systemRed, important: true))
         } catch RecordingError.incompleteRecording(let url, _) {
             reportPreservedPartial(url)
@@ -1012,7 +1019,30 @@ final class RecordingController: NSObject {
             let settings = RecordingSettings.load(from: self.defaults)
             self.engine.updateAudioGains(settings)
             self.engine.updateCameraOptions(settings.camera)
+            self.pushCameraState()
         }
+    }
+
+    /// The hub's camera control. Off takes the camera out of the file (its frames are no longer
+    /// composited); on puts it back — possible only when the recording started with it. Before
+    /// a recording it simply chooses whether the next one has the camera.
+    func toggleCameraInRecording() {
+        if uiState != .idle, !recordsCamera {
+            onToast?(ToastRequest(text: "Bu kayıt kamerasız başladı — kamera eklenemez", systemSymbol: "video.slash",
+                                  tint: .systemOrange, important: true))
+            return
+        }
+        var settings = RecordingSettings.load(from: defaults)
+        settings.camera.enabled.toggle()
+        settings.save(to: defaults)
+        engine.updateCameraOptions(settings.camera)
+        pushCameraState()
+    }
+
+    private func pushCameraState() {
+        let settings = RecordingSettings.load(from: defaults)
+        indicator.updateHubCamera(on: settings.camera.enabled && (uiState == .idle || recordsCamera),
+                                  available: uiState == .idle || recordsCamera)
     }
 
     private func startHealthTimer() {
