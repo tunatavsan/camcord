@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import ImageIO
 import QuartzCore
 
 /// The preview's first size: the whole capture, modest on any screen, never magnified.
@@ -360,5 +361,22 @@ private final class ScreenshotPreviewContent: NSView {
     override func layout() {
         super.layout()
         well.frame = bounds.insetBy(dx: ScreenshotPreviewGeometry.ring, dy: ScreenshotPreviewGeometry.ring)
+    }
+}
+
+/// A Library capture as a preview's screenshot: the file's pixels at their recorded density.
+enum ScreenshotPreviewSource {
+    static func capture(for item: CaptureItem) async -> CapturedScreenshot? {
+        let url = item.url
+        return await Task.detached(priority: .userInitiated) { () -> CapturedScreenshot? in
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+            let dpi = (properties?[kCGImagePropertyDPIWidth] as? NSNumber)?.doubleValue ?? 72
+            let scale = max(1, dpi / 72)
+            return CapturedScreenshot(id: UUID(), image: image,
+                                      pointSize: CGSize(width: Double(image.width) / scale, height: Double(image.height) / scale),
+                                      kind: .screenshot, saveToDiskRequested: true)
+        }.value
     }
 }

@@ -37,7 +37,8 @@ final class PanelPresentation {
     private(set) var recordingSource: PanelRecordingSource = .region
 
     var latest: CaptureItem? { visible ? library?.items.first : nil }
-    var recent: [CaptureItem] { visible ? Array(library?.items.prefix(3) ?? []) : [] }
+    static let recentLimit = 12
+    var recent: [CaptureItem] { visible ? Array(library?.items.prefix(Self.recentLimit) ?? []) : [] }
     var thumbnail: CGImage? { latest.flatMap { thumbnails[$0.id] } }
 
     init(library: LibraryStore?, defaults: UserDefaults?,

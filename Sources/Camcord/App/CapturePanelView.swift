@@ -3,7 +3,8 @@ import AVFoundation
 import KeyboardShortcuts
 import SwiftUI
 
-/// Fast capture entry points and recording setup using the ordinary capture services.
+/// The menu-bar panel: the window tray with four glass cells floating on it (capture, record,
+/// recent captures, destinations). Nothing is written on the tray itself.
 struct CapturePanelView: View {
     @ObservedObject var model: RecordingStateModel
     let actions: PanelActions
@@ -11,11 +12,24 @@ struct CapturePanelView: View {
     @State private var context: PanelPresentation
     /// One fixed dimension per state, so every row lands where it was designed to.
     static let panelWidth: CGFloat = 360
-    static let panelHeight: CGFloat = 424
-    static let activeHeight: CGFloat = 424
+    static let panelHeight: CGFloat = Layout.ring * 2 + Layout.captureCell + Layout.recordCell + Layout.recentCell
+        + Layout.destinationsCell + Layout.gap * 3
+    static let activeHeight: CGFloat = panelHeight
     static let finishingHeight: CGFloat = 220
     static let finishedHeight: CGFloat = 418
-    static let recentThumbHeight: CGFloat = 66
+    static let recentThumbHeight: CGFloat = 64
+    /// Concentric with the cells: their radius plus the tray's ring.
+    static let cornerRadius: CGFloat = Theme.Radius.floating + Layout.ring
+
+    enum Layout {
+        static let ring: CGFloat = 8
+        static let gap: CGFloat = 8
+        static let padding: CGFloat = 12
+        static let captureCell: CGFloat = 80
+        static let recordCell: CGFloat = 112
+        static let recentCell: CGFloat = 134
+        static let destinationsCell: CGFloat = 44
+    }
 
     static func height(state: RecordingController.UIState, isFinishing: Bool, finished: Bool) -> CGFloat {
         if finished { return finishedHeight }
@@ -41,30 +55,30 @@ struct CapturePanelView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.m) {
-            PanelHeader(model: model)
+        VStack(spacing: Layout.gap) {
             if let url = model.finishedURL {
-                FinishedCard(url: url, reveal: actions.revealRecording, open: actions.openRecording,
+                PanelFinishedCell(url: url, reveal: actions.revealRecording, open: actions.openRecording,
                     renamed: { renamed in if model.finishedURL == url { model.finishedURL = renamed } },
                     dismiss: { model.finishedURL = nil })
             } else if model.isFinishing {
-                FinishingCard().frame(maxHeight: .infinity)
+                PanelFinishingCell()
             } else {
-                PanelCaptureKeys(shortcuts: shortcuts, canCapture: canConfigure, perform: actions.perform)
-                PanelRecordingModule(model: model, context: context, actions: actions, canConfigure: canConfigure)
-                PanelRecentCaptures(items: context.recent, images: context.thumbnails,
-                                    loading: context.library?.isLoading == true,
-                                    issue: context.library?.loadingIssue, open: openCapture)
-                    .padding(.top, Theme.Space.xs)
-                Spacer(minLength: 0)
+                PanelCaptureCell(shortcuts: shortcuts, canCapture: canConfigure, perform: actions.perform)
+                    .frame(height: Layout.captureCell)
+                PanelRecordCell(model: model, context: context, actions: actions, canConfigure: canConfigure)
+                    .frame(height: Layout.recordCell)
+                PanelRecentCell(items: context.recent, images: context.thumbnails,
+                                loading: context.library?.isLoading == true,
+                                issue: context.library?.loadingIssue, open: openCapture, showAll: actions.openLibrary)
+                    .frame(height: Layout.recentCell)
             }
-            PanelFooter(actions: actions)
+            PanelDestinationsCell(actions: actions).frame(height: Layout.destinationsCell)
         }
-        .padding(Theme.Space.l)
+        .padding(Layout.ring)
         .frame(width: Self.panelWidth, height: currentHeight, alignment: .top)
         .foregroundStyle(Theme.Palette.ink.color)
         .tint(Theme.Palette.ink.color)
-        .modifier(PanelChrome())
+        .modifier(PanelTray())
         .onAppear(perform: panelAppeared)
         .onDisappear { context.synchronize(visible: false) }
         .onChange(of: model.isPanelVisible) { _, visible in
@@ -85,7 +99,10 @@ struct CapturePanelView: View {
         reloadShortcuts()
         context.synchronize(visible: model.isPanelVisible, reloadSettings: true)
     }
-    private func openCapture(_ item: CaptureItem) { Task { await context.open(item) } }
+    private func openCapture(_ item: CaptureItem) {
+        if item.kind != .recording, let preview = actions.previewCapture { preview(item); return }
+        Task { await context.open(item) }
+    }
     private func reloadShortcuts() {
         shortcuts = Dictionary(uniqueKeysWithValues: CaptureKind.allCases.compactMap { kind in
             kind.shortcut.map { (kind, $0.description) }
@@ -93,126 +110,229 @@ struct CapturePanelView: View {
     }
 }
 
-private struct PanelHeader: View {
-    @ObservedObject var model: RecordingStateModel
-    var body: some View {
-        HStack(spacing: Theme.Space.s) {
-            CamcordBrandMark().frame(width: Theme.Menu.mark, height: Theme.Menu.mark)
-            Text("Camcord").font(Theme.Font.bodyStrong)
-            Spacer(minLength: 0)
-            if model.state != .idle {
-                Circle().fill(model.state == .paused ? Theme.Palette.ink3.color : Theme.Palette.record.color)
-                    .frame(width: 6, height: 6).accessibilityHidden(true)
-                Text(model.state == .paused ? "Paused" : "Recording")
-                    .font(Theme.Font.caption).foregroundStyle(Theme.Palette.ink2.color)
-                if let elapsed = model.elapsed {
-                    Text(verbatim: elapsed).font(Theme.Font.dataStrong)
-                        .accessibilityLabel(Text("Elapsed time"))
+// MARK: - Cells
+
+extension View {
+    /// One floating cell: the main window's pane glass, its radius and its inset.
+    func panelCell() -> some View { modifier(PanelCell()) }
+}
+
+private struct PanelCell: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.camcordOpaqueMaterialPreview) private var opaquePreview
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background {
+                if reduceTransparency || opaquePreview {
+                    RoundedRectangle(cornerRadius: Theme.Radius.floating, style: .continuous)
+                        .fill(Theme.Palette.glassSolidSidebar.color)
+                } else {
+                    PaneGlass(cornerRadius: Theme.Radius.floating).allowsHitTesting(false)
                 }
-            } else if model.isFinishing || model.isArmed {
-                Text(model.isFinishing ? "Finalizing…" : "Ready to start")
-                    .font(Theme.Font.caption).foregroundStyle(Theme.Palette.ink3.color)
             }
-        }
-        .frame(height: 26)
+            .clipShape(.rect(cornerRadius: Theme.Radius.floating, style: .continuous))
     }
 }
 
-private struct PanelCaptureKeys: View {
+/// The five captures, evenly spaced and centred on their ink. Hovering one raises and lights
+/// its symbol, shows its shortcut in place of its name, and the others step back.
+private struct PanelCaptureCell: View {
     let shortcuts: [CaptureKind: String]
     let canCapture: Bool
     let perform: (CaptureKind) -> Void
+    @State private var focus: CaptureKind?
     var body: some View {
-        HStack(spacing: Theme.Space.xs) {
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
             ForEach(CaptureKind.allCases) { kind in
-                Button { perform(kind) } label: {
-                    VStack(spacing: Theme.Space.s) {
-                        Image(systemName: kind.symbol).font(Theme.Font.row)
-                            .symbolRenderingMode(.monochrome).frame(height: 22)
-                        Text(kind.shortTitle).font(Theme.Font.captionStrong).lineLimit(1)
-                    }
-                    .frame(maxWidth: .infinity).frame(height: 66)
+                PanelToolButton(symbol: kind.symbol, title: Text(kind.shortTitle), detail: shortcuts[kind],
+                                focus: focus.map { $0 == kind }) {
+                    perform(kind)
+                } hover: { inside in
+                    if inside { focus = kind } else if focus == kind { focus = nil }
                 }
-                .buttonStyle(PanelHoverStyle(radius: Theme.Radius.thumb))
-                .background(Theme.Palette.selection.color, in: .rect(cornerRadius: Theme.Radius.thumb))
                 .accessibilityLabel(Text(kind.actionTitle))
-                .help(Text(verbatim: help(kind)))
+                .accessibilityHint(Text(verbatim: shortcuts[kind] ?? ""))
+                Spacer(minLength: 0)
             }
         }
+        .frame(maxHeight: .infinity)
         .disabled(!canCapture)
-    }
-    private func help(_ kind: CaptureKind) -> String {
-        guard canCapture else { return String(localized: "Finish or cancel the recording before capturing a screenshot") }
-        let title = String(localized: kind.actionTitle)
-        return shortcuts[kind].map { title + " · " + $0 } ?? title
+        .help(canCapture ? Text(verbatim: "") : Text("Finish or cancel the recording before capturing a screenshot"))
+        .panelCell()
     }
 }
 
-private struct PanelRecordingModule: View {
+/// A symbol over its name. Hovered it rises, grows and glows and its detail (a shortcut)
+/// takes the name's place; when a sibling is hovered it steps back; pressed it gives.
+private struct PanelToolButton: View {
+    let symbol: String
+    let title: Text
+    let detail: String?
+    /// nil: nothing in the row is hovered; true: this one; false: a sibling.
+    let focus: Bool?
+    let action: () -> Void
+    let hover: (Bool) -> Void
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        let lifted = focus == true && enabled
+        Button(action: action) {
+            VStack(spacing: 5) {
+                InkSymbol(name: symbol, pointSize: 18, canvas: 26)
+                    .scaleEffect(lifted && !reduceMotion ? 1.16 : 1)
+                    .offset(y: lifted && !reduceMotion ? -2 : 0)
+                    .shadow(color: Theme.Palette.ink.color.opacity(lifted ? 0.45 : 0), radius: 7)
+                ZStack {
+                    title.font(Theme.Font.captionStrong).lineLimit(1).fixedSize()
+                        .opacity(lifted && detail != nil ? 0 : 1)
+                    if let detail {
+                        Text(verbatim: detail).font(Theme.Font.dataSmall).lineLimit(1).fixedSize()
+                            .foregroundStyle(Theme.Palette.ink2.color)
+                            .opacity(lifted ? 1 : 0)
+                            .offset(y: lifted || reduceMotion ? 0 : 3)
+                    }
+                }
+                .frame(height: 15)
+            }
+            .padding(.horizontal, 4)
+            .frame(height: 56)
+            .opacity(enabled ? (focus == false ? 0.5 : 1) : 0.35)
+            .contentShape(.rect)
+        }
+        .buttonStyle(PanelPressStyle())
+        .onHover(perform: hover)
+        .animation(reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.62), value: focus)
+    }
+}
+
+/// What the Record button records and with which devices, then the button itself; while
+/// recording, the time and the controls.
+private struct PanelRecordCell: View {
     @ObservedObject var model: RecordingStateModel
     let context: PanelPresentation
     let actions: PanelActions
     let canConfigure: Bool
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
-            HStack(spacing: Theme.Space.s) {
-                Menu {
+        VStack(alignment: .leading, spacing: 10) {
+            if model.state == .idle && !model.isArmed && !model.isStarting {
+                HStack(spacing: 4) {
                     ForEach(PanelRecordingSource.allCases) { source in
-                        Button { context.selectSource(source, canConfigure: canConfigure) } label: {
-                            Label(source.label, systemImage: source.symbol)
+                        PanelChip(symbol: source.symbol, title: Text(source.label), selected: context.recordingSource == source) {
+                            context.selectSource(source, canConfigure: canConfigure)
                         }
                     }
-                } label: {
-                    HStack(spacing: Theme.Space.s) {
-                        Image(systemName: canConfigure ? context.recordingSource.symbol : model.isArmed ? "macwindow" : "record.circle")
-                            .foregroundStyle(Theme.Palette.ink2.color)
-                        Text(canConfigure ? context.recordingSource.label : "Source locked").font(Theme.Font.bodyStrong)
-                        Spacer(minLength: 0)
-                        Image(systemName: "chevron.up.chevron.down").font(Theme.Font.caption)
-                            .foregroundStyle(Theme.Palette.ink3.color)
+                    Spacer(minLength: 4)
+                    PanelDeviceToggle(title: "Camera", symbol: "video", on: context.settings?.camera.enabled == true,
+                                      available: canConfigure && context.settings != nil) {
+                        context.toggleCamera(canConfigure: canConfigure)
                     }
-                    .padding(.horizontal, Theme.Space.m)
-                    .frame(maxWidth: .infinity, alignment: .leading).frame(height: 36)
-                    .background(Theme.Palette.hover.color, in: .capsule)
-                    .contentShape(.capsule)
+                    PanelDeviceToggle(title: "Microphone", symbol: "mic", on: context.settings?.microphone == true,
+                                      available: canConfigure && context.settings != nil) {
+                        context.toggleMicrophone(canConfigure: canConfigure)
+                    }
                 }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden)
-                .disabled(!canConfigure)
-                .help("Choose what the Record button captures")
-                .accessibilityLabel("Recording source")
-                .accessibilityValue(Text(canConfigure ? context.recordingSource.label : "Source locked"))
-                PanelDeviceButton(title: "Camera", symbol: "video", enabled: context.settings?.camera.enabled == true,
-                                  available: canConfigure && context.settings != nil,
-                                  action: { context.toggleCamera(canConfigure: canConfigure) })
-                PanelDeviceButton(title: "Microphone", symbol: "mic", enabled: context.settings?.microphone == true,
-                                  available: canConfigure && context.settings != nil,
-                                  action: { context.toggleMicrophone(canConfigure: canConfigure) })
+                .frame(height: 32)
+            } else {
+                PanelRecordingStatus(model: model).frame(height: 32)
             }
             PanelRecordingControls(model: model, context: context, actions: actions)
         }
-        .padding(Theme.Space.s + Theme.Space.xs)
-        .background(Theme.Palette.selection.color, in: .rect(cornerRadius: Theme.Radius.box))
+        .padding(CapturePanelView.Layout.padding)
+        .panelCell()
     }
 }
 
-private struct PanelDeviceButton: View {
-    let title: LocalizedStringKey
+/// Recording, paused, armed or starting: a living dot, the state, and the time large.
+private struct PanelRecordingStatus: View {
+    @ObservedObject var model: RecordingStateModel
+    @State private var pulse = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        HStack(spacing: 8) {
+            if model.isStarting {
+                ProgressView().controlSize(.small)
+                Text("Preparing recording…").font(Theme.Font.bodyStrong)
+            } else if model.isArmed {
+                InkSymbol(name: "macwindow", pointSize: 14, canvas: 20).foregroundStyle(Theme.Palette.ink2.color)
+                Text("Ready to start").font(Theme.Font.bodyStrong)
+            } else {
+                let recording = model.state == .recording
+                ZStack {
+                    Circle().fill(Theme.Palette.record.color.opacity(recording ? 0.35 : 0))
+                        .frame(width: 16, height: 16)
+                        .scaleEffect(pulse && recording && !reduceMotion ? 1.3 : 0.7)
+                        .opacity(pulse && recording ? 0 : 1)
+                    Circle().fill(recording ? Theme.Palette.record.color : Theme.Palette.ink3.color)
+                        .frame(width: 9, height: 9)
+                }
+                .frame(width: 18, height: 18)
+                .accessibilityHidden(true)
+                .onAppear {
+                    guard !reduceMotion else { return }
+                    withAnimation(.easeOut(duration: 1.1).repeatForever(autoreverses: false)) { pulse = true }
+                }
+                Text(model.state == .paused ? "Paused" : "Recording").font(Theme.Font.bodyStrong)
+            }
+            Spacer(minLength: 0)
+            if let elapsed = model.elapsed, model.state != .idle {
+                Text(verbatim: elapsed)
+                    .font(.system(size: 22, weight: .semibold, design: .monospaced)).monospacedDigit()
+                    .contentTransition(.numericText())
+                    .accessibilityLabel(Text("Elapsed time"))
+            }
+        }
+    }
+}
+
+/// A capsule choice: filled when selected, a soft lift on hover.
+private struct PanelChip: View {
     let symbol: String
-    let enabled: Bool
-    let available: Bool
+    let title: Text
+    let selected: Bool
     let action: () -> Void
+    @State private var hovered = false
     var body: some View {
         Button(action: action) {
-            Image(systemName: enabled ? symbol : symbol + ".slash")
-                .font(Theme.Font.row).frame(width: 36, height: 36)
-                .foregroundStyle(enabled ? Theme.Palette.ink.color : Theme.Palette.ink3.color)
-                .background(enabled ? Theme.Palette.selectionStrong.color : Theme.Palette.hover.color, in: .circle)
+            HStack(spacing: 4) {
+                InkSymbol(name: symbol, pointSize: 11, weight: .semibold, canvas: 16)
+                title.font(Theme.Font.captionStrong).lineLimit(1).fixedSize()
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 28)
+            .background(selected ? Theme.Palette.selectionStrong.color : hovered ? Theme.Palette.hover.color : .clear, in: .capsule)
+            .contentShape(.capsule)
         }
-        .buttonStyle(.plain).disabled(!available)
+        .buttonStyle(PanelPressStyle())
+        .onHover { hovered = $0 }
+        .animation(.easeOut(duration: 0.14), value: hovered)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+private struct PanelDeviceToggle: View {
+    let title: LocalizedStringKey
+    let symbol: String
+    let on: Bool
+    let available: Bool
+    let action: () -> Void
+    @State private var hovered = false
+    var body: some View {
+        Button(action: action) {
+            InkSymbol(name: on ? symbol + ".fill" : symbol + ".slash", pointSize: 13, weight: .semibold, canvas: 20)
+                .foregroundStyle(on ? Theme.Palette.ink.color : Theme.Palette.ink3.color)
+                .frame(width: 30, height: 28)
+                .background(on ? Theme.Palette.selectionStrong.color : hovered ? Theme.Palette.hover.color : .clear, in: .capsule)
+                .contentShape(.capsule)
+        }
+        .buttonStyle(PanelPressStyle())
+        .disabled(!available)
+        .onHover { hovered = $0 }
+        .animation(.easeOut(duration: 0.14), value: hovered)
         .accessibilityLabel(Text(title))
-        .accessibilityValue(Text(enabled ? "On" : "Off"))
-        .accessibilityAddTraits(enabled ? .isSelected : [])
-        .help(Text(available ? enabled ? "Disable for the next recording" : "Enable for the next recording" : "Finish or cancel recording to change this setting"))
+        .accessibilityValue(Text(on ? "On" : "Off"))
+        .help(Text(available ? on ? "Disable for the next recording" : "Enable for the next recording" : "Finish or cancel recording to change this setting"))
     }
 }
 
@@ -221,103 +341,152 @@ private struct PanelRecordingControls: View {
     let context: PanelPresentation
     let actions: PanelActions
     var body: some View {
-        HStack(spacing: Theme.Space.s) {
+        HStack(spacing: 8) {
             if model.isArmed {
-                Button("Cancel", action: actions.cancelArmed).keyboardShortcut(.cancelAction)
-                    .buttonStyle(PanelSecondaryStyle())
+                PanelSecondaryButton(title: "Cancel", symbol: "xmark", action: actions.cancelArmed)
+                    .keyboardShortcut(.cancelAction)
                 PanelPrimaryButton(title: "Start", symbol: "record.circle", action: actions.toggleRecording)
             } else if model.isStarting {
-                ProgressView().controlSize(.small)
-                Text("Preparing recording…").font(Theme.Font.body)
-                Spacer(minLength: 0)
+                PanelPrimaryButton(title: "Preparing…", symbol: "hourglass", action: {}).disabled(true)
             } else if model.state != .idle {
-                Button(action: actions.pauseResume) {
-                    Label(model.state == .paused ? "Resume" : "Pause", systemImage: model.state == .paused ? "play.fill" : "pause")
-                        .font(Theme.Font.bodyStrong).frame(maxWidth: .infinity)
-                }.buttonStyle(PanelSecondaryStyle())
+                PanelSecondaryButton(title: model.state == .paused ? "Resume" : "Pause",
+                                     symbol: model.state == .paused ? "play.fill" : "pause.fill", action: actions.pauseResume)
                 PanelPrimaryButton(title: "Stop", symbol: "stop.fill", action: actions.toggleRecording)
             } else {
                 PanelPrimaryButton(title: "Record", symbol: "record.circle",
+                                   shortcut: KeyboardShortcuts.getShortcut(for: .toggleRecording)?.description,
                                    action: { context.startRecording(using: actions) })
-                    .help(KeyboardShortcuts.getShortcut(for: .toggleRecording)?.description ?? String(localized: "Start recording"))
             }
-        }.frame(height: 36)
+        }
+        .frame(height: 40)
     }
 }
 
+/// The panel's call to action: a capsule that blooms on hover.
 private struct PanelPrimaryButton: View {
     let title: LocalizedStringKey
     let symbol: String
+    var shortcut: String?
+    var tint: Color = Theme.Palette.record.color
+    var onTint: Color = Theme.Palette.onRecord.color
     let action: () -> Void
+    @State private var hovered = false
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         Button(action: action) {
-            Label(title, systemImage: symbol).font(Theme.Font.bodyStrong)
-                .frame(maxWidth: .infinity).frame(height: 36)
+            HStack(spacing: 8) {
+                Image(systemName: symbol).font(.system(size: 14, weight: .semibold))
+                    .scaleEffect(hovered && !reduceMotion ? 1.12 : 1)
+                Text(title).font(Theme.Font.bodyStrong)
+                if let shortcut, hovered {
+                    Text(verbatim: shortcut).font(Theme.Font.dataSmall).opacity(0.75).transition(.opacity)
+                }
+            }
+            .foregroundStyle(onTint)
+            .frame(maxWidth: .infinity).frame(height: 40)
+            .background(tint.opacity(enabled ? (hovered ? 1 : 0.92) : 0.5), in: .capsule)
+            .overlay(Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 1))
+            .shadow(color: tint.opacity(hovered ? 0.45 : 0), radius: 10, y: 2)
+            .contentShape(.capsule)
         }
-        .buttonStyle(PanelPrimaryStyle())
+        .buttonStyle(PanelPressStyle())
+        .onHover { hovered = $0 }
+        .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.7), value: hovered)
     }
 }
 
-private struct PanelRecentCaptures: View {
+/// The quieter partner of the primary button, with the same bloom in a softer key.
+private struct PanelSecondaryButton: View {
+    let title: LocalizedStringKey
+    let symbol: String
+    let action: () -> Void
+    @State private var hovered = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: symbol).font(.system(size: 13, weight: .semibold))
+                    .scaleEffect(hovered && !reduceMotion ? 1.12 : 1)
+                Text(title).font(Theme.Font.bodyStrong)
+            }
+            .frame(maxWidth: .infinity).frame(height: 40)
+            .background(hovered ? Theme.Palette.pressed.color : Theme.Palette.hover.color, in: .capsule)
+            .overlay(Capsule().strokeBorder(.white.opacity(hovered ? 0.18 : 0.08), lineWidth: 1))
+            .shadow(color: Theme.Palette.ink.color.opacity(hovered ? 0.18 : 0), radius: 8, y: 1)
+            .contentShape(.capsule)
+        }
+        .buttonStyle(PanelPressStyle())
+        .onHover { hovered = $0 }
+        .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.7), value: hovered)
+    }
+}
+
+/// Recent captures in a strip of tiles of one ratio (see `PanelRecentCarousel`); "All" opens the Library.
+private struct PanelRecentCell: View {
     let items: [CaptureItem]
     let images: [String: CGImage]
     let loading: Bool
     let issue: String?
     let open: (CaptureItem) -> Void
-    /// Three fixed tiles side by side. Each shows the whole capture, scaled to fit, never
-    /// cropped (owner, 2026-10-02), whatever its shape.
+    let showAll: () -> Void
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
-            Text("Recent captures").font(Theme.Font.captionStrong).foregroundStyle(Theme.Palette.ink3.color)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Recent captures").font(Theme.Font.captionStrong).foregroundStyle(Theme.Palette.ink3.color)
+                Spacer()
+                PanelLinkButton(title: "All", action: showAll)
+            }
+            .frame(height: 16)
             if items.isEmpty {
                 Label(loading ? "Loading captures…" : issue == nil ? "No captures yet" : "Captures unavailable",
                       systemImage: loading ? "clock" : "photo")
                     .font(Theme.Font.caption).foregroundStyle(Theme.Palette.ink3.color)
-                    .frame(maxWidth: .infinity, minHeight: CapturePanelView.recentThumbHeight)
-                    .background(Theme.Palette.well.color, in: .rect(cornerRadius: Theme.Radius.thumb))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .help(Text(verbatim: issue ?? ""))
             } else {
-                HStack(alignment: .top, spacing: Theme.Space.s) {
-                    ForEach(0..<3, id: \.self) { index in
-                        if index < items.count {
-                            tile(items[index])
-                        } else {
-                            Color.clear.frame(maxWidth: .infinity, minHeight: CapturePanelView.recentThumbHeight)
-                        }
-                    }
-                }
+                PanelRecentCarousel(items: items, images: images, open: open)
+                    .frame(height: PanelCarouselView.tile.height + 2)
             }
         }
+        .padding(CapturePanelView.Layout.padding)
+        .panelCell()
     }
+}
 
-    private func tile(_ item: CaptureItem) -> some View {
-        Button { open(item) } label: {
-            VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                ZStack {
-                    Theme.Palette.well.color
-                    if let image = images[item.id] {
-                        Image(decorative: image, scale: 1).resizable().scaledToFit()
-                            .clipShape(.rect(cornerRadius: Theme.Radius.badge))
-                            .padding(Theme.Space.xs)
-                    } else {
-                        Image(systemName: item.kind == .recording ? "film" : "photo")
-                            .foregroundStyle(Theme.Palette.ink3.color)
-                    }
+/// A capture shown whole inside a frame of fixed size, over a muted blur of itself.
+private struct PanelCaptureWell: View {
+    let image: CGImage?
+    let placeholder: String
+    var playable = false
+    var hovered = false
+    let cornerRadius: CGFloat
+    var body: some View {
+        ZStack {
+            Theme.Palette.well.color
+            if let image {
+                // The fill never sizes the well: it only covers the space the frame gives it.
+                Color.clear.overlay {
+                    Image(decorative: image, scale: 1).resizable().scaledToFill()
+                        .blur(radius: 12).saturation(0.75)
                 }
-                .frame(maxWidth: .infinity).frame(height: CapturePanelView.recentThumbHeight)
-                .clipShape(.rect(cornerRadius: Theme.Radius.thumb))
-                Text(verbatim: PanelRelativeDate.string(for: item.createdAt))
-                    .font(Theme.Font.dataSmall).foregroundStyle(Theme.Palette.ink3.color)
-                    .lineLimit(1).padding(.horizontal, Theme.Space.xs)
+                .clipped()
+                Color.black.opacity(0.3)
+                Image(decorative: image, scale: 1).resizable().scaledToFit()
+                    .shadow(color: .black.opacity(0.35), radius: 3, y: 1)
+            } else {
+                Image(systemName: placeholder).foregroundStyle(Theme.Palette.ink3.color)
             }
-            .padding(Theme.Space.xs / 2)
+            if playable {
+                Image(systemName: "play.fill")
+                    .font(.system(size: hovered ? 15 : 12, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: hovered ? 36 : 28, height: hovered ? 36 : 28)
+                    .background(.black.opacity(0.4), in: .circle)
+                    .overlay(Circle().strokeBorder(.white.opacity(0.25), lineWidth: 1))
+            }
         }
-        .buttonStyle(PanelHoverStyle(radius: Theme.Radius.thumb))
-        .frame(maxWidth: .infinity)
-        .onDrag { PanelCaptureDrag(item: item)?.provider() ?? NSItemProvider() }
-        .help(Text(verbatim: item.title))
-        .accessibilityLabel(Text(verbatim: item.title))
-        .accessibilityHint(Text("Opens the capture; drag to use its file", comment: "Accessibility: recent capture tile"))
+        .clipShape(.rect(cornerRadius: cornerRadius, style: .continuous))
     }
 }
 
@@ -332,83 +501,188 @@ enum PanelRelativeDate {
     }
 }
 
-private struct PanelFooter: View {
-    let actions: PanelActions
-    var body: some View {
-        HStack {
-            Button(action: actions.openMainWindow) {
-                HStack(spacing: Theme.Space.m) { Text("Open Camcord"); Text(verbatim: "⌘0").font(Theme.Font.dataSmall).foregroundStyle(Theme.Palette.ink3.color) }
-            }
-                .keyboardShortcut("0", modifiers: .command)
-                .buttonStyle(.plain).fixedSize(horizontal: true, vertical: false)
-            Spacer()
-            Menu {
-                Button("Library", action: actions.openLibrary)
-                Button("Edit", action: actions.openEditor)
-                Button("Studio", action: actions.openStudio)
-                Divider()
-                Button("Quit Camcord", action: actions.quit).keyboardShortcut("q", modifiers: .command)
-            } label: { Image(systemName: "ellipsis").frame(width: Theme.Menu.footerHeight, height: Theme.Menu.footerHeight) }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).help("More destinations")
-            Button(action: actions.openSettings) {
-                Image(systemName: "gearshape")
-                    .font(Theme.Font.body)
-                    .foregroundStyle(Theme.Palette.ink2.color)
-                    .frame(width: Theme.Menu.footerHeight, height: Theme.Menu.footerHeight)
-            }.buttonStyle(.plain).help("Settings").accessibilityLabel("Settings")
-        }.font(Theme.Font.body).frame(height: Theme.Menu.footerHeight)
-    }
-}
-
-private struct PanelHoverStyle: ButtonStyle {
-    let radius: CGFloat
+private struct PanelLinkButton: View {
+    let title: LocalizedStringKey
+    let action: () -> Void
     @State private var hovered = false
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label.contentShape(.rect(cornerRadius: radius))
-            .background(configuration.isPressed ? Theme.Palette.pressed.color : hovered ? Theme.Palette.hover.color : .clear,
-                        in: .rect(cornerRadius: radius))
-            .onHover { hovered = $0 }
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 2) {
+                Text(title)
+                Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold))
+                    .offset(x: hovered ? 2 : 0)
+            }
+            .font(Theme.Font.captionStrong)
+            .foregroundStyle(hovered ? Theme.Palette.ink.color : Theme.Palette.ink2.color)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: hovered)
     }
 }
 
-private struct PanelPrimaryStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label.foregroundStyle(Theme.Palette.onRecord.color)
-            .background(configuration.isPressed ? Theme.Palette.recordHover.color : Theme.Palette.record.color,
-                        in: .capsule)
-            .contentShape(.capsule)
+/// Where else to go: the window, its modules, Settings, Quit. Hovering a destination names it
+/// and says what it does on the left.
+private struct PanelDestinationsCell: View {
+    let actions: PanelActions
+    @State private var focus: Destination?
+    enum Destination: CaseIterable {
+        case library, studio, edit, settings, quit
+        var symbol: String {
+            switch self {
+            case .library: "rectangle.stack"
+            case .studio: "video"
+            case .edit: "scissors"
+            case .settings: "gearshape"
+            case .quit: "power"
+            }
+        }
+        var title: LocalizedStringKey {
+            switch self {
+            case .library: "Library"
+            case .studio: "Studio"
+            case .edit: "Edit"
+            case .settings: "Settings"
+            case .quit: "Quit Camcord"
+            }
+        }
+        var detail: LocalizedStringKey {
+            switch self {
+            case .library: "All your captures"
+            case .studio: "Set up a recording"
+            case .edit: "Mark up captures"
+            case .settings: "Shortcuts and saving"
+            case .quit: "Stops every shortcut"
+            }
+        }
+    }
+    var body: some View {
+        HStack(spacing: 0) {
+            Button(action: actions.openMainWindow) {
+                HStack(spacing: 9) {
+                    CamcordBrandMark().frame(width: 18, height: 18)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Group {
+                            if let focus {
+                                Text(focus.title).font(Theme.Font.captionStrong)
+                                Text(focus.detail).font(Theme.Font.caption).foregroundStyle(Theme.Palette.ink3.color)
+                            } else {
+                                Text("Open Camcord").font(Theme.Font.captionStrong)
+                                Text(verbatim: "⌘0").font(Theme.Font.dataSmall).foregroundStyle(Theme.Palette.ink3.color)
+                            }
+                        }
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                    }
+                    .id(focus.map { "\($0)" } ?? "home")
+                    .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 3)), removal: .opacity))
+                }
+                .contentShape(.rect)
+            }
+            .keyboardShortcut("0", modifiers: .command)
+            .buttonStyle(PanelPressStyle())
+            .accessibilityLabel(Text("Open Camcord"))
+            Spacer(minLength: 6)
+            ForEach(Destination.allCases, id: \.self) { destination in
+                PanelIconButton(symbol: destination.symbol, title: destination.title,
+                                focus: focus.map { $0 == destination }, action: perform(destination)) { inside in
+                    if inside { focus = destination } else if focus == destination { focus = nil }
+                }
+            }
+        }
+        .animation(.easeOut(duration: 0.16), value: focus)
+        .padding(.horizontal, 10)
+        .frame(maxHeight: .infinity)
+        .panelCell()
+    }
+    private func perform(_ destination: Destination) -> () -> Void {
+        switch destination {
+        case .library: actions.openLibrary
+        case .studio: actions.openStudio
+        case .edit: actions.openEditor
+        case .settings: actions.openSettings
+        case .quit: actions.quit
+        }
     }
 }
 
-private struct PanelSecondaryStyle: ButtonStyle {
+/// An icon-only tool button: the same rise and glow, and the same stepping back of its siblings.
+private struct PanelIconButton: View {
+    let symbol: String
+    let title: LocalizedStringKey
+    let focus: Bool?
+    let action: () -> Void
+    let hover: (Bool) -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        let lifted = focus == true
+        Button(action: action) {
+            InkSymbol(name: symbol, pointSize: 14, canvas: 22)
+                .frame(width: 30, height: 30)
+                .scaleEffect(lifted && !reduceMotion ? 1.18 : 1)
+                .offset(y: lifted && !reduceMotion ? -1.5 : 0)
+                .shadow(color: Theme.Palette.ink.color.opacity(lifted ? 0.45 : 0), radius: 6)
+                .opacity(focus == false ? 0.5 : 1)
+                .contentShape(.rect)
+        }
+        .buttonStyle(PanelPressStyle())
+        .onHover(perform: hover)
+        .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.62), value: focus)
+        .accessibilityLabel(Text(title))
+    }
+}
+
+/// Every panel button gives a little under the finger.
+private struct PanelPressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .padding(.horizontal, Theme.Space.m).frame(height: 36)
-            .background(configuration.isPressed ? Theme.Palette.pressed.color : Theme.Palette.hover.color,
-                        in: .capsule)
-            .contentShape(.capsule)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.92 : 1)
+            .animation(reduceMotion ? nil : .spring(response: 0.2, dampingFraction: 0.7), value: configuration.isPressed)
     }
 }
 
-private struct FinishingCard: View {
+/// The panel is the window tray: its light frost and the window's rim; the cells carry the glass.
+private struct PanelTray: ViewModifier {
+    @Environment(\.camcordOpaqueMaterialPreview) private var opaquePreview
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    func body(content: Content) -> some View {
+        content
+            .background {
+                if opaquePreview || reduceTransparency {
+                    RoundedRectangle(cornerRadius: CapturePanelView.cornerRadius, style: .continuous)
+                        .fill(Theme.Palette.glassSolidChrome.color)
+                } else {
+                    TrayBlur(cornerRadius: CapturePanelView.cornerRadius)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: CapturePanelView.cornerRadius, style: .continuous)
+                    .strokeBorder(.white.opacity(0.16), lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
+    }
+}
+
+// MARK: - Recording finished
+
+private struct PanelFinishingCell: View {
     var body: some View {
         VStack(spacing: 12) {
-            ProgressView()
-                .controlSize(.small)
-            Text("Finalizing recording…")
-                .font(Theme.Font.body)
-                .foregroundStyle(.secondary)
+            ProgressView().controlSize(.small)
+            Text("Finalizing recording…").font(Theme.Font.body).foregroundStyle(Theme.Palette.ink2.color)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 30)
-        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .panelCell()
     }
 }
 
-/// The "recording done" card: an animated check, an inline RENAME field, file metadata
-/// (size + duration + dimensions), and reveal/open actions. Stays until dismissed or the
-/// panel is reopened — it deliberately does NOT snap back to the capture grid.
-private struct FinishedCard: View {
+/// The finished recording, large: its poster whole over a blur of itself, a name to rename it,
+/// what it is, and the two things to do next, with the panel's bloom.
+private struct PanelFinishedCell: View {
     let reveal: (URL) -> Void
     let open: (URL) -> Void
     let renamed: (URL) -> Void
@@ -421,14 +695,11 @@ private struct FinishedCard: View {
     @State private var presentation: RecordingPresentation?
     @State private var renameMessage: String?
     @State private var isRenaming = false
+    @State private var previewHovered = false
+    @State private var closeHovered = false
 
-    init(
-        url: URL,
-        reveal: @escaping (URL) -> Void,
-        open: @escaping (URL) -> Void,
-        renamed: @escaping (URL) -> Void,
-        dismiss: @escaping () -> Void
-    ) {
+    init(url: URL, reveal: @escaping (URL) -> Void, open: @escaping (URL) -> Void,
+         renamed: @escaping (URL) -> Void, dismiss: @escaping () -> Void) {
         self.reveal = reveal
         self.open = open
         self.renamed = renamed
@@ -438,111 +709,93 @@ private struct FinishedCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 ZStack {
-                    Circle().fill(Theme.Palette.ok.color.opacity(0.14)).frame(width: 28, height: 28)
-                        .scaleEffect(appeared ? 1 : 0.5).opacity(appeared ? 1 : 0)
-                    Image(systemName: "checkmark").font(Theme.Font.body).foregroundStyle(Theme.Palette.ok.color)
-                        .scaleEffect(appeared ? 1 : 0.2).opacity(appeared ? 1 : 0)
+                    Circle().fill(Theme.Palette.ok.color.opacity(0.16)).frame(width: 26, height: 26)
+                        .scaleEffect(appeared ? 1 : 0.5)
+                    Image(systemName: "checkmark").font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.Palette.ok.color)
+                        .scaleEffect(appeared ? 1 : 0.2)
                 }
-                Text("Recording ready").font(Theme.Font.body)
+                .opacity(appeared ? 1 : 0)
+                Text("Recording ready").font(Theme.Font.bodyStrong)
                 Spacer()
-                HoverScaleButton(action: dismiss) { hovering in
-                    Image(systemName: "xmark")
-                        .font(Theme.Font.body)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 30, height: 28)
-                        .background(Circle().fill(Color.primary.opacity(hovering ? 0.10 : 0.045)))
+                Button(action: dismiss) {
+                    Image(systemName: "xmark").font(.system(size: 11, weight: .bold))
+                        .frame(width: 26, height: 26)
+                        .background(closeHovered ? Theme.Palette.pressed.color : Theme.Palette.hover.color, in: .circle)
+                        .contentShape(.circle)
                 }
+                .buttonStyle(PanelPressStyle())
+                .onHover { closeHovered = $0 }
                 .disabled(isRenaming)
                 .help("Close")
                 .accessibilityLabel("Close")
             }
+            .frame(height: 28)
 
-            ZStack {
-                RoundedRectangle(cornerRadius: Theme.Radius.well, style: .continuous)
-                    .fill(Theme.Palette.hover.color)
-                if let thumbnail = presentation?.thumbnail {
-                    Image(nsImage: thumbnail)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.well, style: .continuous))
-                        .padding(4)
-                } else if presentation == nil {
-                    ProgressView().controlSize(.small).accessibilityLabel("Loading recording preview")
-                } else {
-                    Label("Preview unavailable", systemImage: "film")
-                        .font(Theme.Font.body)
-                        .foregroundStyle(.secondary)
-                }
+            Button { Task { await performAfterRename(open) } } label: {
+                PanelCaptureWell(image: presentation?.poster, placeholder: "film", playable: presentation?.poster != nil,
+                                 hovered: previewHovered, cornerRadius: 12)
+                    .overlay {
+                        if presentation == nil { ProgressView().controlSize(.small) }
+                    }
+                    .frame(height: 176)
+                    .scaleEffect(previewHovered && !reduceMotion ? 1.015 : 1)
+                    .shadow(color: .black.opacity(previewHovered ? 0.3 : 0.12), radius: previewHovered ? 10 : 4, y: 3)
             }
-            .frame(height: 64)
-            .accessibilityElement(children: .ignore)
+            .buttonStyle(PanelPressStyle())
+            .onHover { previewHovered = $0 }
+            .animation(reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.7), value: previewHovered)
             .accessibilityLabel("Recording preview")
-            .accessibilityValue(presentation?.thumbnail == nil ? "Unavailable" : "Ready")
+            .accessibilityHint("Opens the recording")
 
             HStack(spacing: 4) {
                 TextField("Name", text: $name)
-                    .textFieldStyle(.roundedBorder)
-                    .font(Theme.Font.body)
+                    .textFieldStyle(.plain)
+                    .font(Theme.Font.bodyStrong)
                     .disabled(isRenaming)
                     .onSubmit { Task { _ = await commitRename() } }
-                Text("." + currentURL.pathExtension)
-                    .font(Theme.Font.body).monospaced()
-                    .foregroundStyle(.secondary)
+                Text("." + currentURL.pathExtension).font(Theme.Font.dataSmall).foregroundStyle(Theme.Palette.ink3.color)
                 if isRenaming { ProgressView().controlSize(.mini) }
             }
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(Theme.Palette.hover.color, in: .capsule)
+            .help("Rename the recording")
 
             HStack(spacing: 12) {
-                MetaLabel(symbol: "internaldrive", text: presentation?.size ?? "…")
-                MetaLabel(symbol: "clock", text: presentation?.duration ?? "…")
-                if let dims = presentation?.dimensions {
-                    MetaLabel(symbol: "rectangle.ratio.16.to.9", text: dims)
+                if let renameMessage {
+                    Label(renameMessage, systemImage: "exclamationmark.circle.fill")
+                        .foregroundStyle(Theme.Palette.record.color).lineLimit(1)
+                } else {
+                    MetaLabel(symbol: "internaldrive", text: presentation?.size ?? "…")
+                    MetaLabel(symbol: "clock", text: presentation?.duration ?? "…")
+                    if let dims = presentation?.dimensions { MetaLabel(symbol: "rectangle.ratio.16.to.9", text: dims) }
                 }
-                Spacer()
+                Spacer(minLength: 0)
             }
-            .font(Theme.Font.body)
-            .foregroundStyle(.secondary)
-
-            if let renameMessage {
-                Label(renameMessage, systemImage: "exclamationmark.circle.fill")
-                    .font(Theme.Font.body)
-                    .foregroundStyle(Theme.Palette.record.color)
-                    .lineLimit(1)
-                    .accessibilityLabel(renameMessage)
-            }
-
-            Label {
-                Text((currentURL.deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            } icon: {
-                Image(systemName: "folder")
-            }
-            .font(Theme.Font.body)
-            .foregroundStyle(.secondary)
-            .help(currentURL.deletingLastPathComponent().path)
-            .accessibilityLabel("Recording folder")
-            .accessibilityValue(currentURL.deletingLastPathComponent().path)
-
-            Spacer(minLength: 2)
+            .font(Theme.Font.caption)
+            .foregroundStyle(Theme.Palette.ink3.color)
+            .frame(height: 14)
+            .help(Text(verbatim: currentURL.deletingLastPathComponent().path))
 
             HStack(spacing: 8) {
-                CardButton(title: "Show in Finder", symbol: "folder") {
+                PanelSecondaryButton(title: "Show in Finder", symbol: "folder") {
                     Task { await performAfterRename(reveal) }
                 }
-                CardButton(title: "Open", symbol: "play.fill", prominent: true) {
+                PanelPrimaryButton(title: "Open", symbol: "play.fill", tint: Theme.Palette.ink.color, onTint: Theme.Palette.onInk.color) {
                     Task { await performAfterRename(open) }
                 }
             }
+            .frame(height: 40)
             .disabled(isRenaming)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .padding(Theme.Space.s)
+        .padding(CapturePanelView.Layout.padding)
+        .panelCell()
         .onAppear {
             if reduceMotion { appeared = true }
-            else { withAnimation(CapturePanelView.panelSpring) { appeared = true } }
+            else { withAnimation(.spring(response: 0.42, dampingFraction: 0.6)) { appeared = true } }
         }
         .task(id: currentURL) {
             let requestedURL = currentURL
@@ -602,7 +855,7 @@ private struct MetaLabel: View {
     let text: String
     var body: some View {
         HStack(spacing: 3) {
-            Image(systemName: symbol).font(Theme.Font.body)
+            Image(systemName: symbol)
             Text(text).monospacedDigit()
         }
     }
@@ -610,7 +863,7 @@ private struct MetaLabel: View {
 
 /// Poster frame and metadata are loaded asynchronously from the actual completed file.
 private struct RecordingPresentation: @unchecked Sendable {
-    let thumbnail: NSImage?
+    let poster: CGImage?
     let size: String
     let duration: String
     let dimensions: String?
@@ -633,15 +886,10 @@ private struct RecordingPresentation: @unchecked Sendable {
         }
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 592, height: 288)
-        let thumbnail: NSImage?
-        if let result = try? await generator.image(at: previewTime) {
-            thumbnail = NSImage(cgImage: result.image, size: .zero)
-        } else {
-            thumbnail = nil
-        }
+        generator.maximumSize = CGSize(width: 960, height: 600)
+        let poster = try? await generator.image(at: previewTime).image
         return RecordingPresentation(
-            thumbnail: thumbnail,
+            poster: poster,
             size: byteString(url),
             duration: durationText,
             dimensions: dims
@@ -719,129 +967,3 @@ enum RecordingRename {
     }
 }
 
-/// A pill button used in the finished card. `prominent` gives it a filled accent look.
-private struct CardButton: View {
-    let title: String
-    let symbol: String
-    var prominent: Bool = false
-    let action: () -> Void
-
-    var body: some View {
-        HoverScaleButton(action: action) { hovering in
-            HStack(spacing: 5) {
-                Image(systemName: symbol).font(Theme.Font.body)
-                Text(title).font(Theme.Font.body)
-            }
-            .foregroundStyle(prominent ? AnyShapeStyle(Theme.Palette.onInk.color) : AnyShapeStyle(Theme.Palette.ink.color))
-            .padding(.horizontal, 11)
-            .frame(maxWidth: .infinity)
-            .frame(height: 36)
-            .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.well, style: .continuous)
-                    .fill(prominent
-                        ? AnyShapeStyle(Theme.Palette.ink.color.opacity(hovering ? 1 : 0.92))
-                        : AnyShapeStyle(hovering ? Theme.Palette.pressed.color : Theme.Palette.hover.color))
-            )
-        }
-        .help(title)
-        .accessibilityLabel(title)
-    }
-}
-
-// MARK: - Components
-
-/// One capture action: icon over a tiny label, generous hit target, soft hover fill,
-/// gentle press scale.
-private struct HoverScaleButton<Content: View>: View {
-    let action: () -> Void
-    @ViewBuilder let content: (Bool) -> Content
-
-    @State private var hovering = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        Button(action: action) {
-            content(hovering)
-                .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.well))
-        }
-        .buttonStyle(PressScaleStyle(reduceMotion: reduceMotion))
-        .onHover { isHovering in
-            if reduceMotion {
-                hovering = isHovering
-            } else {
-                withAnimation(.easeOut(duration: 0.14)) {
-                    hovering = isHovering
-                }
-            }
-        }
-    }
-}
-
-private struct PressScaleStyle: ButtonStyle {
-    let reduceMotion: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.965 : 1)
-            .animation(
-                reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.84),
-                value: configuration.isPressed
-            )
-    }
-}
-
-private struct PanelChrome: ViewModifier {
-    @Environment(\.camcordOpaqueMaterialPreview) private var opaquePreview
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorScheme) private var colorScheme
-
-    func body(content: Content) -> some View {
-        content.background {
-            if opaquePreview || reduceTransparency {
-                RoundedRectangle(cornerRadius: Theme.Radius.floating)
-                    .fill(Theme.Palette.glassSolidChrome.color)
-            } else {
-                // The left sidebar's own recipe: one untinted native glass region, nothing
-                // behind it. SwiftUI controls remain above it, so their fills are not glass content.
-                ZStack {
-                    TrayBlur(cornerRadius: Theme.Radius.floating)
-                    PanelGlassBackground(appearance: colorScheme == .dark ? .darkAqua : .aqua)
-                }
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-            }
-        }
-    }
-
-}
-
-/// One untinted system glass region, with stable explicit light/dark appearance.
-private struct PanelGlassBackground: NSViewRepresentable {
-    let appearance: NSAppearance.Name
-
-    func makeNSView(context: Context) -> NSGlassEffectView {
-        let view = NSGlassEffectView()
-        view.contentView = NSView()
-        view.setAccessibilityHidden(true)
-        view.adoptSidebarGlass()
-        configure(view)
-        return view
-    }
-
-    func updateNSView(_ view: NSGlassEffectView, context: Context) {
-        configure(view)
-    }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSGlassEffectView,
-                     context: Context) -> CGSize? {
-        guard let width = proposal.width, let height = proposal.height else { return nil }
-        return CGSize(width: width, height: height)
-    }
-
-    private func configure(_ view: NSGlassEffectView) {
-        if view.style != .regular { view.style = .regular }
-        if view.cornerRadius != Theme.Radius.floating { view.cornerRadius = Theme.Radius.floating }
-        if view.tintColor != nil { view.tintColor = nil }
-        if view.appearance?.name != appearance { view.appearance = NSAppearance(named: appearance) }
-    }
-}

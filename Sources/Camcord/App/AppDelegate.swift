@@ -392,6 +392,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         actions.openRecording = { [weak self] url in
             self?.performLibraryAction(url, open: true)
         }
+        actions.previewCapture = { [weak self] item in
+            guard let self else { return }
+            self.panelController?.close()
+            Task { @MainActor [weak self] in
+                guard let capture = await ScreenshotPreviewSource.capture(for: item) else {
+                    self?.performLibraryAction(item.url, open: true); return
+                }
+                let visible = (NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main)?.visibleFrame ?? .zero
+                self?.screenshotPreviewCard?.openPreview(capture, on: visible)
+            }
+        }
         actions.reportError = { [weak self] message in
             self?.hudToast?.show(text: message, systemSymbol: "exclamationmark.triangle", tint: .systemOrange, respectsSetting: false)
         }

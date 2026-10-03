@@ -422,42 +422,9 @@ private final class ScreenshotCardVeil: NSView {
         CATransaction.commit()
     }
 
-    /// The symbol drawn white on a fixed square, centred on its ink rather than its
-    /// typographic box, so every glyph sits on the same optical centre.
+    /// The symbol drawn white on a fixed square, centred on its ink (see `InkCenteredSymbol`).
     static func symbol(_ name: String, scale: CGFloat, pointSize: CGFloat = 16, weight: NSFont.Weight = .medium) -> CGImage? {
-        let configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
-            .applying(.init(paletteColors: [.white]))
-        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(configuration)
-        else { return nil }
-        let side = Int((canvas * scale).rounded())
-        func draw(offset: CGPoint) -> CGContext? {
-            guard let context = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
-                                          space: CGColorSpaceCreateDeviceRGB(),
-                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-            context.scaleBy(x: scale, y: scale)
-            NSGraphicsContext.saveGraphicsState()
-            NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
-            let size = image.size
-            image.draw(in: CGRect(x: (canvas - size.width) / 2 + offset.x, y: (canvas - size.height) / 2 + offset.y,
-                                  width: size.width, height: size.height))
-            NSGraphicsContext.restoreGraphicsState()
-            return context
-        }
-        guard let first = draw(offset: .zero), let data = first.data else { return nil }
-        // Ink bounds in pixels; bitmap rows run top to bottom.
-        let pixels = data.bindMemory(to: UInt8.self, capacity: side * side * 4)
-        var minX = side, maxX = -1, minRow = side, maxRow = -1
-        for row in 0..<side {
-            for column in 0..<side where pixels[(row * side + column) * 4 + 3] > 24 {
-                minX = min(minX, column); maxX = max(maxX, column)
-                minRow = min(minRow, row); maxRow = max(maxRow, row)
-            }
-        }
-        guard maxX >= minX, maxRow >= minRow else { return first.makeImage() }
-        let inkX = CGFloat(minX + maxX + 1) / 2 / scale
-        let inkY = (CGFloat(side) - CGFloat(minRow + maxRow + 1) / 2) / scale
-        let offset = CGPoint(x: canvas / 2 - inkX, y: canvas / 2 - inkY)
-        return draw(offset: offset)?.makeImage()
+        InkCenteredSymbol.render(name, pointSize: pointSize, weight: weight, canvas: canvas, scale: scale, color: .white)
     }
 }
 

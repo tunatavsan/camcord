@@ -30,7 +30,7 @@ struct PanelLayoutTests {
     @Test("the capture palette stays compact in every recording state")
     func sizeTable() {
         #expect(CapturePanelView.panelWidth == 360)
-        #expect(CapturePanelView.panelHeight == 424)
+        #expect(CapturePanelView.panelHeight == 410)
         // Recording status uses the same compact palette footprint as idle capture.
         #expect(CapturePanelView.activeHeight == CapturePanelView.panelHeight)
         for height in [CapturePanelView.panelHeight, CapturePanelView.activeHeight,
@@ -277,8 +277,8 @@ struct PanelContextTests {
             loaded.append(item.id); return image
         })
         context.synchronize(visible: true)
-        #expect(context.recent.map(\.title) == ["capture-4", "capture-3", "capture-2"])
-        while context.thumbnails.count < 3 { try Task.checkCancellation(); await Task.yield() }
+        #expect(context.recent.map(\.title) == ["capture-4", "capture-3", "capture-2", "capture-1"])
+        while context.thumbnails.count < 4 { try Task.checkCancellation(); await Task.yield() }
         #expect(loaded == context.recent.map(\.id))
         #expect(store.filteredItems.isEmpty)
         context.synchronize(visible: false)

@@ -140,6 +140,8 @@ struct PanelActions {
     var openRecording: (URL) -> Void = { _ in }
     /// Reveal the newest saved screenshot in Finder.
     var revealScreenshot: (URL) -> Void = { _ in }
+    /// Opens a still capture in the lightweight preview; nil leaves it to the Library's route.
+    var previewCapture: ((CaptureItem) -> Void)?
     var openSettings: () -> Void = {}
     var openMainWindow: () -> Void = {}
     var reportError: (String) -> Void = { _ in }

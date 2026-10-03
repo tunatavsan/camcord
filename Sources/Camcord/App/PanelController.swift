@@ -173,7 +173,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         // to the glass's corners or AppKit outlines the whole rectangle.
         let anchored = panel === anchoredPanel
         if let layer = hostingController.view.layer {
-            layer.cornerRadius = anchored ? Theme.Radius.floating : 0
+            layer.cornerRadius = anchored ? CapturePanelView.cornerRadius : 0
             layer.cornerCurve = .continuous
             layer.masksToBounds = anchored
         }
