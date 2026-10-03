@@ -9,6 +9,13 @@ enum PanelRecordingSource: String, CaseIterable, Identifiable {
     var label: LocalizedStringKey {
         switch self { case .region: "Region"; case .window: "Window"; case .screen: "Screen" }
     }
+    var name: String {
+        switch self {
+        case .region: String(localized: "Region")
+        case .window: String(localized: "Window")
+        case .screen: String(localized: "Screen")
+        }
+    }
     var symbol: String {
         switch self { case .region: "rectangle.dashed"; case .window: "macwindow"; case .screen: "display" }
     }

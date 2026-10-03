@@ -256,28 +256,8 @@ private struct PanelRecordCell: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if model.state == .idle && !model.isArmed && !model.isStarting {
-                HStack(spacing: 4) {
-                    ForEach(PanelRecordingSource.allCases) { source in
-                        PanelChip(symbol: source.symbol, title: Text(source.label), selected: context.recordingSource == source,
-                                  focus: focusState(source.rawValue), mark: sourceMark, action: {
-                            withAnimation(.spring(response: 0.36, dampingFraction: 0.72)) {
-                                context.selectSource(source, canConfigure: canConfigure)
-                            }
-                        }, hover: hover(source.rawValue))
-                    }
-                    Spacer(minLength: 4)
-                    PanelDeviceToggle(title: "Camera", symbol: "video", on: context.settings?.camera.enabled == true,
-                                      available: canConfigure && context.settings != nil, focus: focusState("camera"),
-                                      action: { context.toggleCamera(canConfigure: canConfigure) }, hover: hover("camera"))
-                    PanelDeviceToggle(title: "Microphone", symbol: "mic", on: context.settings?.microphone == true,
-                                      available: canConfigure && context.settings != nil, focus: focusState("mic"),
-                                      action: { context.toggleMicrophone(canConfigure: canConfigure) }, hover: hover("mic"))
-                    // Only the owner's view of the camera; the recording keeps it either way.
-                    PanelDeviceToggle(title: "Camera preview", symbol: "eye", on: previewVisible, available: true,
-                                      focus: focusState("preview"), slash: "eye.slash",
-                                      action: { CameraOverlayController.shared.togglePreview() }, hover: hover("preview"))
-                }
-                .frame(height: 32)
+                setupRow(compact: !Self.namesFit)
+                    .frame(height: 32)
             } else {
                 PanelRecordingStatus(model: model).frame(height: 32)
             }
@@ -287,6 +267,41 @@ private struct PanelRecordCell: View {
         .panelCell()
         .onReceive(NotificationCenter.default.publisher(for: CameraOverlayController.previewVisibilityDidChange)) { _ in
             previewVisible = CameraOverlayController.shared.previewVisible
+        }
+    }
+    /// The row never grows past its cell: where the names do not all fit beside the three
+    /// toggles (a longer language), only the chosen source keeps its name.
+    private static let namesFit: Bool = {
+        let font = Theme.Font.ns.text(Theme.Font.Size.caption, weight: .semibold)
+        let chips = PanelRecordingSource.allCases.reduce(CGFloat(0)) { total, source in
+            total + ceil(NSAttributedString(string: source.name, attributes: [.font: font]).size().width) + 16 + 4 + 10
+        }
+        let room = CapturePanelView.panelWidth - 2 * (CapturePanelView.Layout.ring + CapturePanelView.Layout.padding)
+        return chips + 3 * 27 + 6 * 3 + 2 <= room
+    }()
+    private func setupRow(compact: Bool) -> some View {
+        HStack(spacing: 3) {
+            ForEach(PanelRecordingSource.allCases) { source in
+                let selected = context.recordingSource == source
+                PanelChip(symbol: source.symbol, title: Text(source.label), selected: selected,
+                          showsTitle: !compact || selected,
+                          focus: focusState(source.rawValue), mark: sourceMark, action: {
+                    withAnimation(.spring(response: 0.36, dampingFraction: 0.72)) {
+                        context.selectSource(source, canConfigure: canConfigure)
+                    }
+                }, hover: hover(source.rawValue))
+            }
+            Spacer(minLength: 2)
+            PanelDeviceToggle(title: "Camera", symbol: "video", on: context.settings?.camera.enabled == true,
+                              available: canConfigure && context.settings != nil, focus: focusState("camera"),
+                              action: { context.toggleCamera(canConfigure: canConfigure) }, hover: hover("camera"))
+            PanelDeviceToggle(title: "Microphone", symbol: "mic", on: context.settings?.microphone == true,
+                              available: canConfigure && context.settings != nil, focus: focusState("mic"),
+                              action: { context.toggleMicrophone(canConfigure: canConfigure) }, hover: hover("mic"))
+            // Only the owner's view of the camera; the recording keeps it either way.
+            PanelDeviceToggle(title: "Camera preview", symbol: "eye", on: previewVisible, available: true,
+                              focus: focusState("preview"), slash: "eye.slash",
+                              action: { CameraOverlayController.shared.togglePreview() }, hover: hover("preview"))
         }
     }
     private func focusState(_ id: String) -> Bool? { focus.map { $0 == id } }
@@ -329,6 +344,7 @@ private struct PanelChip: View {
     let symbol: String
     let title: Text
     let selected: Bool
+    var showsTitle = true
     let focus: Bool?
     let mark: Namespace.ID
     let action: () -> Void
@@ -343,7 +359,7 @@ private struct PanelChip: View {
                         .scaleEffect(lifted && !reduceMotion ? 1.18 : 1)
                         .offset(y: lifted && !reduceMotion ? -1 : 0)
                         .shadow(color: Theme.Palette.ink.color.opacity(lifted ? 0.5 : 0), radius: 5)
-                    title.font(Theme.Font.captionStrong).lineLimit(1).fixedSize()
+                    if showsTitle { title.font(Theme.Font.captionStrong).lineLimit(1).fixedSize() }
                 }
                 .foregroundStyle(selected ? Theme.Palette.ink.color : Theme.Palette.ink3.color)
                 ZStack {
@@ -354,7 +370,7 @@ private struct PanelChip: View {
                 }
                 .frame(height: 2)
             }
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 5)
             .frame(height: 30)
             .opacity(focus == false ? 0.5 : 1)
             .contentShape(.rect)
@@ -362,6 +378,7 @@ private struct PanelChip: View {
         .buttonStyle(PanelPressStyle())
         .onHover(perform: hover)
         .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.62), value: focus)
+        .accessibilityLabel(title)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
@@ -395,7 +412,7 @@ private struct PanelDeviceToggle: View {
                 .scaleEffect(lifted && !reduceMotion ? 1.18 : 1)
                 .offset(y: lifted && !reduceMotion ? -1 : 0)
                 .shadow(color: Theme.Palette.ink.color.opacity(lifted ? 0.5 : 0), radius: 5)
-                .frame(width: 30, height: 28)
+                .frame(width: 27, height: 28)
                 .opacity(focus == false ? 0.5 : 1)
                 .contentShape(.rect)
                 .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.6), value: on)
