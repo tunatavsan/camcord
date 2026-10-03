@@ -43,16 +43,25 @@ final class WindowPickerPanel: NSObject, NSWindowDelegate {
             onPick: { [weak self] choice in self?.finish(with: choice) },
             onCancel: { [weak self] in self?.finish(with: nil) }
         )
-        let hosting = NSHostingController(rootView: view)
-        let window = NSWindow(contentViewController: hosting)
-        window.styleMask = [.titled, .closable, .fullSizeContentView]
-        window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
-        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
-        window.standardWindowButton(.zoomButton)?.isHidden = true
+        // The window tray, as the card and the preview stand on it: frost, rim and a shadow
+        // cast outside, carrying the picker's glass cells.
+        let hosting = NSHostingView(rootView: view)
+        let inset = WindowPickerView.shadowInset
+        let surface = TraySurface(content: hosting, shadowRadius: 16, cornerRadius: WindowPickerView.cornerRadius)
+        let container = NSView(frame: CGRect(origin: .zero, size: CGSize(width: WindowPickerView.size.width + 2 * inset,
+                                                                         height: WindowPickerView.size.height + 2 * inset)))
+        surface.frame = container.bounds.insetBy(dx: inset, dy: inset)
+        surface.autoresizingMask = [.width, .height]
+        container.addSubview(surface)
+        let window = WindowPickerWindow(contentRect: container.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = container
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = false
         window.isMovableByWindowBackground = true
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.isReleasedWhenClosed = false
         window.delegate = self
         window.center()
         self.window = window
@@ -61,6 +70,12 @@ final class WindowPickerPanel: NSObject, NSWindowDelegate {
         // takes clicks and Esc, and the picker comes to the front where the user expects it.
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+        if let layer = surface.layer, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0; fade.toValue = 1; fade.duration = 0.16
+            let rise = CASpringAnimation.card(keyPath: "transform.translation.y", from: -10, to: 0, response: 0.38, dampingRatio: 0.8)
+            rise.preferFullRefreshRate(on: window.screen)
+            layer.add(fade, forKey: "picker-fade"); layer.add(rise, forKey: "picker-rise")
+        }
     }
 
     private func startLoadingThumbnails() {
@@ -318,123 +333,152 @@ final class WindowPickerModel: ObservableObject {
 
 // MARK: - SwiftUI
 
+/// A borderless window that still takes the keyboard, for Esc and the grid.
+private final class WindowPickerWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+}
+
 private struct WindowPickerView: View {
     @ObservedObject var model: WindowPickerModel
     let onPick: (WindowPickerChoice) -> Void
     let onCancel: () -> Void
+    @State private var focus: CGWindowID?
 
-    private let columns = [GridItem(.adaptive(minimum: 208, maximum: 260), spacing: 16)]
+    static let size = CGSize(width: 736, height: 540)
+    static let shadowInset: CGFloat = 40
+    /// Concentric with the cells inside: their radius plus the tray's ring.
+    static let cornerRadius: CGFloat = Theme.Radius.floating + 8
+
+    private let columns = [GridItem(.adaptive(minimum: 200, maximum: 260), spacing: 12)]
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 8) {
             header
-            Divider()
-            if model.windows.isEmpty {
-                emptyState
-            } else {
-                ScrollView {
-                    LazyVGrid(columns: columns, spacing: 16) {
-                        ForEach(model.windows) { item in
-                            WindowCell(item: item) { onPick(item.choice) }
+                .frame(height: 64)
+            Group {
+                if model.windows.isEmpty {
+                    emptyState
+                } else {
+                    ScrollView {
+                        LazyVGrid(columns: columns, spacing: 12) {
+                            ForEach(model.windows) { item in
+                                WindowCell(item: item, focus: focus.map { $0 == item.id }) {
+                                    onPick(item.choice)
+                                } hover: { inside in
+                                    if inside { focus = item.id } else if focus == item.id { focus = nil }
+                                }
+                            }
                         }
+                        .padding(12)
                     }
-                    .padding(20)
+                    .scrollContentBackground(.hidden)
                 }
             }
+            .panelCell()
         }
-        .frame(width: 736, height: 540)
-        .camcordGlass(.chrome, in: RoundedRectangle(cornerRadius: Theme.Radius.floating))
+        .padding(8)
+        .frame(width: Self.size.width, height: Self.size.height)
+        .foregroundStyle(Theme.Palette.ink.color)
         .onExitCommand(perform: onCancel)
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "macwindow.on.rectangle")
-                .font(Theme.Font.bodyStrong)
-                .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 1) {
+        HStack(spacing: 12) {
+            InkSymbol(name: "macwindow.on.rectangle", pointSize: 16, canvas: 26)
+                .foregroundStyle(Theme.Palette.ink2.color)
+            VStack(alignment: .leading, spacing: 2) {
                 Text("Choose a window to record")
                     .font(Theme.Font.bodyStrong)
                 Text("Recording continues when the window is behind other apps")
                     .font(Theme.Font.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.Palette.ink3.color)
             }
             Spacer()
-            Button(action: onCancel) {
-                Text("Cancel").font(Theme.Font.bodyStrong)
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: Theme.Radius.well).fill(Theme.Palette.hover.color))
-            .keyboardShortcut(.cancelAction)
+            WindowPickerCancel(action: onCancel)
+                .keyboardShortcut(.cancelAction)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 16)
+        .frame(maxHeight: .infinity)
+        .panelCell()
     }
 
     private var emptyState: some View {
         VStack(spacing: 10) {
-            Image(systemName: "macwindow.badge.plus")
-                .font(Theme.Font.body)
-                .foregroundStyle(.tertiary)
+            InkSymbol(name: "macwindow.badge.plus", pointSize: 20, canvas: 30)
+                .foregroundStyle(Theme.Palette.ink3.color)
             Text("Kaydedilecek uygun pencere bulunamadı")
                 .font(Theme.Font.bodyStrong)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.Palette.ink2.color)
             Text("Bir uygulama penceresi aç ve tekrar dene.")
                 .font(Theme.Font.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(Theme.Palette.ink3.color)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
-/// A single window tile: live thumbnail (or an app-icon placeholder while it loads), with
-/// the app icon + window title beneath. Soft hover lift; click records it.
+/// The panel's quieter capsule button, with its soft bloom.
+private struct WindowPickerCancel: View {
+    let action: () -> Void
+    @State private var hovered = false
+    var body: some View {
+        Button(action: action) {
+            Text("Cancel").font(Theme.Font.bodyStrong)
+                .padding(.horizontal, 16)
+                .frame(height: 32)
+                .background(hovered ? Theme.Palette.pressed.color : Theme.Palette.hover.color, in: .capsule)
+                .overlay(Capsule().strokeBorder(.white.opacity(hovered ? 0.18 : 0.08), lineWidth: 1))
+                .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .animation(.easeOut(duration: 0.14), value: hovered)
+    }
+}
+
+/// One window: its live picture whole in a frame of one ratio over a muted blur of itself,
+/// its app and title beneath. Hovered it lifts and the others step back; a click records it.
 private struct WindowCell: View {
     let item: PickableWindow
+    /// nil: nothing hovered; true: this one; false: another.
+    let focus: Bool?
     let action: () -> Void
-
-    @State private var hovering = false
+    let hover: (Bool) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        let lifted = focus == true
         Button(action: action) {
             VStack(alignment: .leading, spacing: 8) {
                 thumbnail
+                    .shadow(color: .black.opacity(lifted ? 0.32 : 0.12), radius: lifted ? 10 : 4, y: lifted ? 4 : 1)
                 HStack(spacing: 7) {
                     if let icon = item.appIcon {
                         Image(nsImage: icon).resizable().frame(width: 18, height: 18)
                     }
                     VStack(alignment: .leading, spacing: 1) {
                         Text(item.title.isEmpty ? item.appName : item.title)
-                            .font(Theme.Font.bodyStrong)
+                            .font(Theme.Font.captionStrong)
                             .lineLimit(1)
                         if !item.title.isEmpty {
                             Text(item.appName)
                                 .font(Theme.Font.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Theme.Palette.ink3.color)
                                 .lineLimit(1)
                         }
                     }
                     Spacer(minLength: 0)
                 }
+                .padding(.horizontal, 2)
             }
-            .padding(8)
-            .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.floating)
-                    .fill(hovering ? Theme.Palette.pressed.color : Theme.Palette.hover.color)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.Radius.floating)
-                    .strokeBorder(Theme.Palette.ink.color.opacity(hovering ? 0.9 : 0), lineWidth: 2)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.floating))
+            .scaleEffect(lifted && !reduceMotion ? 1.03 : 1)
+            .offset(y: lifted && !reduceMotion ? -3 : 0)
+            .opacity(focus == false ? 0.6 : 1)
+            .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .scaleEffect(hovering && !reduceMotion ? 1.02 : 1)
-        .animation(reduceMotion ? nil : Theme.Motion.snap, value: hovering)
-        .onHover { hovering = $0 }
+        .onHover(perform: hover)
+        .animation(reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.65), value: focus)
         .accessibilityLabel(item.title.isEmpty ? item.appName : item.title)
         .accessibilityValue(item.title.isEmpty ? "" : item.appName)
         .accessibilityHint("Select this window for recording")
@@ -442,24 +486,24 @@ private struct WindowCell: View {
 
     private var thumbnail: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: Theme.Radius.well)
-                .fill(Theme.Palette.well.color)
+            Theme.Palette.well.color
             if let thumb = item.thumbnail {
-                Image(nsImage: thumb)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.well))
+                Color.clear.overlay {
+                    Image(nsImage: thumb).resizable().scaledToFill().blur(radius: 14).saturation(0.75)
+                }
+                .clipped()
+                Color.black.opacity(0.3)
+                Image(nsImage: thumb).resizable().aspectRatio(contentMode: .fit)
+                    .shadow(color: .black.opacity(0.35), radius: 3, y: 1)
+                    .padding(6)
             } else if let icon = item.appIcon {
-                Image(nsImage: icon)
-                    .resizable()
-                    .frame(width: 46, height: 46)
-                    .opacity(0.7)
+                Image(nsImage: icon).resizable().frame(width: 46, height: 46).opacity(0.7)
             } else {
                 ProgressView().controlSize(.small)
             }
         }
-        .frame(height: 128)
+        .aspectRatio(16 / 10, contentMode: .fit)
         .frame(maxWidth: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.well))
+        .clipShape(.rect(cornerRadius: Theme.Radius.thumb, style: .continuous))
     }
 }
