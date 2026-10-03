@@ -241,7 +241,8 @@ final class StudioSession {
         if case .window = selectedSource?.id { isWindow = true } else { isWindow = false }
         previewTransport.updateIdleConfiguration(.init(
             cameraSource: cameraPreviewRequested ? cameraMonitor.currentPreviewSource() : nil,
-            cameraOptions: settings.camera, layers: layerSnapshot, fitsWindow: isWindow))
+            cameraOptions: settings.camera, layers: layerSnapshot, fitsWindow: isWindow,
+            contentPointWidth: selectedSource?.frame.width))
     }
 
     private func activatePreview(owner: UUID) {

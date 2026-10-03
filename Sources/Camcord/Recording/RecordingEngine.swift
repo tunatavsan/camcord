@@ -23,6 +23,15 @@ final class RecordingEngine: NSObject {
         var isWindow: Bool {
             if case .window = self { true } else { false }
         }
+
+        /// How wide the recorded content is on screen, in points.
+        var pointWidth: CGFloat {
+            switch self {
+            case .region(let clamp, _, _): clamp.clampedRegion.width
+            case .window(let window): window.frame.width
+            case .display(let display, _, _): display.frame.width
+            }
+        }
     }
 
     private let logger = Logger(subsystem: "dev.tavsan.camcord", category: "recording-engine")
@@ -297,6 +306,7 @@ final class RecordingEngine: NSObject {
             microphoneGainDB: settings.resolvedMicrophoneGainDB,
             cameraSource: cameraSource,
             cameraOptions: settings.camera,
+            cameraPointWidth: target.pointWidth,
             fitsWindowContent: target.isWindow
         )
 

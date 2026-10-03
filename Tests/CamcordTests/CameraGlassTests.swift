@@ -7,22 +7,10 @@ import Testing
 
 @testable import Camcord
 
-/// Phase P/W2: the camera tile's glass edge — the numbers both renderers share, and the
-/// gradient the compositor actually writes into the file. Pure: one small software render,
-/// no window and no device.
-@Suite("Camera glass edge")
+/// The camera's tray in the file: the numbers both renderers share, and the ring the
+/// compositor actually writes. Pure: small software renders, no window and no device.
+@Suite("Camera tray")
 struct CameraGlassEdgeTests {
-    @Test("the edge is a translucent gradient of light, never a flat white line")
-    func edgeIsGlassNotWhite() {
-        let stops = CameraOptions.edgeHighlight
-        #expect(stops.bright == 0.55)
-        #expect(stops.dim == 0.10)
-        // Flat white is what the round removed: both ends are translucent and they differ
-        // enough to read as a gradient rather than as one alpha with a rounding error.
-        #expect(stops.bright < 1)
-        #expect(stops.bright - stops.dim > 0.3)
-    }
-
     @Test("the shadow is one spec in pixels: the screen's points and the file's pixels match, it grows, then caps")
     func shadowInPixels() {
         // The 320x180 pt reference tile on a Retina screen: blur 18 pt, drop 6 pt, as before.
@@ -50,50 +38,51 @@ struct CameraGlassEdgeTests {
         #expect(file == CGRect(x: 10, y: 21, width: 101, height: 50))
     }
 
-    @Test("in the file the edge is one pixel wide at a small and at a large tile", arguments: [0.1, 0.55])
-    func fileEdgeIsOnePixel(widthFraction: Double) throws {
+    @Test("in the file the tray rings the camera the same points wide at any size and scale",
+          arguments: [(0.1, 1.0), (0.55, 1.0), (0.1, 2.0), (0.55, 2.0)])
+    func fileTrayRing(widthFraction: Double, pixelsPerPoint: CGFloat) throws {
         let screen = try sampleBuffer(buffer: solidBuffer(width: 1920, height: 1080, grey: 128))
         let camera = solidBuffer(width: 64, height: 36, grey: 40)
         let options = CameraOptions(enabled: true, corner: .bottomLeft, widthFraction: widthFraction, mirrored: false)
         let output = try #require(CMSampleBufferGetImageBuffer(
-            try softwareCompositor().composite(screen: screen, camera: camera, options: options)
+            try softwareCompositor().composite(screen: screen, camera: camera, options: options,
+                                               contentPointWidth: 1920 / pixelsPerPoint)
         ))
         let rect = CameraOptions.pixelAligned(options.rect(in: CGSize(width: 1920, height: 1080)), pixelsPerUnit: 1)
-        // Along the tile's middle row, from its left edge inward, and down from its top edge
-        // at the middle column: pixels lifted above the dark interior are the hairline.
-        let interior = grey(output, ciX: Int(rect.midX), ciY: Int(rect.midY))
-        var left = 0
-        for x in Int(rect.minX)..<Int(rect.minX) + 12 where grey(output, ciX: x, ciY: Int(rect.midY)) > interior + 6 { left += 1 }
-        var top = 0
-        for y in (Int(rect.maxY) - 12)..<Int(rect.maxY) where grey(output, ciX: Int(rect.midX), ciY: y) > interior + 6 { top += 1 }
-        #expect(left == 1, "left edge \(left) px at widthFraction \(widthFraction)")
-        #expect(top == 1, "top edge \(top) px at widthFraction \(widthFraction)")
+        let ring = Int(CameraOptions.trayRing * pixelsPerPoint)
+        let rim = Int(CameraOptions.trayRim.inner.width * pixelsPerPoint)
+        // Out from the camera along its middle row and column: the frost keeps the screen's own
+        // level, and the rim's light line is the tray's outer edge, a ring away.
+        let row = Int(rect.midY), column = Int(rect.midX)
+        let screenLevel = grey(output, ciX: 1900, ciY: 1060)
+        let frost = grey(output, ciX: Int(rect.minX) - ring / 2, ciY: row)
+        let left = (Int(rect.minX) - ring - 4..<Int(rect.minX)).filter { grey(output, ciX: $0, ciY: row) > screenLevel + 8 }
+        let top = (Int(rect.maxY)..<Int(rect.maxY) + ring + 4).filter { grey(output, ciX: column, ciY: $0) > screenLevel + 8 }
+        #expect(left == Array(Int(rect.minX) - ring..<Int(rect.minX) - ring + rim), "left rim \(left) at \(widthFraction)")
+        #expect(top == Array(Int(rect.maxY) + ring - rim..<Int(rect.maxY) + ring), "top rim \(top) at \(widthFraction)")
+        // Between the camera and the rim: frost, not camera and not a border.
+        #expect(abs(frost - screenLevel) <= 2, "frost \(frost) against the screen's \(screenLevel)")
+        #expect(grey(output, ciX: Int(rect.minX) + 2, ciY: row) < screenLevel - 20)
     }
 
-    @Test("the compositor writes the gradient hairline into the file")
-    func compositorDrawsTheGlassEdge() throws {
-        // Mid-grey on both sides, so the light hairline is the only thing that can lift a
-        // pixel near the tile's boundary — and the diagonal says which end lifts further.
-        let screen = try sampleBuffer(buffer: solidBuffer(width: 400, height: 240, grey: 128))
+    @Test("the tray's frost blurs the screen behind it and leaves the rest of the screen sharp")
+    func trayFrostsTheScreen() throws {
+        let screen = try sampleBuffer(buffer: stripedBuffer(width: 640, height: 360))
         let camera = solidBuffer(width: 64, height: 36, grey: 128)
-        let options = CameraOptions(enabled: true, corner: .bottomLeft, widthFraction: 0.6, mirrored: false)
+        let options = CameraOptions(enabled: true, corner: .bottomLeft, widthFraction: 0.4, mirrored: false)
         let output = try #require(CMSampleBufferGetImageBuffer(
-            try softwareCompositor().composite(screen: screen, camera: camera, options: options)
+            try softwareCompositor().composite(screen: screen, camera: camera, options: options, contentPointWidth: 320)
         ))
-        let rect = options.rect(in: CGSize(width: 400, height: 240))
-        let interior = grey(output, ciX: Int(rect.midX), ciY: Int(rect.midY))
-        // Read the brightest pixel of a short scan across the edge: a one-point hairline
-        // lands between pixel centres, and the scan stays clear of the rounded corners.
-        let inset = Int(CameraOptions.cornerRadius(for: rect.size)) + 4
-        let lit = brightest(output, ciX: Int(rect.minX) + inset,
-                            ciY: Int(rect.maxY) - 2...Int(rect.maxY))
-        let dim = brightest(output, ciX: Int(rect.maxX) - inset,
-                            ciY: Int(rect.minY)...Int(rect.minY) + 2)
-        #expect(lit > interior + 40)
-        #expect(dim > interior)
-        #expect(lit > dim + 25)
+        let rect = CameraOptions.pixelAligned(options.rect(in: CGSize(width: 640, height: 360)), pixelsPerUnit: 1)
+        let row = Int(rect.midY)
+        func contrast(at x: Int) -> Int { abs(grey(output, ciX: x, ciY: row) - grey(output, ciX: x + 1, ciY: row)) }
+        // In the ring, one-pixel stripes melt into grey; well clear of the tray they stay crisp.
+        let frost = Int(rect.minX) - Int(CameraOptions.trayRing)
+        #expect(contrast(at: frost) < 24, "frost contrast \(contrast(at: frost))")
+        #expect(contrast(at: Int(rect.maxX) + 70) > 80)
     }
 }
+
 
 /// The tile's entrance: 320 ms, scale from 0.92, and a fade only under Reduce Motion.
 @Suite("Camera entrance")
@@ -116,102 +105,6 @@ struct CameraEntranceTests {
         #expect(!CameraEntrance.scales(reduceMotion: true))
         #expect(CameraEntrance.duration(reduceMotion: true) == 0.16)
         #expect(CameraEntrance.duration(reduceMotion: true) < CameraEntrance.duration(reduceMotion: false))
-    }
-}
-
-/// The tile as it is actually drawn: the same glass edge the compositor writes into the
-/// file has to be a gradient on screen too, or "identical on screen and in the recording"
-/// is a claim nothing checks. Set CAMCORD_RENDER_SHOTS=<dir> to look at the tile over
-/// light and dark content.
-@Suite("Camera glass on screen")
-@MainActor
-struct CameraGlassRenderTests {
-    @Test("the drawn edge is brightest at the top-leading corner and dimmest opposite")
-    func drawnEdgeIsAGradient() throws {
-        _ = NSApplication.shared
-        let shots = ProcessInfo.processInfo.environment["CAMCORD_RENDER_SHOTS"]
-        let size = CGSize(width: 320, height: 180)
-        let bounds = CGRect(origin: .zero, size: size)
-
-        for (name, backdrop) in [("dark", NSColor(calibratedWhite: 0.06, alpha: 1)),
-                                 ("light", NSColor(calibratedWhite: 0.97, alpha: 1))] {
-            let view = FloatingCameraView(frame: bounds)
-            view.image = solidImage(size: size, color: NSColor(calibratedWhite: 0.5, alpha: 1))
-            view.layoutSubtreeIfNeeded()
-
-            let scale: CGFloat = 2
-            let rep = try #require(NSBitmapImageRep(
-                bitmapDataPlanes: nil, pixelsWide: Int(size.width * scale), pixelsHigh: Int(size.height * scale),
-                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
-            ))
-            let context = try #require(NSGraphicsContext(bitmapImageRep: rep))
-            NSGraphicsContext.saveGraphicsState()
-            NSGraphicsContext.current = context
-            context.cgContext.scaleBy(x: scale, y: scale)
-            backdrop.setFill()
-            bounds.fill()
-            view.layer?.render(in: context.cgContext)
-            NSGraphicsContext.restoreGraphicsState()
-            if let shots {
-                try rep.representation(using: .png, properties: [:])?
-                    .write(to: URL(fileURLWithPath: "\(shots)/tile-\(name).png"))
-            }
-
-            // Rows run top-down in the bitmap. Sample the edge clear of the rounded corners; the
-            // hairline is the outermost device pixel row.
-            let inset = Int((CameraOptions.cornerRadius(for: size) + 6) * scale)
-            let top = try #require(rep.colorAt(x: inset, y: 0)).brightnessComponent
-            let bottom = try #require(rep.colorAt(x: rep.pixelsWide - inset, y: rep.pixelsHigh - 1)).brightnessComponent
-            let interior = try #require(rep.colorAt(x: rep.pixelsWide / 2, y: rep.pixelsHigh / 2)).brightnessComponent
-            #expect(top > interior, "\(name): the lit edge must lift off the tile")
-            #expect(top > bottom + 0.1, "\(name): the edge must fall off along the diagonal")
-            // Never a flat white line: the brightest point of the edge stays translucent.
-            #expect(top < 0.99, "\(name): the edge must stay glass, not white")
-        }
-    }
-
-    @Test("on screen the edge is one device pixel at the smallest and the largest tile",
-          arguments: [CGSize(width: 128, height: 72), CGSize(width: 960, height: 540)])
-    func screenEdgeIsOneDevicePixel(size: CGSize) throws {
-        _ = NSApplication.shared
-        let view = FloatingCameraView(frame: CGRect(origin: .zero, size: size))
-        view.image = solidImage(size: size, color: NSColor(calibratedWhite: 0.2, alpha: 1))
-        view.layoutSubtreeIfNeeded()
-        let scale = view.pixelsPerPoint
-        let rep = try #require(NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: Int(size.width * scale), pixelsHigh: Int(size.height * scale),
-            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
-        ))
-        let context = try #require(NSGraphicsContext(bitmapImageRep: rep))
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = context
-        context.cgContext.scaleBy(x: scale, y: scale)
-        view.layer?.render(in: context.cgContext)
-        NSGraphicsContext.restoreGraphicsState()
-        if let shots = ProcessInfo.processInfo.environment["CAMCORD_RENDER_SHOTS"] {
-            try rep.representation(using: .png, properties: [:])?
-                .write(to: URL(fileURLWithPath: "\(shots)/tile-edge-\(Int(size.width)).png"))
-        }
-        let interior = try #require(rep.colorAt(x: rep.pixelsWide / 2, y: rep.pixelsHigh / 2)).brightnessComponent
-        func lifted(_ x: Int, _ y: Int) -> Bool {
-            (rep.colorAt(x: x, y: y)?.brightnessComponent ?? 0) > interior + 0.02
-        }
-        let midRow = rep.pixelsHigh / 2, midColumn = rep.pixelsWide / 2
-        let left = (0..<12).filter { lifted($0, midRow) }.count
-        let top = (0..<12).filter { lifted(midColumn, $0) }.count
-        #expect(left == 1, "\(Int(size.width)) pt tile: left edge \(left) device px")
-        #expect(top == 1, "\(Int(size.width)) pt tile: top edge \(top) device px")
-    }
-
-    private func solidImage(size: CGSize, color: NSColor) -> NSImage {
-        let image = NSImage(size: size)
-        image.lockFocus()
-        color.setFill()
-        NSRect(origin: .zero, size: size).fill()
-        image.unlockFocus()
-        return image
     }
 }
 
@@ -300,9 +193,19 @@ private func sampleBuffer(buffer: CVPixelBuffer) throws -> CMSampleBuffer {
     return sample
 }
 
-/// The brightest of a short vertical scan, in the same y-up space.
-private func brightest(_ buffer: CVPixelBuffer, ciX: Int, ciY rows: ClosedRange<Int>) -> Int {
-    rows.map { grey(buffer, ciX: ciX, ciY: $0) }.max() ?? 0
+/// Alternate one-pixel columns of dark and light: sharp until something blurs it.
+private func stripedBuffer(width: Int, height: Int) -> CVPixelBuffer {
+    let buffer = solidBuffer(width: width, height: height, grey: 40)
+    CVPixelBufferLockBaseAddress(buffer, [])
+    let base = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
+    let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
+    for y in 0..<height {
+        for x in stride(from: 1, to: width, by: 2) {
+            for channel in 0..<3 { base[y * rowBytes + x * 4 + channel] = 216 }
+        }
+    }
+    CVPixelBufferUnlockBaseAddress(buffer, [])
+    return buffer
 }
 
 /// The green channel of one pixel, addressed in Core Image's y-up space like the tile rect.

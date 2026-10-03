@@ -15,25 +15,31 @@ struct CameraOptions: Codable, Equatable, Sendable {
     /// 320x180 preview lands exactly on `CamcordStyle.Radius.surface` -- the app's one corner.
     static func cornerRadius(for size: CGSize) -> CGFloat { min(size.width, size.height) * 0.10 }
 
-    // MARK: The glass edge — one spec, in DEVICE PIXELS, for the screen and the file.
+    // MARK: The tray — one spec, in POINTS, for the screen and the file.
     //
-    // Renderers pass `pixelsPerUnit`: the display's backing scale for a view drawing in
-    // points, 1 for the compositor drawing in the file's pixels. So the same pixels come
-    // out of both, at every tile size.
+    // The camera floats on the app's tray: a ring of light frost around it, the same width at
+    // every size, with the window rim on its edge. Renderers pass `pixelsPerPoint`: the
+    // display's backing scale on screen, the file's pixels per recorded point in the
+    // compositor, so the ring is as wide in the recording as it looks on screen.
 
-    /// The hairline is one device pixel wide at every tile size.
-    static let edgeHairlinePixels: CGFloat = 1
+    /// How much tray shows around the camera — the screenshot preview's own ring.
+    static let trayRing: CGFloat = 8
+    /// The tray's frost: the main window's light blur.
+    static let trayBlur: CGFloat = 2
+    /// The window rim on the tray's edge: a light line inside, a dark hairline outside.
+    static let trayRim: (inner: (width: CGFloat, alpha: CGFloat), outer: (width: CGFloat, alpha: CGFloat))
+        = ((1, 0.16), (0.5, 0.28))
 
-    /// The hairline's width in the renderer's own units: `1 / backingScale` points on
-    /// screen, one pixel in the file.
-    static func edgeHighlightWidth(pixelsPerUnit: CGFloat) -> CGFloat {
-        edgeHairlinePixels / (pixelsPerUnit.isFinite && pixelsPerUnit > 0 ? pixelsPerUnit : 1)
+    /// The tray's rectangle around a camera `rect`, in renderer units.
+    static func trayRect(around rect: CGRect, pixelsPerPoint: CGFloat) -> CGRect {
+        let ring = trayRing * (pixelsPerPoint.isFinite && pixelsPerPoint > 0 ? pixelsPerPoint : 1)
+        return rect.insetBy(dx: -ring, dy: -ring)
     }
 
-    /// The hairline is glass, not a border: a diagonal specular highlight — bright where the
-    /// light falls at the top-leading corner, almost gone at the opposite one — so it
-    /// separates the tile without laying a flat white line over the video.
-    static let edgeHighlight: (bright: CGFloat, dim: CGFloat) = (0.55, 0.10)
+    /// Concentric with the camera's own corner, one ring out.
+    static func trayCornerRadius(forCamera size: CGSize, pixelsPerPoint: CGFloat) -> CGFloat {
+        cornerRadius(for: size) + trayRing * (pixelsPerPoint.isFinite && pixelsPerPoint > 0 ? pixelsPerPoint : 1)
+    }
 
     /// The elevation shadow, in pixels: the tile sits slightly above what is behind it and
     /// never blends into it. It grows with the tile (blur a tenth of the short side, drop a
@@ -50,8 +56,8 @@ struct CameraOptions: Codable, Equatable, Sendable {
         return (blur: blur / scale, offsetY: -drop / scale, alpha: shadowAlpha)
     }
 
-    /// `rect` snapped to whole device pixels, so a one-pixel hairline on its edge is one
-    /// pixel and never two half-lit ones.
+    /// `rect` snapped to whole device pixels, so the tray's hairline rim is one pixel and never
+    /// two half-lit ones.
     static func pixelAligned(_ rect: CGRect, pixelsPerUnit: CGFloat) -> CGRect {
         let scale = pixelsPerUnit.isFinite && pixelsPerUnit > 0 ? pixelsPerUnit : 1
         func snap(_ value: CGFloat) -> CGFloat { (value * scale).rounded() / scale }

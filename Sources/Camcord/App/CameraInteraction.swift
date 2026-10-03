@@ -142,9 +142,9 @@ enum CameraHotspot: Equatable {
 
 enum CameraResizeGeometry {
     /// The indicator, cursor and mouse-down all share these generous corner zones. The zone
-    /// must CONTAIN the grip it reveals: the grip is drawn on the tile's own corner curve, so
-    /// it reaches `cornerRadius` out along both axes, and a zone that stopped short left the
-    /// visible grip dragging the tile instead of resizing it on any large camera.
+    /// must CONTAIN the chip it reveals: the chip sits in the tile's own corner curve, so it
+    /// reaches further in on a large camera, and a zone that stopped short would leave the
+    /// visible chip dragging the tile instead of resizing it.
     static func hitRect(_ corner: CameraCorner, in bounds: CGRect) -> CGRect {
         let extent = min(max(44, CameraOptions.cornerRadius(for: bounds.size) + 8),
                          bounds.width * 0.32, bounds.height * 0.46)
@@ -158,60 +158,36 @@ enum CameraResizeGeometry {
         CameraCorner.allCases.first { hitRect($0, in: bounds).contains(point) }
     }
 
-    // MARK: - Badge geometry (the resize grip and the close button)
+    // MARK: - Button geometry (the resize chips and the close chip)
 
-    /// The gap between the tile's own corner curve and the grip drawn inside it. Everything
-    /// about the grip is derived from the tile's radius, so the two curves are concentric —
-    /// the grip reads as the corner itself, one hair in.
-    static func gripGap(in bounds: CGRect) -> CGFloat {
-        max(3, CameraOptions.cornerRadius(for: bounds.size) * 0.32)
+    /// The glass chips' diameter: the same for the × and the resize chips, a little larger on a
+    /// larger tile.
+    static func chipDiameter(in bounds: CGRect) -> CGFloat {
+        min(max(min(bounds.width, bounds.height) * 0.18, 20), 28)
     }
 
-    /// Radius of the quarter circle the grip draws: the tile's radius minus that gap, and
-    /// never less than half of it — on a tiny tile a fixed gap would eat the whole arc.
-    static func gripArcRadius(in bounds: CGRect) -> CGFloat {
-        let radius = CameraOptions.cornerRadius(for: bounds.size)
-        return max(radius * 0.5, radius - gripGap(in: bounds))
-    }
-
-    /// Centre of the tile's corner curve — and therefore of the grip's arc.
-    static func cornerArcCenter(_ corner: CameraCorner, in bounds: CGRect) -> CGPoint {
-        let radius = CameraOptions.cornerRadius(for: bounds.size)
+    /// The resize chip at a corner: seated in the corner's own curve, clear of both straight
+    /// edges, and always inside the zone that reveals it — so pressing what you see resizes.
+    static func resizeChipFrame(_ corner: CameraCorner, in bounds: CGRect) -> CGRect {
+        let extent = hitRect(corner, in: bounds).width
+        let gap = min(max(4, min(bounds.width, bounds.height) * 0.035), 10)
+        let radius = min(chipDiameter(in: bounds) / 2, (extent - 1 - gap) / 2)
+        let curve = CameraOptions.cornerRadius(for: bounds.size)
+        // From the corner along each axis: off the straight edges by `gap`, and off the corner's
+        // curve by `gap` along its diagonal — whichever sits further in.
+        let offset = max(gap + radius, curve - (curve - gap - radius) / 2.squareRoot())
         let right = corner == .topRight || corner == .bottomRight
         let top = corner == .topLeft || corner == .topRight
-        return CGPoint(x: right ? bounds.maxX - radius : bounds.minX + radius,
-                       y: top ? bounds.maxY - radius : bounds.minY + radius)
-    }
-
-    /// The square the grip's layer occupies, centred on the arc so the reveal animation
-    /// scales out of the corner instead of sliding.
-    static func handleFrame(_ corner: CameraCorner, in bounds: CGRect) -> CGRect {
-        let arc = gripArcRadius(in: bounds)
-        let center = cornerArcCenter(corner, in: bounds)
-        return CGRect(x: center.x - arc, y: center.y - arc, width: arc * 2, height: arc * 2)
-    }
-
-    /// Angles (radians, y-up) of the quarter the grip draws for each corner.
-    static func gripArcAngles(_ corner: CameraCorner) -> (start: CGFloat, end: CGFloat) {
-        switch corner {
-        case .bottomLeft: return (.pi, 1.5 * .pi)
-        case .bottomRight: return (1.5 * .pi, 2 * .pi)
-        case .topRight: return (0, 0.5 * .pi)
-        case .topLeft: return (0.5 * .pi, .pi)
-        }
-    }
-
-    /// Stroke weight shared by the grip and the close button: a hairline that still reads
-    /// on a bright frame, scaled so a large tile does not get a thread.
-    static func badgeLineWidth(in bounds: CGRect) -> CGFloat {
-        min(max(min(bounds.width, bounds.height) * 0.012, 1.5), 3)
+        let center = CGPoint(x: right ? bounds.maxX - offset : bounds.minX + offset,
+                             y: top ? bounds.maxY - offset : bounds.minY + offset)
+        return CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
     }
 
     /// The close button's circle, centred on the tile's top edge. `nil` when the tile is too
     /// small to host one without colliding with the resize corners — a cramped × that
     /// overlaps a resize zone is worse than no ×.
     static func closeFrame(in bounds: CGRect) -> CGRect? {
-        let diameter = min(max(min(bounds.width, bounds.height) * 0.18, 20), 28)
+        let diameter = chipDiameter(in: bounds)
         let corners = hitRect(.topLeft, in: bounds).width
         // Two ways a × does not belong: it would crowd the resize corners, or it would be a
         // third of the tile. A camera that small is closed from the chip, the menu or the key.

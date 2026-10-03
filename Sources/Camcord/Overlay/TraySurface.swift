@@ -6,11 +6,12 @@ import QuartzCore
 @MainActor final class TraySurface: NSView {
     /// nil follows the height: a capsule with fully round ends.
     /// `tint` darkens the frost a little, for a tray that floats over anything (the hub).
+    /// A `shadowRadius` of 0 casts none, for a surface that draws its own (the camera).
     init(content: NSView, shadowRadius: CGFloat = 6, cornerRadius: CGFloat? = Theme.Radius.floating, tint: NSColor? = nil) {
         self.cornerRadius = cornerRadius
         super.init(frame: .zero)
         wantsLayer = true
-        addSubview(TrayShadow(radius: shadowRadius, cornerRadius: cornerRadius))
+        if shadowRadius > 0 { addSubview(TrayShadow(radius: shadowRadius, cornerRadius: cornerRadius)) }
         // A capsule's frost starts clipped and takes its real radius from its height in layout.
         addSubview(NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
             ? TraySolid(cornerRadius: cornerRadius) : TrayBlurView(cornerRadius: cornerRadius ?? 1))
@@ -18,17 +19,31 @@ import QuartzCore
         addSubview(content)
         addSubview(TrayRim(cornerRadius: cornerRadius))
     }
-    private let cornerRadius: CGFloat?
+    /// Changes with the surface, for a tray whose corner follows what it holds.
+    var cornerRadius: CGFloat? {
+        didSet {
+            guard cornerRadius != oldValue else { return }
+            for case let part as TrayCornered in subviews { part.cornerRadius = cornerRadius }
+            needsLayout = true
+        }
+    }
     required init?(coder: NSCoder) { nil }
     override func layout() {
         super.layout()
         for view in subviews where view.frame != bounds { view.frame = bounds }
-        // A capsule's frost follows its height as it grows and shrinks.
-        if cornerRadius == nil, let frost = subviews.first(where: { $0 is TrayBlurView }) {
-            frost.layer?.cornerRadius = bounds.height / 2
-            frost.layer?.masksToBounds = true
+        // The frost follows the corner; a capsule's follows its height as it grows and shrinks.
+        if let frost = subviews.first(where: { $0 is TrayBlurView }), let layer = frost.layer {
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            layer.cornerRadius = cornerRadius.resolved(for: bounds)
+            layer.masksToBounds = true
+            CATransaction.commit()
         }
     }
+}
+
+/// A part of the tray drawn to its corner.
+@MainActor private protocol TrayCornered: AnyObject {
+    var cornerRadius: CGFloat? { get set }
 }
 
 private extension Optional where Wrapped == CGFloat {
@@ -36,10 +51,10 @@ private extension Optional where Wrapped == CGFloat {
 }
 
 /// The window's rim: a light inner line and a dark outer hairline, the same in light and dark.
-private final class TrayRim: NSView {
+private final class TrayRim: NSView, TrayCornered {
     private let inner = CALayer()
     private let outer = CALayer()
-    private let cornerRadius: CGFloat?
+    var cornerRadius: CGFloat? { didSet { needsLayout = true } }
     init(cornerRadius: CGFloat?) {
         self.cornerRadius = cornerRadius
         super.init(frame: .zero)
@@ -65,11 +80,11 @@ private final class TrayRim: NSView {
 }
 
 /// A shadow cast only outside the surface, so the frost never samples its own shadow.
-private final class TrayShadow: NSView {
+private final class TrayShadow: NSView, TrayCornered {
     private let caster = CALayer()
     private let cutout = CAShapeLayer()
     private let radius: CGFloat
-    private let cornerRadius: CGFloat?
+    var cornerRadius: CGFloat? { didSet { needsLayout = true } }
     init(radius: CGFloat, cornerRadius: CGFloat?) {
         self.radius = radius
         self.cornerRadius = cornerRadius
@@ -103,8 +118,8 @@ private final class TrayShadow: NSView {
 }
 
 /// Reduce Transparency: the tray becomes the app's opaque panel colour.
-private final class TraySolid: NSView {
-    private let cornerRadius: CGFloat?
+private final class TraySolid: NSView, TrayCornered {
+    var cornerRadius: CGFloat? { didSet { needsLayout = true } }
     init(cornerRadius: CGFloat?, color: NSColor = Theme.Palette.glassSolidSidebar.ns) {
         self.cornerRadius = cornerRadius
         super.init(frame: .zero)

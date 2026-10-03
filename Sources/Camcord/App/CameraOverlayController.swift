@@ -265,10 +265,13 @@ final class CameraOverlayController: NSObject {
         let finalShadow = shadowPanel.frame
         if appearing {
             if scaled {
-                panel.setFrame(CameraEntrance.startFrame(final), display: false)
-                // The shadow is a separate panel: left at full size it would sit 8% too
-                // large behind a 92% tile for the whole entrance, uncovered on two sides.
-                shadowPanel.setFrame(CameraEntrance.startFrame(finalShadow), display: false)
+                let start = CameraEntrance.startFrame(final)
+                panel.setFrame(start, display: false)
+                // The tray is a separate panel: left at full size it would sit 8% too large
+                // behind a 92% tile for the whole entrance. It grows with the tile, keeping
+                // its ring and its shadow's room.
+                shadowPanel.setFrame(start.insetBy(dx: (final.width - finalShadow.width) / 2,
+                                                   dy: (final.height - finalShadow.height) / 2), display: false)
             }
             panel.alphaValue = 0
             shadowPanel.alphaValue = 0
@@ -454,12 +457,14 @@ final class CameraOverlayController: NSObject {
         let resized = panel.frame.size != frame.size
         if resized { panel.setFrame(frame, display: true) }
         else { panel.setFrameOrigin(frame.origin) }
-        // Room for the blur plus its drop, or the halo is clipped by its own panel. The
-        // shadow stops growing at its cap, and so does this.
-        let drop = CameraOptions.shadow(forTile: frame.size, pixelsPerUnit: scale)
+        // The tray rings the tile; room around it for the blur plus its drop, or the halo is
+        // clipped by its own panel. The shadow stops growing at its cap, and so does this.
+        let tray = CameraOptions.trayRect(around: frame, pixelsPerPoint: 1)
+        let drop = CameraOptions.shadow(forTile: tray.size, pixelsPerUnit: scale)
         let padding = ceil(drop.blur * 3 + abs(drop.offsetY))
         shadowView.padding = padding
-        let shadowFrame = frame.insetBy(dx: -padding, dy: -padding)
+        shadowView.trayRadius = CameraOptions.trayCornerRadius(forCamera: frame.size, pixelsPerPoint: 1)
+        let shadowFrame = tray.insetBy(dx: -padding, dy: -padding)
         if shadowPanel.frame.size != shadowFrame.size {
             shadowPanel.setFrame(shadowFrame, display: true)
             shadowView.needsDisplay = true
@@ -613,38 +618,25 @@ final class FloatingCameraView: NSView {
     /// Set when a mouse-down dismissed the preview, so its mouse-up is inert.
     private var closedOnDown = false
     private var tracking: NSTrackingArea?
-    private let handle = CALayer()
-    private let grip = CAShapeLayer()
-    private let closeBadge = CALayer()
-    private let closeGlyph = CAShapeLayer()
+    /// Where the pointer is over the tile, for the chip it lights.
+    private var pointer: CGPoint?
+    /// The corner the resize chip last stood in, so it fades out where it was.
+    private var chromeCorner: CameraCorner = .bottomRight
+    // The buttons are the app's glass chips over a progressive blur of the video, like the
+    // screenshot card's: the side they sit on blurs when the pointer comes to it.
+    private let topVeil = CameraVeilView()
+    private let cornerVeil = CameraVeilView()
+    private let closeChip = CameraGlassChip(symbol: "xmark", pointSize: 10, weight: .bold)
+    /// One per diagonal, so the arrows always point along the corner's own resize.
+    private let resizeChipDown = CameraGlassChip(symbol: "arrow.up.left.and.arrow.down.right", pointSize: 10, weight: .semibold)
+    private let resizeChipUp = CameraGlassChip(symbol: "arrow.up.right.and.arrow.down.left", pointSize: 10, weight: .semibold)
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         // Redrawn at its new size while it is being resized, never a stretched old bitmap.
         layerContentsRedrawPolicy = .duringViewResize
-        // Both badges are drawn, not filled: a hairline of white that carries its own soft
-        // shadow, so they separate from bright video without putting a slab over it.
-        handle.opacity = 0
-        Self.style(grip)
-        handle.addSublayer(grip)
-        layer?.addSublayer(handle)
-
-        closeBadge.opacity = 0
-        Self.style(closeGlyph)
-        closeBadge.addSublayer(closeGlyph)
-        layer?.addSublayer(closeBadge)
-    }
-
-    private static func style(_ shape: CAShapeLayer) {
-        shape.fillColor = nil
-        shape.strokeColor = NSColor.white.withAlphaComponent(0.95).cgColor
-        shape.lineCap = .round
-        shape.lineJoin = .round
-        shape.shadowColor = NSColor.black.cgColor
-        shape.shadowOpacity = 0.55
-        shape.shadowRadius = 3
-        shape.shadowOffset = CGSize(width: 0, height: -1)
+        for view in [topVeil, cornerVeil, closeChip, resizeChipDown, resizeChipUp] { addSubview(view) }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -653,8 +645,7 @@ final class FloatingCameraView: NSView {
 
     override func layout() {
         super.layout()
-        positionHandle()
-        positionCloseBadge()
+        layoutChrome()
     }
 
     override func updateTrackingAreas() {
@@ -688,13 +679,17 @@ final class FloatingCameraView: NSView {
     }
 
     private func track(_ event: NSEvent) {
-        guard !dragging else { return }
-        indicate(CameraResizeGeometry.hotspot(at: convert(event.locationInWindow, from: nil), in: bounds))
+        pointer = convert(event.locationInWindow, from: nil)
+        guard !dragging, let pointer else { updateGlow(); return }
+        indicate(CameraResizeGeometry.hotspot(at: pointer, in: bounds))
     }
 
     override func mouseEntered(with event: NSEvent) { track(event) }
     override func mouseMoved(with event: NSEvent) { track(event) }
-    override func mouseExited(with event: NSEvent) { if !dragging { indicate(nil) } }
+    override func mouseExited(with event: NSEvent) {
+        pointer = nil
+        if !dragging { indicate(nil) }
+    }
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         let hotspot = CameraResizeGeometry.hotspot(at: point, in: bounds)
@@ -734,12 +729,10 @@ final class FloatingCameraView: NSView {
     /// Clears the hover badges — the tile is leaving the screen, and `indicated` would
     /// otherwise still be set when it comes back with no pointer on it.
     func resetIndication() {
+        pointer = nil
         indicate(nil)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        handle.opacity = 0
-        closeBadge.opacity = 0
-        CATransaction.commit()
+        for chip in [closeChip, resizeChipDown, resizeChipUp] { chip.reset() }
+        for veil in [topVeil, cornerVeil] { veil.reset() }
     }
 
     #if DEBUG
@@ -748,81 +741,68 @@ final class FloatingCameraView: NSView {
     #endif
 
     private func indicate(_ hotspot: CameraHotspot?) {
-        guard hotspot != indicated else { return }
-        let previousHotspot = indicated
+        guard hotspot != indicated else { updateGlow(); return }
         indicated = hotspot
-        if hotspot?.corner != nil { positionHandle() }
-        if hotspot == .close { positionCloseBadge() }
-        reveal(handle, shown: hotspot?.corner != nil, wasShown: previousHotspot?.corner != nil)
-        reveal(closeBadge, shown: hotspot == .close, wasShown: previousHotspot == .close)
-    }
-
-    /// One fade (plus a spring on the way in) for whichever badge is appearing or leaving.
-    private func reveal(_ badge: CALayer, shown: Bool, wasShown: Bool) {
-        guard shown != wasShown else { return }
-        let previous = badge.presentation()?.opacity ?? badge.opacity
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        badge.opacity = shown ? 1 : 0
-        CATransaction.commit()
-        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = previous
-        fade.toValue = badge.opacity
-        fade.duration = shown ? 0.16 : 0.12
-        badge.add(fade, forKey: "reveal")
-        guard shown else { return }
-        let spring = CASpringAnimation(keyPath: "transform.scale")
-        spring.fromValue = 0.72
-        spring.toValue = 1
-        spring.mass = 1
-        spring.stiffness = 520
-        spring.damping = 32
-        spring.duration = 0.28
-        badge.add(spring, forKey: "lift")
-    }
-
-    private func positionHandle() {
-        guard let corner = indicated?.corner else { return }
-        let frame = CameraResizeGeometry.handleFrame(corner, in: bounds)
-        let arc = CameraResizeGeometry.gripArcRadius(in: bounds)
-        let angles = CameraResizeGeometry.gripArcAngles(corner)
-        // A quarter circle sharing the tile corner's centre: the same curve, one gap in.
-        let path = CGMutablePath()
-        path.addArc(center: CGPoint(x: arc, y: arc), radius: arc,
-                    startAngle: angles.start, endAngle: angles.end, clockwise: false)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        handle.bounds = CGRect(x: 0, y: 0, width: frame.width, height: frame.height)
-        handle.position = CGPoint(x: frame.midX, y: frame.midY)
-        grip.lineWidth = CameraResizeGeometry.badgeLineWidth(in: bounds)
-        grip.path = path
-        CATransaction.commit()
-    }
-
-    private func positionCloseBadge() {
-        guard let frame = CameraResizeGeometry.closeFrame(in: bounds) else {
-            closeBadge.opacity = 0
-            return
+        if let corner = hotspot?.corner, corner != chromeCorner {
+            chromeCorner = corner
+            layoutChrome()
         }
-        let side = frame.width
-        let line = CameraResizeGeometry.badgeLineWidth(in: bounds)
-        let arm = side * 0.22
-        // The same language as the grip: a drawn ring, not a filled disc, with the × inside.
-        let path = CGMutablePath()
-        path.addEllipse(in: CGRect(x: line / 2, y: line / 2,
-                                   width: side - line, height: side - line))
-        path.move(to: CGPoint(x: side / 2 - arm, y: side / 2 - arm))
-        path.addLine(to: CGPoint(x: side / 2 + arm, y: side / 2 + arm))
-        path.move(to: CGPoint(x: side / 2 - arm, y: side / 2 + arm))
-        path.addLine(to: CGPoint(x: side / 2 + arm, y: side / 2 - arm))
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        closeBadge.bounds = CGRect(x: 0, y: 0, width: side, height: side)
-        closeBadge.position = CGPoint(x: frame.midX, y: frame.midY)
-        closeGlyph.lineWidth = line
-        closeGlyph.path = path
-        CATransaction.commit()
+        let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let corner = hotspot?.corner
+        topVeil.setShown(hotspot == .close, reduceMotion: reduce)
+        cornerVeil.setShown(corner != nil, reduceMotion: reduce)
+        show(closeChip, hotspot == .close, reduceMotion: reduce)
+        show(resizeChipDown, corner == .topLeft || corner == .bottomRight, reduceMotion: reduce)
+        show(resizeChipUp, corner == .topRight || corner == .bottomLeft, reduceMotion: reduce)
+        updateGlow()
+    }
+
+    /// A chip arrives just after the blur it sits on, and leaves with it.
+    private func show(_ chip: CameraGlassChip, _ shown: Bool, reduceMotion: Bool) {
+        guard chip.isShown != shown else { return }
+        if !shown { chip.setGlowing(false, reduceMotion: reduceMotion) }
+        chip.setShown(shown, delay: shown && !reduceMotion ? 0.04 : 0, reduceMotion: reduceMotion)
+    }
+
+    /// The chip under the pointer glows: the × over its press target, a resize chip over
+    /// itself or while it is resizing.
+    private func updateGlow() {
+        let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let overClose = indicated == .close && pointer.map { point in
+            CameraResizeGeometry.closeButtonRect(in: bounds)?.contains(point) ?? false
+        } == true
+        closeChip.setGlowing(overClose, reduceMotion: reduce)
+        let chip = CameraResizeGeometry.resizeChipFrame(chromeCorner, in: bounds).insetBy(dx: -4, dy: -4)
+        let resizing = indicated?.corner != nil && (dragging || pointer.map { chip.contains($0) } == true)
+        for resize in [resizeChipDown, resizeChipUp] { resize.setGlowing(resizing && resize.isShown, reduceMotion: reduce) }
+    }
+
+    /// The chips and the blur behind them, placed for the tile's size.
+    private func layoutChrome() {
+        let radius = CameraOptions.cornerRadius(for: bounds.size)
+        let outline = CGPath(roundedRect: bounds, cornerWidth: radius, cornerHeight: radius, transform: nil)
+        func clipped(to frame: CGRect) -> CGPath? {
+            var shift = CGAffineTransform(translationX: -frame.minX, y: -frame.minY)
+            return outline.copy(using: &shift)
+        }
+        if let circle = CameraResizeGeometry.closeFrame(in: bounds) {
+            closeChip.frame = circle
+            let band = min(bounds.height * 0.5, bounds.maxY - circle.minY + circle.height * 0.9)
+            topVeil.frame = CGRect(x: bounds.minX, y: bounds.maxY - band, width: bounds.width, height: band)
+            topVeil.outline = clipped(to: topVeil.frame)
+        }
+        let corner = chromeCorner
+        let chip = CameraResizeGeometry.resizeChipFrame(corner, in: bounds)
+        resizeChipDown.frame = chip
+        resizeChipUp.frame = chip
+        let right = corner == .topRight || corner == .bottomRight
+        let top = corner == .topLeft || corner == .topRight
+        let reach = right ? bounds.maxX - chip.minX : chip.maxX - bounds.minX
+        let side = min(min(bounds.width, bounds.height) * 0.62, reach * 1.9)
+        cornerVeil.frame = CGRect(x: right ? bounds.maxX - side : bounds.minX,
+                                  y: top ? bounds.maxY - side : bounds.minY, width: side, height: side)
+        cornerVeil.edge = .corner(corner)
+        cornerVeil.outline = clipped(to: cornerVeil.frame)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -875,50 +855,39 @@ final class FloatingCameraView: NSView {
             text.draw(at: CGPoint(x: bounds.midX - textSize.width / 2, y: y - textSize.height))
         }
         NSGraphicsContext.restoreGraphicsState()
-
-        // The same glass edge the compositor draws into the file: ONE device pixel of
-        // specular light, brightest at the top-leading corner. A band clipped and filled with
-        // a gradient rather than a stroke, because a stroke carries one flat colour. Drawn
-        // here, every frame the tile is resized, so it is never a stretched bitmap.
-        let hairline = CameraOptions.edgeHighlightWidth(pixelsPerUnit: pixelsPerPoint)
-        let stops = CameraOptions.edgeHighlight
-        NSGraphicsContext.saveGraphicsState()
-        Self.band(in: bounds, radius: radius, inset: 0, width: hairline).addClip()
-        NSGradient(
-            starting: NSColor.white.withAlphaComponent(stops.bright),
-            ending: NSColor.white.withAlphaComponent(stops.dim)
-        )?.draw(in: bounds, angle: -45)
-        NSGraphicsContext.restoreGraphicsState()
     }
 
     /// Device pixels per point where the tile is drawn; a Retina screen until it is on one.
     var pixelsPerPoint: CGFloat { window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2 }
-
-    /// The band between two concentric rounded rects — `inset` in from the tile's edge and
-    /// `width` thick. Even-odd, so it can be clipped and filled with a gradient instead of
-    /// stroked. Concentric curves share a centre, so each radius is the tile's minus its gap.
-    private static func band(in bounds: CGRect, radius: CGFloat, inset: CGFloat, width: CGFloat) -> NSBezierPath {
-        let outer = bounds.insetBy(dx: inset, dy: inset)
-        let inner = outer.insetBy(dx: width, dy: width)
-        let outerRadius = max(0, radius - inset)
-        let innerRadius = max(0, outerRadius - width)
-        let path = NSBezierPath()
-        path.appendRoundedRect(outer, xRadius: outerRadius, yRadius: outerRadius)
-        path.appendRoundedRect(inner, xRadius: innerRadius, yRadius: innerRadius)
-        path.windingRule = .evenOdd
-        return path
-    }
 }
 
-/// The expanded shadow is click-through, so its soft halo never steals desktop clicks.
+/// The camera's tray: the app's frost and window rim in a ring around the tile, and the
+/// tile's elevation shadow cast from it, only outside, so the frost never samples it. The
+/// panel is click-through, so neither steals desktop clicks.
 @MainActor
 private final class CameraShadowView: NSView {
-    var padding: CGFloat = 0
+    var padding: CGFloat = 0 { didSet { if padding != oldValue { needsLayout = true; needsDisplay = true } } }
+    var trayRadius: CGFloat = 0 { didSet { if trayRadius != oldValue { needsLayout = true; needsDisplay = true } } }
+    private let tray = TraySurface(content: NSView(), shadowRadius: 0, cornerRadius: 0)
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        addSubview(tray)
+    }
+    required init?(coder: NSCoder) { nil }
+
+    override func layout() {
+        super.layout()
+        tray.frame = bounds.insetBy(dx: padding, dy: padding)
+        tray.cornerRadius = trayRadius
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         let rect = bounds.insetBy(dx: padding, dy: padding)
-        let radius = CameraOptions.cornerRadius(for: rect.size)
-        // Sized off the tile, not off the corner, in the same pixels the compositor uses, so
-        // what the owner places on screen is what the file shows.
+        let shape = NSBezierPath(roundedRect: rect, xRadius: trayRadius, yRadius: trayRadius)
+        // Sized off the tray, in the same pixels the compositor uses, so what the owner places
+        // on screen is what the file shows.
         let drop = CameraOptions.shadow(forTile: rect.size,
                                         pixelsPerUnit: window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2)
         let shadow = NSShadow()
@@ -926,9 +895,13 @@ private final class CameraShadowView: NSView {
         shadow.shadowBlurRadius = drop.blur
         shadow.shadowOffset = NSSize(width: 0, height: drop.offsetY)
         NSGraphicsContext.saveGraphicsState()
+        let outside = NSBezierPath(rect: bounds)
+        outside.append(shape)
+        outside.windingRule = .evenOdd
+        outside.addClip()
         shadow.set()
         NSColor.black.setFill()
-        NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+        shape.fill()
         NSGraphicsContext.restoreGraphicsState()
     }
 }

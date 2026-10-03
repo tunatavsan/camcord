@@ -182,7 +182,8 @@ final class StudioIdlePreviewRenderer {
             let fit = configuration.fitsWindow ? StreamWriter.canvasFit(of: frame.sample) : nil
             let camera = configuration.cameraSource?.latestFrame()
             let sample = try compositor.composite(screen: frame.sample, camera: camera,
-                options: configuration.cameraOptions, fit: fit, layers: configuration.layers)
+                options: configuration.cameraOptions, fit: fit, layers: configuration.layers,
+                contentPointWidth: configuration.contentPointWidth)
             guard let buffer = CMSampleBufferGetImageBuffer(sample) else { return nil }
             let full = CGRect(x: 0, y: 0, width: CVPixelBufferGetWidth(buffer), height: CVPixelBufferGetHeight(buffer))
             return PixelBufferBox(buffer, cameraContentRect: fit?.fitted ?? full,

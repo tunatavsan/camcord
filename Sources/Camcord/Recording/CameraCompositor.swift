@@ -57,12 +57,15 @@ final class CameraCompositor {
     /// `fit` re-centres a window's live content (nil: the frame already fills the canvas);
     /// the camera, when there is one and it is enabled, is placed in the FITTED content rect
     /// so the file matches the on-screen tile that sits inside the window.
+    /// `contentPointWidth` is how wide that content is on screen, in points: the camera's tray
+    /// is a fixed number of points, so the file needs its pixels per point (nil: one).
     func composite(
         screen: CMSampleBuffer,
         camera: CVPixelBuffer?,
         options: CameraOptions,
         fit: CanvasFit? = nil,
-        layers: StudioLayerSnapshot = .empty
+        layers: StudioLayerSnapshot = .empty,
+        contentPointWidth: CGFloat? = nil
     ) throws -> CMSampleBuffer {
         let options = options.resolved()
         let camera = options.enabled ? camera : nil
@@ -109,12 +112,13 @@ final class CameraCompositor {
         }
         try cameraPreflight?()
 
-        // Whole pixels, so the one-pixel hairline on its edge lands on one pixel.
+        // Whole pixels, so the tray's hairline rim lands on one pixel.
         let cameraRect = CameraOptions.pixelAligned(
             options.rect(in: contentExtent.size).offsetBy(dx: contentExtent.minX, dy: contentExtent.minY),
             pixelsPerUnit: 1
         )
         let radius = CameraOptions.cornerRadius(for: cameraRect.size)
+        let pixelsPerPoint = contentPointWidth.flatMap { $0 > 0 ? contentExtent.width / $0 : nil } ?? 1
 
         let sourceCameraImage = CIImage(cvPixelBuffer: camera)
         var cameraImage = sourceCameraImage
@@ -132,34 +136,52 @@ final class CameraCompositor {
 
         let transparent = CIImage(color: .clear).cropped(to: screenExtent)
         let outerMask = try roundedMask(rect: cameraRect, radius: radius).cropped(to: screenExtent)
-        // The shadow is sized off the TILE, not off the corner: the tile carries a light
-        // Apple-ish curve now, and a shadow derived from it would have shrunk with it —
-        // the separation from the desktop behind is exactly what has to grow. One set of
-        // numbers for both renderers, so the file lifts the tile the way the screen does.
-        let drop = CameraOptions.shadow(forTile: cameraRect.size, pixelsPerUnit: 1)
-        let shadowMask = outerMask.transformed(by: CGAffineTransform(translationX: 0, y: drop.offsetY))
+        // The camera floats on the same tray as on screen: a ring of light frost, the same
+        // points wide at every size, with the window rim on its edge.
+        let trayRect = CameraOptions.trayRect(around: cameraRect, pixelsPerPoint: pixelsPerPoint)
+        let trayRadius = CameraOptions.trayCornerRadius(forCamera: cameraRect.size, pixelsPerPoint: pixelsPerPoint)
+        let trayMask = try roundedMask(rect: trayRect, radius: trayRadius).cropped(to: screenExtent)
+        // The shadow is sized off the TRAY, in the same pixels the screen uses, so the file
+        // lifts the camera the way the screen does.
+        let drop = CameraOptions.shadow(forTile: trayRect.size, pixelsPerUnit: 1)
+        let shadowMask = trayMask.transformed(by: CGAffineTransform(translationX: 0, y: drop.offsetY))
             .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: drop.blur])
             .cropped(to: screenExtent)
-
         let shadow = try masked(
             CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: drop.alpha)).cropped(to: screenExtent),
             mask: shadowMask,
             background: transparent
         )
-        // The same glass edge `FloatingCameraView` draws on screen: ONE pixel of specular
-        // light along the tile's edge, brightest at the top-leading corner.
-        let hairline = CameraOptions.edgeHighlightWidth(pixelsPerUnit: 1)
-        let innerRect = cameraRect.insetBy(dx: hairline, dy: hairline)
-        let innerRadius = max(0, radius - hairline)
-        let innerMask = try roundedMask(rect: innerRect, radius: innerRadius).cropped(to: screenExtent)
-        let ring = try masked(
-            try edgeGradient(in: cameraRect).cropped(to: screenExtent),
-            mask: band(outer: outerMask, inner: innerMask, extent: screenExtent),
+        // The frost blurs what is behind the tray, never its own shadow.
+        let frost = try masked(
+            screenImage.clampedToExtent()
+                .applyingGaussianBlur(sigma: Double(CameraOptions.trayBlur * pixelsPerPoint))
+                .cropped(to: trayRect),
+            mask: trayMask,
+            background: transparent
+        )
+        let rim = CameraOptions.trayRim
+        let innerWidth = rim.inner.width * pixelsPerPoint
+        let innerLine = try masked(
+            CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: rim.inner.alpha)).cropped(to: screenExtent),
+            mask: band(outer: trayMask,
+                       inner: try roundedMask(rect: trayRect.insetBy(dx: innerWidth, dy: innerWidth),
+                                              radius: max(0, trayRadius - innerWidth)).cropped(to: screenExtent),
+                       extent: screenExtent),
+            background: transparent
+        )
+        let outerWidth = rim.outer.width * pixelsPerPoint
+        let outerLine = try masked(
+            CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: rim.outer.alpha)).cropped(to: screenExtent),
+            mask: band(outer: try roundedMask(rect: trayRect.insetBy(dx: -outerWidth, dy: -outerWidth),
+                                              radius: trayRadius + outerWidth).cropped(to: screenExtent),
+                       inner: trayMask, extent: screenExtent),
             background: transparent
         )
         let clippedCamera = try masked(cameraImage, mask: outerMask, background: transparent)
-        let composed = ring
-            .composited(over: clippedCamera.composited(over: shadow.composited(over: screenImage)))
+        let tray = innerLine.composited(over: outerLine.composited(over: frost.composited(over: shadow)))
+        let composed = clippedCamera
+            .composited(over: tray.composited(over: screenImage))
             .cropped(to: screenExtent)
 
         let layered = try applyLayers(layers, over: composed, extent: screenExtent)
@@ -312,27 +334,11 @@ final class CameraCompositor {
         return output
     }
 
-    /// The band between two concentric rounded masks: the hairline itself, or the darker
-    /// line inside it.
+    /// The band between two concentric rounded masks: one line of the tray's rim.
     private func band(outer: CIImage, inner: CIImage, extent: CGRect) -> CIImage {
         outer.applyingFilter("CISourceOutCompositing", parameters: [
             kCIInputBackgroundImageKey: inner
         ]).cropped(to: extent)
-    }
-
-    /// The hairline's light: brightest at the tile's top-leading corner, nearly gone at the
-    /// opposite one, so the edge reads as glass catching light from above.
-    private func edgeGradient(in rect: CGRect) throws -> CIImage {
-        let stops = CameraOptions.edgeHighlight
-        guard let filter = CIFilter(name: "CILinearGradient", parameters: [
-            "inputPoint0": CIVector(x: rect.minX, y: rect.maxY),
-            "inputPoint1": CIVector(x: rect.maxX, y: rect.minY),
-            "inputColor0": CIColor(red: 1, green: 1, blue: 1, alpha: stops.bright),
-            "inputColor1": CIColor(red: 1, green: 1, blue: 1, alpha: stops.dim),
-        ]), let output = filter.outputImage else {
-            throw CameraCompositorError.filterUnavailable
-        }
-        return output
     }
 
     private func masked(

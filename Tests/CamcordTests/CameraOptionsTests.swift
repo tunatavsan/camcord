@@ -129,7 +129,7 @@ struct CameraOptionsTests {
         }
     }
 
-    @Test("the camera tile keeps a light, scale-free corner and a one-device-pixel hairline")
+    @Test("the camera tile keeps a light, scale-free corner on a tray of fixed width")
     func cameraTileEdgeGeometry() {
         let preview = CGSize(width: 320, height: 180)
         // A 320x180 self-view lands exactly on the app's one corner radius.
@@ -138,12 +138,14 @@ struct CameraOptionsTests {
         let composited = CGSize(width: 1280, height: 720)
         #expect(abs(CameraOptions.cornerRadius(for: composited) / composited.height
                     - CameraOptions.cornerRadius(for: preview) / preview.height) < 0.0001)
-        // One device pixel at every size (the owner's spec, K8): half a point on a Retina
-        // screen, a third on a 3x one, one pixel in the file. It takes no size at all.
-        #expect(CameraOptions.edgeHairlinePixels == 1)
-        #expect(CameraOptions.edgeHighlightWidth(pixelsPerUnit: 2) == 0.5)
-        #expect(CameraOptions.edgeHighlightWidth(pixelsPerUnit: 3) == 1.0 / 3)
-        #expect(CameraOptions.edgeHighlightWidth(pixelsPerUnit: 1) == 1)
-        #expect(CameraOptions.edgeHighlightWidth(pixelsPerUnit: .nan) == 1)
+        // The tray is the same points wide at every tile size, in the file's pixels per point,
+        // and concentric with the camera's own corner.
+        let tile = CGRect(x: 100, y: 50, width: 320, height: 180)
+        #expect(CameraOptions.trayRect(around: tile, pixelsPerPoint: 1) == tile.insetBy(dx: -8, dy: -8))
+        #expect(CameraOptions.trayRect(around: tile.insetBy(dx: 100, dy: 56), pixelsPerPoint: 1).width == 136)
+        #expect(CameraOptions.trayRect(around: tile, pixelsPerPoint: 2) == tile.insetBy(dx: -16, dy: -16))
+        #expect(CameraOptions.trayRect(around: tile, pixelsPerPoint: .nan) == tile.insetBy(dx: -8, dy: -8))
+        #expect(CameraOptions.trayCornerRadius(forCamera: preview, pixelsPerPoint: 2)
+                == CameraOptions.cornerRadius(for: preview) + 16)
     }
 }

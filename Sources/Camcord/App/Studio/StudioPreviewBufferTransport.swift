@@ -24,6 +24,8 @@ struct StudioIdlePreviewConfiguration: Sendable {
     var cameraOptions: CameraOptions = .init()
     var layers: StudioLayerSnapshot = .empty
     var fitsWindow = false
+    /// The source's width on screen, in points, for the camera's tray.
+    var contentPointWidth: CGFloat?
 }
 
 /// One admission permit spans native composition, transfer and enqueue. Native media

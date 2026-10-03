@@ -44,6 +44,9 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     private var health: RecordingHealth
     private let cameraSource: (any CameraFrameSource)?
     private var cameraOptions: CameraOptions
+    /// How wide the recorded content is on screen, in points: the camera's tray is drawn in
+    /// points, so the file needs its pixels per point.
+    private let cameraPointWidth: CGFloat?
     private var cameraCompositor: CameraCompositor?
     private var cameraCompositingFailed = false
     /// A window target: the live content is re-centred in the fixed canvas every frame.
@@ -120,6 +123,7 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         microphoneGainDB: Double = 0,
         cameraSource: (any CameraFrameSource)? = nil,
         cameraOptions: CameraOptions = CameraOptions(),
+        cameraPointWidth: CGFloat? = nil,
         fitsWindowContent: Bool = false,
         compositor: CameraCompositor? = nil,
         writerStatusProvider: (@Sendable () -> AVAssetWriter.Status)? = nil,
@@ -135,6 +139,7 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         self.outputURL = outputURL
         self.cameraSource = cameraOptions.enabled ? cameraSource : nil
         self.cameraOptions = cameraOptions.resolved()
+        self.cameraPointWidth = cameraPointWidth
         self.fitsWindowContent = fitsWindowContent
         cameraCompositor = compositor
         self.writerStatusProvider = writerStatusProvider
@@ -334,7 +339,8 @@ final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
             do {
                 if cameraCompositor == nil { cameraCompositor = CameraCompositor() }
                 output = try cameraCompositor!.composite(screen: sampleBuffer, camera: camera,
-                                                         options: cameraOptions, fit: fit, layers: studioLayers)
+                                                         options: cameraOptions, fit: fit, layers: studioLayers,
+                                                         contentPointWidth: cameraPointWidth)
                 didCompose = true
             } catch CameraCompositorError.poolExhausted {
                 compositorPoolExhaustions &+= 1

@@ -598,71 +598,35 @@ struct CameraInteractionTests {
         #expect(busy.text.contains("Kayıt sürerken"))
     }
 
-    @Test("the resize grip is a quarter circle concentric with the tile's own corner")
-    func gripArcHugsTheCorner() {
-        for size in [CGSize(width: 320, height: 180), CGSize(width: 160, height: 90),
-                     CGSize(width: 96, height: 54), CGSize(width: 960, height: 540)] {
-            let bounds = CGRect(origin: .zero, size: size)
-            let radius = CameraOptions.cornerRadius(for: size)
-            let arc = CameraResizeGeometry.gripArcRadius(in: bounds)
-            let line = CameraResizeGeometry.badgeLineWidth(in: bounds)
-            let tile = CGPath(roundedRect: bounds, cornerWidth: radius, cornerHeight: radius, transform: nil)
-            // Strictly inside the tile's own curve, stroke included — the badge used to be a
-            // square placed by edge distance, which hung over the corner.
-            #expect(arc > 0)
-            #expect(arc + line / 2 < radius, "grip stroke reaches the tile edge at \(size)")
-
-            for corner in CameraCorner.allCases {
-                let center = CameraResizeGeometry.cornerArcCenter(corner, in: bounds)
-                let frame = CameraResizeGeometry.handleFrame(corner, in: bounds)
-                let right = corner == .topRight || corner == .bottomRight
-                let top = corner == .topLeft || corner == .topRight
-                // Concentric: the arc's centre IS the tile corner curve's centre.
-                #expect(abs(center.x - (right ? bounds.maxX - radius : bounds.minX + radius)) < 0.001)
-                #expect(abs(center.y - (top ? bounds.maxY - radius : bounds.minY + radius)) < 0.001)
-                #expect(abs(frame.midX - center.x) < 0.001)
-                #expect(abs(frame.midY - center.y) < 0.001)
-                #expect(abs(frame.width - arc * 2) < 0.001)
-
-                // The quarter drawn is the one facing its corner, and it lands inside the tile.
-                let angles = CameraResizeGeometry.gripArcAngles(corner)
-                #expect(abs((angles.end - angles.start) - .pi / 2) < 0.001)
-                let mid = (angles.start + angles.end) / 2
-                let onArc = CGPoint(x: center.x + cos(mid) * arc, y: center.y + sin(mid) * arc)
-                #expect((onArc.x < bounds.midX) == !right)
-                #expect((onArc.y < bounds.midY) == !top)
-                #expect(tile.contains(onArc))
-            }
-        }
-    }
-
     /// Tile sizes the owner can actually produce: the camera is 15-60 % of the recorded
     /// frame's width at 16:9, and the frame is anything from a small window to a 4K display.
     private static let reachableTiles: [CGSize] = [96, 160, 227, 320, 454, 583, 760, 907,
                                                   1037, 1152, 1536, 2304]
         .map { (width: CGFloat) in CGSize(width: width, height: (width * 9 / 16).rounded()) }
 
-    @Test("hover zones contain the badges they reveal, at every size the owner can reach")
+    @Test("hover zones contain the chips they reveal, at every size the owner can reach")
     func zonesContainTheirBadges() throws {
         for size in Self.reachableTiles {
             let bounds = CGRect(origin: .zero, size: size)
-            let line = CameraResizeGeometry.badgeLineWidth(in: bounds)
+            let radius = CameraOptions.cornerRadius(for: size)
+            let tile = CGPath(roundedRect: bounds, cornerWidth: radius, cornerHeight: radius, transform: nil)
 
             for corner in CameraCorner.allCases {
-                // The grip is drawn ON the tile's corner curve, so it reaches `radius` out
-                // along both axes. A zone that stopped short left the visible grip dragging
-                // the tile instead of resizing it.
+                // The chip is what the owner presses to resize: all of it inside the zone that
+                // resizes, inside the tile's own rounded corner, and in its own corner.
                 let zone = CameraResizeGeometry.hitRect(corner, in: bounds)
-                let center = CameraResizeGeometry.cornerArcCenter(corner, in: bounds)
-                let arc = CameraResizeGeometry.gripArcRadius(in: bounds)
-                // Every point of the visible quarter arc is inside its own zone.
-                let angles = CameraResizeGeometry.gripArcAngles(corner)
-                for step in 0...8 {
-                    let theta = angles.start + (angles.end - angles.start) * CGFloat(step) / 8
-                    let point = CGPoint(x: center.x + cos(theta) * (arc + line / 2),
-                                        y: center.y + sin(theta) * (arc + line / 2))
-                    #expect(zone.contains(point), "grip point \(point) outside its zone at \(size)")
+                let chip = CameraResizeGeometry.resizeChipFrame(corner, in: bounds)
+                #expect(zone.contains(chip), "\(corner) chip \(chip) outside its zone at \(size)")
+                for step in 0..<16 {
+                    let theta = CGFloat(step) / 16 * 2 * .pi
+                    let point = CGPoint(x: chip.midX + cos(theta) * chip.width / 2,
+                                        y: chip.midY + sin(theta) * chip.width / 2)
+                    #expect(tile.contains(point), "\(corner) chip leaves the tile at \(size)")
                 }
+                let right = corner == .topRight || corner == .bottomRight
+                let top = corner == .topLeft || corner == .topRight
+                #expect((chip.midX > bounds.midX) == right && (chip.midY > bounds.midY) == top)
+                #expect(chip.width >= 16, "\(corner) chip too small to read at \(size)")
             }
 
             guard let circle = CameraResizeGeometry.closeFrame(in: bounds) else { continue }
