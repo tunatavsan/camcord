@@ -471,12 +471,12 @@ final class PanelCarouselTile: CALayer {
         itemID = item.id
         titleLabel.stringValue = item.title
         detailLabel.stringValue = Self.details(item)
-        let width = min(280, max(titleLabel.intrinsicContentSize.width, detailLabel.intrinsicContentSize.width) + 24)
+        let width = min(300, max(titleLabel.intrinsicContentSize.width, detailLabel.intrinsicContentSize.width) + 32)
         let size = CGSize(width: ceil(width), height: 44)
         panel.setContentSize(size)
         glass.frame = CGRect(origin: .zero, size: size)
-        titleLabel.frame = CGRect(x: 12, y: 22, width: size.width - 24, height: 16)
-        detailLabel.frame = CGRect(x: 12, y: 6, width: size.width - 24, height: 14)
+        titleLabel.frame = CGRect(x: 12, y: 22, width: size.width - 20, height: 16)
+        detailLabel.frame = CGRect(x: 12, y: 6, width: size.width - 20, height: 14)
         move(to: mouse)
         if !panel.isVisible {
             place()

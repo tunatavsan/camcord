@@ -60,8 +60,11 @@ struct CapturePanelView: View {
                 PanelFinishedCell(url: url, reveal: actions.revealRecording, open: actions.openRecording,
                     renamed: { renamed in if model.finishedURL == url { model.finishedURL = renamed } },
                     dismiss: { model.finishedURL = nil })
+                    .transition(.asymmetric(insertion: .scale(scale: 0.96, anchor: .top).combined(with: .opacity),
+                                            removal: .opacity))
             } else if model.isFinishing {
                 PanelFinishingCell()
+                    .transition(.opacity)
             } else {
                 // Screenshots stay available while recording; only arming and startup pause them.
                 PanelCaptureCell(shortcuts: shortcuts, canCapture: !model.isStarting && !model.isArmed, perform: actions.perform)
@@ -76,6 +79,9 @@ struct CapturePanelView: View {
             PanelDestinationsCell(actions: actions).frame(height: Layout.destinationsCell)
         }
         .padding(Layout.ring)
+        // Finishing and the finished recording arrive softly instead of cutting in.
+        .animation(.spring(response: 0.42, dampingFraction: 0.84), value: model.finishedURL)
+        .animation(.easeOut(duration: 0.2), value: model.isFinishing)
         .frame(width: Self.panelWidth, height: currentHeight, alignment: .top)
         .foregroundStyle(Theme.Palette.ink.color)
         .tint(Theme.Palette.ink.color)

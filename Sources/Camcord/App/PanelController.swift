@@ -39,6 +39,9 @@ final class PanelController: NSObject, NSWindowDelegate {
     /// keeps it open (`.applicationDefined`).
     private var behavior: NSPopover.Behavior = .transient
     private var lastTransientCloseAt: ContinuousClock.Instant?
+    /// Bumped by every show and close: a closing motion that finishes late never hides a
+    /// panel that was opened again meanwhile.
+    private var motionToken = 0
     /// Global monitors never see our own process's events, so this only fires for clicks
     /// on the desktop or in another app.
     private var outsideClickMonitor: Any?
@@ -84,7 +87,7 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     func toggle(relativeTo button: NSStatusBarButton) {
         if detachedIsPresented || anchoredIsPresented {
-            close()
+            close(animated: true)
             return
         }
         // The click that took key away from the panel (and so closed it) must not reopen it.
@@ -201,6 +204,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
 
     private func animateEntrance(of panel: NSPanel) {
+        motionToken &+= 1
         let view = hostingController.view
         // Finish graph/layout work before the render server moves the retained panel layer.
         view.layoutSubtreeIfNeeded()
@@ -230,7 +234,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         panel.animationBehavior = .none
         panel.isMovable = false
         panel.delegate = self
-        panel.cancel = { [weak self] in self?.close() }
+        panel.cancel = { [weak self] in self?.close(animated: true) }
         anchoredPanel = panel
         return panel
     }
@@ -353,21 +357,43 @@ final class PanelController: NSObject, NSWindowDelegate {
         if closing { close() }
     }
 
-    func close() {
-        hideAnchored(transient: false)
+    /// Capture flows close at once, so nothing of the panel reaches a frozen screen; the
+    /// owner's own dismissals (the status item, Esc, a click elsewhere) play the closing motion.
+    func close(animated: Bool = false) {
+        hideAnchored(transient: false, animated: animated)
         model.isPanelVisible = false
         detachedIsPresented = false
         detachedPanel?.close()
     }
 
     /// A transient close (outside click, lost key) arms the reopen guard for the same click.
-    private func hideAnchored(transient: Bool) {
+    private func hideAnchored(transient: Bool, animated: Bool = true) {
         removeOutsideClickMonitor()
         guard anchoredIsPresented || anchoredPanel?.isVisible == true else { return }
         anchoredIsPresented = false
-        anchoredPanel?.orderOut(nil)
         if transient { lastTransientCloseAt = ContinuousClock.now }
         model.isPanelVisible = detachedIsPresented
+        guard let panel = anchoredPanel else { return }
+        motionToken &+= 1
+        let token = motionToken
+        let view = hostingController.view
+        guard animated, panel.isVisible, let layer = view.layer,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            view.layer?.removeAnimation(forKey: PanelEntranceMotion.key)
+            panel.orderOut(nil)
+            return
+        }
+        // The opening motion, played back: the same pin, the same spring family.
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.motionToken == token else { return }
+                panel.orderOut(nil)
+                layer.removeAnimation(forKey: PanelEntranceMotion.key)
+            }
+        }
+        layer.add(PanelEntranceMotion.exit(size: view.bounds.size), forKey: PanelEntranceMotion.key)
+        CATransaction.commit()
     }
 
     private func removeOutsideClickMonitor() {
@@ -400,29 +426,45 @@ private extension NSRect {
     var area: CGFloat { width * height }
 }
 
-/// The panel blooms out of the menu bar: a short spring from slightly smaller and higher,
-/// pinned at its top centre, with a quick fade, at the display's own refresh rate. (An
-/// AppKit view's layer scales about its bottom-left corner, so the pin is in the transform.)
+/// The panel rises out of the menu bar the way its own controls rise on hover: a spring from
+/// slightly smaller and higher, pinned at its top centre, with a quick fade; closing plays the
+/// same motion back. At the display's own rate. (An AppKit view's layer scales about its
+/// bottom-left corner, so the pin is in the transform.)
 private enum PanelEntranceMotion {
-    static let key = "panelEntrance"
-    static func animation(size: CGSize) -> CAAnimationGroup {
-        let start: CGFloat = 0.94
-        let pinned = CATransform3DConcat(
+    static let key = "panelMotion"
+    private static func pinned(_ size: CGSize) -> CATransform3D {
+        let start: CGFloat = 0.95
+        return CATransform3DConcat(
             CATransform3DMakeScale(start, start, 1),
-            CATransform3DMakeTranslation((1 - start) * size.width / 2, (1 - start) * size.height + 6, 0))
-        let bloom = CASpringAnimation(keyPath: "transform")
-        bloom.fromValue = NSValue(caTransform3D: pinned)
-        bloom.toValue = NSValue(caTransform3D: CATransform3DIdentity)
-        bloom.mass = 1
-        bloom.stiffness = 420
-        bloom.damping = 30
+            CATransform3DMakeTranslation((1 - start) * size.width / 2, (1 - start) * size.height + 8, 0))
+    }
+    static func animation(size: CGSize) -> CAAnimationGroup {
+        let bloom = CASpringAnimation.card(keyPath: "transform", from: NSValue(caTransform3D: pinned(size)),
+                                           to: NSValue(caTransform3D: CATransform3DIdentity), response: 0.36, dampingRatio: 0.78)
         let fade = CABasicAnimation(keyPath: "opacity")
         fade.fromValue = 0
         fade.toValue = 1
-        fade.duration = 0.12
+        fade.duration = 0.14
         let group = CAAnimationGroup()
         group.animations = [bloom, fade]
         group.duration = bloom.settlingDuration
+        group.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+        return group
+    }
+    static func exit(size: CGSize) -> CAAnimationGroup {
+        let fold = CASpringAnimation.card(keyPath: "transform", from: NSValue(caTransform3D: CATransform3DIdentity),
+                                          to: NSValue(caTransform3D: pinned(size)), response: 0.3, dampingRatio: 1)
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 1
+        fade.toValue = 0
+        fade.beginTime = 0.04
+        fade.duration = 0.14
+        fade.fillMode = .both
+        let group = CAAnimationGroup()
+        group.animations = [fold, fade]
+        group.duration = 0.2
+        group.fillMode = .forwards
+        group.isRemovedOnCompletion = false
         group.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
         return group
     }
