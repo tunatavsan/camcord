@@ -101,7 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 recordingStateModel?.finishedURL = nil
                 self?.panelController?.keepOpenForRecording()
             } else if recordingStateModel?.state == .idle, recordingStateModel?.isArmed != true {
-                self?.panelController?.releaseRecordingHold()
+                self?.panelController?.releaseRecordingHold(closing: false)
             }
             statusItemController?.setPreparing(starting)
         }
@@ -111,7 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 recordingStateModel?.finishedURL = nil
                 self?.panelController?.keepOpenForRecording()
             } else if recordingStateModel?.isStarting != true, recordingStateModel?.state == .idle {
-                self?.panelController?.releaseRecordingHold()
+                self?.panelController?.releaseRecordingHold(closing: false)
             }
         }
         recordingController.onHealthChange = { [weak recordingStateModel] health in

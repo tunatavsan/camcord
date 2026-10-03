@@ -63,7 +63,8 @@ struct CapturePanelView: View {
             } else if model.isFinishing {
                 PanelFinishingCell()
             } else {
-                PanelCaptureCell(shortcuts: shortcuts, canCapture: canConfigure, perform: actions.perform)
+                // Screenshots stay available while recording; only arming and startup pause them.
+                PanelCaptureCell(shortcuts: shortcuts, canCapture: !model.isStarting && !model.isArmed, perform: actions.perform)
                     .frame(height: Layout.captureCell)
                 PanelRecordCell(model: model, context: context, actions: actions, canConfigure: canConfigure)
                     .frame(height: Layout.recordCell)
@@ -214,24 +215,25 @@ private struct PanelRecordCell: View {
     let context: PanelPresentation
     let actions: PanelActions
     let canConfigure: Bool
+    /// One control in focus at a time across the row, like the capture tools.
+    @State private var focus: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if model.state == .idle && !model.isArmed && !model.isStarting {
                 HStack(spacing: 4) {
                     ForEach(PanelRecordingSource.allCases) { source in
-                        PanelChip(symbol: source.symbol, title: Text(source.label), selected: context.recordingSource == source) {
+                        PanelChip(symbol: source.symbol, title: Text(source.label), selected: context.recordingSource == source,
+                                  focus: focusState(source.rawValue), action: {
                             context.selectSource(source, canConfigure: canConfigure)
-                        }
+                        }, hover: hover(source.rawValue))
                     }
                     Spacer(minLength: 4)
                     PanelDeviceToggle(title: "Camera", symbol: "video", on: context.settings?.camera.enabled == true,
-                                      available: canConfigure && context.settings != nil) {
-                        context.toggleCamera(canConfigure: canConfigure)
-                    }
+                                      available: canConfigure && context.settings != nil, focus: focusState("camera"),
+                                      action: { context.toggleCamera(canConfigure: canConfigure) }, hover: hover("camera"))
                     PanelDeviceToggle(title: "Microphone", symbol: "mic", on: context.settings?.microphone == true,
-                                      available: canConfigure && context.settings != nil) {
-                        context.toggleMicrophone(canConfigure: canConfigure)
-                    }
+                                      available: canConfigure && context.settings != nil, focus: focusState("mic"),
+                                      action: { context.toggleMicrophone(canConfigure: canConfigure) }, hover: hover("mic"))
                 }
                 .frame(height: 32)
             } else {
@@ -241,6 +243,10 @@ private struct PanelRecordCell: View {
         }
         .padding(CapturePanelView.Layout.padding)
         .panelCell()
+    }
+    private func focusState(_ id: String) -> Bool? { focus.map { $0 == id } }
+    private func hover(_ id: String) -> (Bool) -> Void {
+        { inside in if inside { focus = id } else if focus == id { focus = nil } }
     }
 }
 
@@ -286,27 +292,35 @@ private struct PanelRecordingStatus: View {
     }
 }
 
-/// A capsule choice: filled when selected, a soft lift on hover.
+/// A capsule choice: filled when selected; hovered, its symbol rises and glows and its
+/// siblings step back, like every tool in the panel.
 private struct PanelChip: View {
     let symbol: String
     let title: Text
     let selected: Bool
+    let focus: Bool?
     let action: () -> Void
-    @State private var hovered = false
+    let hover: (Bool) -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
+        let lifted = focus == true
         Button(action: action) {
             HStack(spacing: 4) {
                 InkSymbol(name: symbol, pointSize: 11, weight: .semibold, canvas: 16)
+                    .scaleEffect(lifted && !reduceMotion ? 1.18 : 1)
+                    .offset(y: lifted && !reduceMotion ? -1 : 0)
+                    .shadow(color: Theme.Palette.ink.color.opacity(lifted ? 0.5 : 0), radius: 5)
                 title.font(Theme.Font.captionStrong).lineLimit(1).fixedSize()
             }
             .padding(.horizontal, 8)
             .frame(height: 28)
-            .background(selected ? Theme.Palette.selectionStrong.color : hovered ? Theme.Palette.hover.color : .clear, in: .capsule)
+            .background(selected ? Theme.Palette.selectionStrong.color : .clear, in: .capsule)
+            .opacity(focus == false ? 0.5 : 1)
             .contentShape(.capsule)
         }
         .buttonStyle(PanelPressStyle())
-        .onHover { hovered = $0 }
-        .animation(.easeOut(duration: 0.14), value: hovered)
+        .onHover(perform: hover)
+        .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.62), value: focus)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
@@ -316,20 +330,27 @@ private struct PanelDeviceToggle: View {
     let symbol: String
     let on: Bool
     let available: Bool
+    let focus: Bool?
     let action: () -> Void
-    @State private var hovered = false
+    let hover: (Bool) -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
+        let lifted = focus == true && available
         Button(action: action) {
             InkSymbol(name: on ? symbol + ".fill" : symbol + ".slash", pointSize: 13, weight: .semibold, canvas: 20)
                 .foregroundStyle(on ? Theme.Palette.ink.color : Theme.Palette.ink3.color)
+                .scaleEffect(lifted && !reduceMotion ? 1.18 : 1)
+                .offset(y: lifted && !reduceMotion ? -1 : 0)
+                .shadow(color: Theme.Palette.ink.color.opacity(lifted ? 0.5 : 0), radius: 5)
                 .frame(width: 30, height: 28)
-                .background(on ? Theme.Palette.selectionStrong.color : hovered ? Theme.Palette.hover.color : .clear, in: .capsule)
+                .background(on ? Theme.Palette.selectionStrong.color : .clear, in: .capsule)
+                .opacity(focus == false ? 0.5 : 1)
                 .contentShape(.capsule)
         }
         .buttonStyle(PanelPressStyle())
         .disabled(!available)
-        .onHover { hovered = $0 }
-        .animation(.easeOut(duration: 0.14), value: hovered)
+        .onHover(perform: hover)
+        .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.62), value: focus)
         .accessibilityLabel(Text(title))
         .accessibilityValue(Text(on ? "On" : "Off"))
         .help(Text(available ? on ? "Disable for the next recording" : "Enable for the next recording" : "Finish or cancel recording to change this setting"))

@@ -346,10 +346,11 @@ final class PanelController: NSObject, NSWindowDelegate {
         removeOutsideClickMonitor()
     }
 
-    func releaseRecordingHold() {
+    /// A started recording takes the panel away; a cancelled one leaves it open where it was.
+    func releaseRecordingHold(closing: Bool = true) {
         behavior = .transient
         installOutsideClickMonitor()
-        close()
+        if closing { close() }
     }
 
     func close() {

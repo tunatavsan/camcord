@@ -23,8 +23,10 @@ struct PanelRecentCarousel: NSViewRepresentable {
     static let gap: CGFloat = 8
     var open: ((CaptureItem) -> Void)?
     private var items: [CaptureItem] = []
-    private var tiles: [String: PanelCarouselTile] = [:]
-    private let strip = CALayer()
+    private var tiles: [String: PanelCarouselTileView] = [:]
+    /// Tiles live in one view whose layer slides; glass needs views, motion needs one layer.
+    private let stripView = PanelCarouselStrip()
+    private var strip: CALayer { stripView.layer! }
     private let fade = CAGradientLayer()
     private var offset: CGFloat = 0
     private var tracking: NSTrackingArea?
@@ -39,7 +41,7 @@ struct PanelRecentCarousel: NSViewRepresentable {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.masksToBounds = true
-        layer?.addSublayer(strip)
+        addSubview(stripView)
         fade.startPoint = CGPoint(x: 0, y: 0.5); fade.endPoint = CGPoint(x: 1, y: 0.5)
         layer?.mask = fade
         setAccessibilityElement(true)
@@ -53,11 +55,11 @@ struct PanelRecentCarousel: NSViewRepresentable {
         if items.map(\.id) != self.items.map(\.id) {
             self.items = items
             let ids = Set(items.map(\.id))
-            for (id, tile) in tiles where !ids.contains(id) { tile.removeFromSuperlayer(); tiles[id] = nil }
+            for (id, tile) in tiles where !ids.contains(id) { tile.removeFromSuperview(); tiles[id] = nil }
             for item in items where tiles[item.id] == nil {
-                let tile = PanelCarouselTile(item: item)
+                let tile = PanelCarouselTileView(item: item)
                 tiles[item.id] = tile
-                strip.addSublayer(tile)
+                stripView.addSubview(tile)
             }
             offset = min(offset, maxOffset)
             needsLayout = true
@@ -75,10 +77,12 @@ struct PanelRecentCarousel: NSViewRepresentable {
     override func layout() {
         super.layout()
         CATransaction.begin(); CATransaction.setDisableActions(true)
-        strip.frame = CGRect(x: 0, y: 0, width: max(contentWidth, bounds.width), height: bounds.height)
+        let stripFrame = CGRect(x: 0, y: 0, width: max(contentWidth, bounds.width), height: bounds.height)
+        if stripView.frame != stripFrame { stripView.frame = stripFrame }
         for (index, item) in items.enumerated() {
-            tiles[item.id]?.frame = CGRect(x: CGFloat(index) * (Self.tile.width + Self.gap), y: (bounds.height - Self.tile.height) / 2,
-                                           width: Self.tile.width, height: Self.tile.height)
+            let frame = CGRect(x: CGFloat(index) * (Self.tile.width + Self.gap), y: (bounds.height - Self.tile.height) / 2,
+                               width: Self.tile.width, height: Self.tile.height)
+            if tiles[item.id]?.frame != frame { tiles[item.id]?.frame = frame }
         }
         fade.frame = bounds
         CATransaction.commit()
@@ -150,6 +154,8 @@ struct PanelRecentCarousel: NSViewRepresentable {
         return items[index]
     }
 
+    /// The strip owns every press: tiles and their glass never take the mouse.
+    override func hitTest(_ point: NSPoint) -> NSView? { frame.contains(point) ? self : nil }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
@@ -251,12 +257,64 @@ private final class PanelCarouselAccessibilityItem: NSAccessibilityElement {
     override func accessibilityPerformPress() -> Bool { press(); return true }
 }
 
-/// One tile: the capture whole over its blur, a play mark for recordings, its age in a pill.
+private final class PanelCarouselStrip: NSView {
+    override init(frame frameRect: NSRect) { super.init(frame: frameRect); wantsLayer = true }
+    required init?(coder: NSCoder) { nil }
+    override var isFlipped: Bool { true }
+}
+
+/// A tile as a view: its layer draws the capture, and a recording carries a glass play button.
+@MainActor final class PanelCarouselTileView: NSView {
+    private let item: CaptureItem
+    private let play: PanelPlayChip?
+    init(item: CaptureItem) {
+        self.item = item
+        play = item.kind == .recording ? PanelPlayChip(frame: .zero) : nil
+        super.init(frame: .zero)
+        wantsLayer = true
+        if let play { addSubview(play) }
+    }
+    required init?(coder: NSCoder) { nil }
+    override var isFlipped: Bool { true }
+    override func makeBackingLayer() -> CALayer { PanelCarouselTile(item: item) }
+    private var tile: PanelCarouselTile? { layer as? PanelCarouselTile }
+    func setImage(_ image: CGImage?) { tile?.setImage(image) }
+    func setHovered(_ hovered: Bool, screen: NSScreen?) {
+        tile?.setHovered(hovered, screen: screen)
+        play?.setVeil(active: hovered)
+    }
+    func snapshot() -> NSImage? { tile?.snapshot() }
+    override func layout() {
+        super.layout()
+        play?.frame = CGRect(x: bounds.midX - 15, y: bounds.midY - 15, width: 30, height: 30)
+    }
+}
+
+/// The play mark of a recording, in the card's Liquid Glass.
+@MainActor final class PanelPlayChip: ScreenshotCardChip {
+    private let icon = CALayer()
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        let scale = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
+        icon.contents = InkCenteredSymbol.render("play.fill", pointSize: 12, weight: .bold, canvas: 30, scale: scale, color: .white)
+        icon.contentsScale = scale
+        clip.addSublayer(icon)
+    }
+    required init?(coder: NSCoder) { nil }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func layout() {
+        super.layout()
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        icon.frame = bounds
+        CATransaction.commit()
+    }
+}
+
+/// One tile's drawing: the capture whole over its blur and its age in a pill.
 final class PanelCarouselTile: CALayer {
     private let fill = CALayer()
     private let dim = CALayer()
     private let picture = CALayer()
-    private let play = CALayer()
     private let age = CATextLayer()
     private let ageBack = CALayer()
     private var image: CGImage?
@@ -277,15 +335,6 @@ final class PanelCarouselTile: CALayer {
         picture.shadowRadius = 3
         picture.shadowOffset = CGSize(width: 0, height: 1)
         for layer in [fill, dim, picture] { addSublayer(layer) }
-        if item.kind == .recording {
-            play.contents = InkCenteredSymbol.render("play.fill", pointSize: 12, weight: .bold, canvas: 28, scale: scale, color: .white)
-            play.contentsScale = scale
-            play.backgroundColor = NSColor.black.withAlphaComponent(0.4).cgColor
-            play.cornerRadius = 14
-            play.borderColor = NSColor.white.withAlphaComponent(0.25).cgColor
-            play.borderWidth = 1
-            addSublayer(play)
-        }
         ageBack.backgroundColor = NSColor.black.withAlphaComponent(0.45).cgColor
         ageBack.cornerRadius = 8
         age.string = PanelRelativeDate.string(for: item.createdAt)
@@ -327,7 +376,6 @@ final class PanelCarouselTile: CALayer {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         fill.frame = bounds; dim.frame = bounds
         picture.frame = bounds.insetBy(dx: 3, dy: 3)
-        play.frame = CGRect(x: bounds.midX - 14, y: bounds.midY - 14, width: 28, height: 28)
         let text = (age.string as? String) ?? ""
         let width = ceil(NSAttributedString(string: text, attributes: [.font: Theme.Font.ns.mono(10, weight: .medium)]).size().width) + 12
         ageBack.frame = CGRect(x: 6, y: bounds.maxY - 6 - 16, width: width, height: 16)
@@ -335,18 +383,12 @@ final class PanelCarouselTile: CALayer {
         CATransaction.commit()
     }
 
-    /// Hover lifts the tile and lights its edge.
+    /// Hover brightens the capture and lights the tile's edge; the tile itself never grows.
     @MainActor func setHovered(_ hovered: Bool, screen: NSScreen?) {
-        let from = presentation()?.transform ?? transform
-        let to = hovered ? CATransform3DMakeScale(1.04, 1.04, 1) : CATransform3DIdentity
-        CATransaction.begin(); CATransaction.setDisableActions(true)
-        transform = to
-        borderWidth = hovered ? 1 : 0
-        borderColor = NSColor.white.withAlphaComponent(0.35).cgColor
-        let spring = CASpringAnimation.card(keyPath: "transform", from: NSValue(caTransform3D: from), to: NSValue(caTransform3D: to),
-                                            response: 0.32, dampingRatio: hovered ? 0.62 : 0.85)
-        spring.preferFullRefreshRate(on: screen)
-        add(spring, forKey: "tile-hover")
+        CATransaction.begin(); CATransaction.setAnimationDuration(0.16)
+        dim.opacity = hovered ? 0.35 : 1
+        borderWidth = 1
+        borderColor = NSColor.white.withAlphaComponent(hovered ? 0.4 : 0).cgColor
         CATransaction.commit()
     }
 
