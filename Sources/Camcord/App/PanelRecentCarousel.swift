@@ -10,10 +10,13 @@ struct PanelRecentCarousel: NSViewRepresentable {
     let items: [CaptureItem]
     let images: [String: CGImage]
     let open: (CaptureItem) -> Void
+    /// What a right click offers for one capture.
+    var menu: (CaptureItem) -> [PanelHoverInfo.MenuAction] = { _ in [] }
 
     func makeNSView(context: Context) -> PanelCarouselView { PanelCarouselView(frame: .zero) }
     func updateNSView(_ view: PanelCarouselView, context: Context) {
         view.open = open
+        view.captureMenu = menu
         view.update(items: items, images: images)
     }
 }
@@ -22,6 +25,7 @@ struct PanelRecentCarousel: NSViewRepresentable {
     static let tile = CGSize(width: 136, height: 85)
     static let gap: CGFloat = 8
     var open: ((CaptureItem) -> Void)?
+    var captureMenu: ((CaptureItem) -> [PanelHoverInfo.MenuAction])?
     private var items: [CaptureItem] = []
     private var tiles: [String: PanelCarouselTileView] = [:]
     /// Tiles live in one view whose layer slides; glass needs views, motion needs one layer.
@@ -209,14 +213,22 @@ struct PanelRecentCarousel: NSViewRepresentable {
         let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
         tracking = area; addTrackingArea(area)
     }
+    /// A right click grows the hover note into the capture's menu.
+    override func rightMouseDown(with event: NSEvent) {
+        guard let item = item(at: convert(event.locationInWindow, from: nil)),
+              let actions = captureMenu?(item), !actions.isEmpty else { return }
+        setHovered(item.id)
+        info.expandMenu(for: item, actions: actions, from: self)
+    }
+
     override func mouseMoved(with event: NSEvent) {
-        guard gesture == .none else { return }
+        guard gesture == .none, !info.isMenuOpen else { return }
         setHovered(item(at: convert(event.locationInWindow, from: nil))?.id)
         if hovered != nil { info.move(to: NSEvent.mouseLocation) }
     }
-    override func mouseExited(with event: NSEvent) { setHovered(nil) }
+    override func mouseExited(with event: NSEvent) { if !info.isMenuOpen { setHovered(nil) } }
     private func setHovered(_ id: String?) {
-        guard id != hovered else { return }
+        guard id != hovered, !info.isMenuOpen else { return }
         if let hovered { tiles[hovered]?.setHovered(false, screen: window?.screen) }
         hovered = id
         if let id { tiles[id]?.setHovered(true, screen: window?.screen) }
@@ -422,12 +434,21 @@ final class PanelCarouselTile: CALayer {
 }
 
 /// A small glass note that follows the pointer over the strip on a spring: the capture's
-/// name and what it is, at once, instead of the system's delayed tooltip.
+/// name and what it is, at once, instead of the system's delayed tooltip. A right click grows
+/// the same glass into the capture's menu.
 @MainActor final class PanelHoverInfo {
-    private let panel: NSPanel
+    struct MenuAction {
+        let title: String
+        let symbol: String
+        var destructive = false
+        let perform: @MainActor (NSView) -> Void
+    }
+    private let panel: InfoPanel
+    private let content = InfoContent()
     private let glass = NSGlassEffectView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
+    private var rows: [InfoRow] = []
     private weak var host: NSView?
     private var link: CADisplayLink?
     private var proxy: PanelHoverInfoProxy?
@@ -436,32 +457,39 @@ final class PanelCarouselTile: CALayer {
     private var target: CGPoint = .zero
     private var lastTick: CFTimeInterval?
     private(set) var itemID: String?
+    private(set) var isMenuOpen = false
+    private var noteSize: CGSize = .zero
+    private var monitors: [Any] = []
+    private var watch: Timer?
     /// The note rides above and to the right of the pointer.
     private static let offset = CGPoint(x: 14, y: 16)
+    private static let menuWidth: CGFloat = 228
+    private static let rowHeight: CGFloat = 30
+    private static let header: CGFloat = 44
 
     init() {
-        panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        panel = InfoPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
         panel.ignoresMouseEvents = true
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 1)
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
         panel.animationBehavior = .none
-        let content = NSView()
         content.wantsLayer = true
         glass.style = .regular
         glass.cornerRadius = 12
-        let face = NSView()
         titleLabel.font = Theme.Font.ns.text(12, weight: .semibold)
         titleLabel.lineBreakMode = .byTruncatingMiddle
         detailLabel.font = Theme.Font.ns.mono(10.5, weight: .medium)
         detailLabel.textColor = .secondaryLabelColor
-        for label in [titleLabel, detailLabel] { label.isSelectable = false; face.addSubview(label) }
-        glass.contentView = face
+        for label in [titleLabel, detailLabel] { label.isSelectable = false }
         content.addSubview(glass)
+        content.addSubview(titleLabel)
+        content.addSubview(detailLabel)
         panel.contentView = content
     }
 
     func show(_ item: CaptureItem, from host: NSView) {
+        guard !isMenuOpen else { return }
         self.host = host
         let mouse = NSEvent.mouseLocation
         if itemID == nil {
@@ -472,16 +500,14 @@ final class PanelCarouselTile: CALayer {
         titleLabel.stringValue = item.title
         detailLabel.stringValue = Self.details(item)
         let width = min(300, max(titleLabel.intrinsicContentSize.width, detailLabel.intrinsicContentSize.width) + 32)
-        let size = CGSize(width: ceil(width), height: 44)
-        panel.setContentSize(size)
-        glass.frame = CGRect(origin: .zero, size: size)
-        titleLabel.frame = CGRect(x: 12, y: 22, width: size.width - 20, height: 16)
-        detailLabel.frame = CGRect(x: 12, y: 6, width: size.width - 20, height: 14)
+        noteSize = CGSize(width: ceil(width), height: Self.header)
+        panel.setContentSize(noteSize)
+        layoutNote(in: CGRect(origin: .zero, size: noteSize))
         move(to: mouse)
         if !panel.isVisible {
             place()
             panel.orderFrontRegardless()
-            if let layer = panel.contentView?.layer, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            if let layer = content.layer, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
                 let pop = CASpringAnimation.card(keyPath: "transform.scale", from: 0.92, to: 1, response: 0.3, dampingRatio: 0.7)
                 let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0; fade.toValue = 1; fade.duration = 0.12
                 layer.add(pop, forKey: "info-pop"); layer.add(fade, forKey: "info-fade")
@@ -491,14 +517,106 @@ final class PanelCarouselTile: CALayer {
     }
 
     func move(to mouse: CGPoint) {
+        guard !isMenuOpen else { return }
         target = CGPoint(x: mouse.x + Self.offset.x, y: mouse.y + Self.offset.y)
         startFollowing()
     }
 
     func hide() {
         itemID = nil
+        closeMenuState()
         stopFollowing()
         panel.orderOut(nil)
+    }
+
+    /// The note grows into the capture's menu where it stands: the glass springs from the
+    /// note's size to the menu's, and the rows arrive one after another.
+    func expandMenu(for item: CaptureItem, actions: [MenuAction], from host: NSView) {
+        if itemID != item.id || !panel.isVisible { show(item, from: host) }
+        stopFollowing()
+        isMenuOpen = true
+        let note = panel.frame
+        let size = CGSize(width: max(Self.menuWidth, noteSize.width), height: Self.header + CGFloat(actions.count) * Self.rowHeight + 8)
+        var frame = CGRect(x: note.minX, y: note.maxY - size.height, width: size.width, height: size.height)
+        if let visible = (panel.screen ?? NSScreen.main)?.visibleFrame {
+            frame.origin.x = min(max(frame.minX, visible.minX + 4), visible.maxX - size.width - 4)
+            frame.origin.y = max(frame.minY, visible.minY + 4)
+        }
+        panel.setFrame(frame, display: false)
+        panel.ignoresMouseEvents = false
+        content.frame = CGRect(origin: .zero, size: size)
+        rows.forEach { $0.removeFromSuperview() }
+        rows = actions.enumerated().map { index, action in
+            let row = InfoRow(action: action) { [weak self] row in
+                self?.hide()
+                action.perform(row)
+            }
+            row.frame = CGRect(x: 4, y: Self.header + CGFloat(index) * Self.rowHeight, width: size.width - 8, height: Self.rowHeight)
+            content.addSubview(row)
+            return row
+        }
+        // The note's frame, inside the menu: its top-left corner stays where it was.
+        let start = CGRect(x: note.minX - frame.minX, y: frame.maxY - note.maxY, width: note.width, height: note.height)
+        let full = CGRect(origin: .zero, size: size)
+        layoutNote(in: full)
+        let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if reduce {
+            glass.frame = full
+        } else {
+            glass.frame = start
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.32
+                context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1)
+                context.allowsImplicitAnimation = true
+                glass.animator().frame = full
+            }
+        }
+        for (index, row) in rows.enumerated() {
+            row.arrive(delay: reduce ? 0 : 0.06 + Double(index) * 0.03, reduceMotion: reduce, screen: panel.screen)
+        }
+        installMenuMonitors()
+    }
+
+    private func layoutNote(in bounds: CGRect) {
+        glass.frame = bounds
+        titleLabel.frame = CGRect(x: 12, y: 6, width: bounds.width - 20, height: 16)
+        detailLabel.frame = CGRect(x: 12, y: 23, width: bounds.width - 20, height: 14)
+    }
+
+    /// A click elsewhere, Esc, or the strip's panel leaving puts the menu away.
+    private func installMenuMonitors() {
+        removeMenuMonitors()
+        if let local = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown], handler: { [weak self] event in
+            guard let self else { return event }
+            if event.type == .keyDown {
+                if event.keyCode == 53 { self.hide(); return nil }
+                return event
+            }
+            if event.window !== self.panel { self.hide() }
+            return event
+        }) { monitors.append(local) }
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] _ in
+            MainActor.assumeIsolated { self?.hide() }
+        }) { monitors.append(global) }
+        watch = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.host?.window?.isVisible != true else { return }
+                self.hide()
+            }
+        }
+    }
+    private func removeMenuMonitors() {
+        monitors.forEach { NSEvent.removeMonitor($0) }
+        monitors = []
+        watch?.invalidate(); watch = nil
+    }
+    private func closeMenuState() {
+        guard isMenuOpen else { return }
+        isMenuOpen = false
+        removeMenuMonitors()
+        rows.forEach { $0.removeFromSuperview() }
+        rows = []
+        panel.ignoresMouseEvents = true
     }
 
     static func details(_ item: CaptureItem) -> String {
@@ -522,9 +640,9 @@ final class PanelCarouselTile: CALayer {
     // MARK: Spring follow at the display's rate
 
     private func startFollowing() {
-        guard link == nil, let view = panel.contentView else { return }
+        guard link == nil, !isMenuOpen else { return }
         let proxy = PanelHoverInfoProxy(owner: self)
-        let link = view.displayLink(target: proxy, selector: #selector(PanelHoverInfoProxy.tick(_:)))
+        let link = content.displayLink(target: proxy, selector: #selector(PanelHoverInfoProxy.tick(_:)))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
         link.add(to: .main, forMode: .common)
         self.proxy = proxy; self.link = link; lastTick = nil
@@ -559,6 +677,106 @@ final class PanelCarouselTile: CALayer {
             origin.y = min(max(origin.y, visible.minY + 4), visible.maxY - panel.frame.height - 4)
         }
         panel.setFrameOrigin(CGPoint(x: origin.x.rounded(), y: origin.y.rounded()))
+    }
+}
+
+/// The note and menu window: it takes clicks while it is a menu, never the app's activation.
+private final class InfoPanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+}
+
+private final class InfoContent: NSView {
+    override var isFlipped: Bool { true }
+}
+
+/// One menu row: a symbol and its title; hovered, a soft band appears and the symbol swells.
+@MainActor private final class InfoRow: NSView {
+    private let action: PanelHoverInfo.MenuAction
+    private let chosen: (InfoRow) -> Void
+    private let band = CALayer()
+    private let icon = NSImageView()
+    private let label = NSTextField(labelWithString: "")
+    private var tracking: NSTrackingArea?
+    init(action: PanelHoverInfo.MenuAction, chosen: @escaping (InfoRow) -> Void) {
+        self.action = action
+        self.chosen = chosen
+        super.init(frame: .zero)
+        wantsLayer = true
+        band.backgroundColor = NSColor.labelColor.withAlphaComponent(0.09).cgColor
+        band.cornerRadius = 8
+        band.cornerCurve = .continuous
+        band.opacity = 0
+        layer?.addSublayer(band)
+        let colour: NSColor = action.destructive ? .systemRed : .labelColor
+        icon.image = InkCenteredSymbol.template(action.symbol, pointSize: 13, canvas: 20)
+        icon.contentTintColor = colour
+        icon.wantsLayer = true
+        label.stringValue = action.title
+        label.font = Theme.Font.ns.text(13, weight: .medium)
+        label.textColor = colour
+        label.isSelectable = false
+        addSubview(icon); addSubview(label)
+        layer?.opacity = 0
+        setAccessibilityElement(true)
+        setAccessibilityRole(.menuItem)
+        setAccessibilityLabel(action.title)
+    }
+    required init?(coder: NSCoder) { nil }
+    override var isFlipped: Bool { true }
+    override func layout() {
+        super.layout()
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        band.frame = bounds.insetBy(dx: 2, dy: 1)
+        CATransaction.commit()
+        icon.frame = CGRect(x: 10, y: (bounds.height - 20) / 2, width: 20, height: 20)
+        label.frame = CGRect(x: 38, y: (bounds.height - 17) / 2, width: bounds.width - 46, height: 17)
+    }
+    func arrive(delay: CFTimeInterval, reduceMotion: Bool, screen: NSScreen?) {
+        guard let layer else { return }
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        layer.opacity = 1
+        let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0; fade.toValue = 1
+        fade.duration = reduceMotion ? Theme.Motion.Duration.reduced : 0.16
+        fade.beginTime = CACurrentMediaTime() + delay; fade.fillMode = .backwards
+        layer.add(fade, forKey: "row-fade")
+        if !reduceMotion {
+            let slide = CASpringAnimation.card(keyPath: "transform.translation.y", from: -5, to: 0, response: 0.34, dampingRatio: 0.75)
+            slide.beginTime = CACurrentMediaTime() + delay; slide.fillMode = .backwards
+            slide.preferFullRefreshRate(on: screen)
+            layer.add(slide, forKey: "row-slide")
+        }
+        CATransaction.commit()
+    }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        tracking = area; addTrackingArea(area)
+    }
+    override func mouseEntered(with event: NSEvent) { setHovered(true) }
+    override func mouseExited(with event: NSEvent) { setHovered(false) }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) {}
+    override func mouseUp(with event: NSEvent) {
+        if bounds.contains(convert(event.locationInWindow, from: nil)) { chosen(self) }
+    }
+    override func accessibilityPerformPress() -> Bool { chosen(self); return true }
+    private func setHovered(_ hovered: Bool) {
+        CATransaction.begin(); CATransaction.setAnimationDuration(0.12)
+        band.opacity = hovered ? 1 : 0
+        CATransaction.commit()
+        guard let iconLayer = icon.layer else { return }
+        let size = icon.bounds.size
+        let swell = CATransform3DConcat(CATransform3DConcat(CATransform3DMakeTranslation(-size.width / 2, -size.height / 2, 0),
+                                                            CATransform3DMakeScale(1.14, 1.14, 1)),
+                                        CATransform3DMakeTranslation(size.width / 2, size.height / 2, 0))
+        let from = iconLayer.presentation()?.transform ?? iconLayer.transform
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        iconLayer.transform = hovered ? swell : CATransform3DIdentity
+        let spring = CASpringAnimation.card(keyPath: "transform", from: NSValue(caTransform3D: from),
+                                            to: NSValue(caTransform3D: iconLayer.transform), response: 0.3, dampingRatio: hovered ? 0.55 : 0.8)
+        iconLayer.add(spring, forKey: "row-swell")
+        CATransaction.commit()
     }
 }
 

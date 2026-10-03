@@ -79,7 +79,8 @@ struct CapturePanelView: View {
                     .frame(height: Layout.recordCell)
                 PanelRecentCell(items: context.recent, images: context.thumbnails,
                                 loading: context.library?.isLoading == true,
-                                issue: context.library?.loadingIssue, open: openCapture, showAll: actions.openLibrary)
+                                issue: context.library?.loadingIssue, open: openCapture, showAll: actions.openLibrary,
+                                menu: captureMenu)
                     .frame(height: Layout.recentCell)
             }
             PanelDestinationsCell(actions: actions).frame(height: Layout.destinationsCell)
@@ -112,6 +113,27 @@ struct CapturePanelView: View {
         reloadShortcuts()
         context.synchronize(visible: model.isPanelVisible, reloadSettings: true)
     }
+    /// A recent capture's right-click menu: a still opens in the preview, a recording plays.
+    private func captureMenu(_ item: CaptureItem) -> [PanelHoverInfo.MenuAction] {
+        let reveal = item.kind == .recording ? actions.revealRecording : actions.revealScreenshot
+        var entries: [PanelHoverInfo.MenuAction] = []
+        if item.kind == .recording {
+            entries.append(.init(title: String(localized: "Play"), symbol: "play.fill") { _ in openCapture(item) })
+        } else {
+            entries.append(.init(title: String(localized: "Preview"), symbol: "eye") { _ in openCapture(item) })
+            entries.append(.init(title: String(localized: "Copy"), symbol: "doc.on.doc") { _ in Task { await context.copy(item) } })
+            entries.append(.init(title: String(localized: "Edit"), symbol: "pencil") { _ in Task { await context.open(item) } })
+        }
+        entries.append(.init(title: String(localized: "Show in Finder"), symbol: "folder") { _ in reveal(item.url) })
+        entries.append(.init(title: String(localized: "Share"), symbol: "square.and.arrow.up") { anchor in
+            NSSharingServicePicker(items: [item.url]).show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxX)
+        })
+        entries.append(.init(title: String(localized: "Move to Trash"), symbol: "trash", destructive: true) { _ in
+            Task { await context.trash(item) }
+        })
+        return entries
+    }
+
     private func openCapture(_ item: CaptureItem) {
         if item.kind != .recording, let preview = actions.previewCapture { preview(item); return }
         Task { await context.open(item) }
@@ -472,6 +494,7 @@ private struct PanelRecentCell: View {
     let issue: String?
     let open: (CaptureItem) -> Void
     let showAll: () -> Void
+    let menu: (CaptureItem) -> [PanelHoverInfo.MenuAction]
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -488,7 +511,7 @@ private struct PanelRecentCell: View {
                     .help(Text(verbatim: issue ?? ""))
             } else {
                 // Room above for a tile's lift, so it never leaves the strip.
-                PanelRecentCarousel(items: items, images: images, open: open)
+                PanelRecentCarousel(items: items, images: images, open: open, menu: menu)
                     .frame(height: PanelCarouselView.tile.height + 8)
             }
         }

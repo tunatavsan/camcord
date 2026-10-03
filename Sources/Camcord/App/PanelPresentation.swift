@@ -138,6 +138,9 @@ final class PanelPresentation {
     }
 
     func open(_ item: CaptureItem) async { await library?.open(item) }
+    func copy(_ item: CaptureItem) async { await library?.copy([item]) }
+    /// To the Trash, never unlinked.
+    func trash(_ item: CaptureItem) async { try? await library?.delete([item.id]) }
 }
 
 /// A drag freezes its file identity; later Library selection and refreshes cannot redirect it.

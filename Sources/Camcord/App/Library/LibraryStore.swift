@@ -285,7 +285,10 @@ final class LibraryStore: CaptureLibraryStore {
         } catch { if !Task.isCancelled, openRequests.isCurrent(token) { issue = error.localizedDescription } }
     }
     func copySelection(to pasteboard: NSPasteboard = .general) async {
-        let targets = selectedItems
+        await copy(selectedItems, to: pasteboard)
+    }
+    /// Copies captures: one still as its PNG, anything else as files.
+    func copy(_ targets: [CaptureItem], to pasteboard: NSPasteboard = .general) async {
         guard !targets.isEmpty else { return }
         let publish: @MainActor () -> Bool
         if let claimClipboardPublication { publish = claimClipboardPublication() }
