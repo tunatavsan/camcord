@@ -76,6 +76,11 @@ final class ScrollPreviewPanel {
         content?.setAuto(running: running, reachedEnd: reachedEnd)
     }
 
+    /// Auto-scroll is on its way up to the top of the page before it captures down.
+    func setClimbing(_ climbing: Bool) {
+        content?.setClimbing(climbing)
+    }
+
     /// Done was pressed: the last frame and the final image are on their way.
     func setFinishing() {
         content?.setFinishing()
@@ -152,6 +157,7 @@ private final class ScrollPreviewView: NSView {
     /// Images received. The first is the page as it stands; any later one means it moved.
     private var updates = 0
     private var autoRunning = false
+    private var climbing = false
     private var endReached = false
     /// Once the page end was reached, auto never runs again in this session.
     private var autoEnded = false
@@ -312,6 +318,11 @@ private final class ScrollPreviewView: NSView {
         refreshStatus()
     }
 
+    func setClimbing(_ climbing: Bool) {
+        self.climbing = climbing
+        refreshStatus()
+    }
+
     func setFinishing() {
         guard !finishing else { return }
         finishing = true
@@ -366,7 +377,7 @@ private final class ScrollPreviewView: NSView {
         } else if let hoverControl {
             text = hoverControl.title
         } else if autoRunning {
-            text = String(localized: "Scrolling automatically…")
+            text = climbing ? String(localized: "Scrolling to the top…") : String(localized: "Scrolling automatically…")
         } else if endReached {
             text = String(localized: "End of page · Press Done")
         } else if prompting {

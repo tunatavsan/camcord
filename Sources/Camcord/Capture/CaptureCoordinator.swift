@@ -283,7 +283,12 @@ final class CaptureCoordinator {
         let region: CGRect
         switch result {
         case .region(let r): region = r
-        case .window(let window): region = window.frame
+        case .window(let window):
+            // A window's rounded bottom corners would be cut into every stitched strip; the
+            // capture stops just above them (macOS 26 rounds a toolbar window by up to 26 pt).
+            let corner: CGFloat = CaptureAreaIndicator.windowCornerRadius(forSize: window.frame.size) > 0 ? 26 : 0
+            region = CGRect(x: window.frame.minX, y: window.frame.minY,
+                            width: window.frame.width, height: max(1, window.frame.height - corner))
         }
         guard region.width >= 1, region.height >= 1 else {
             fail("Scroll capture: empty selection")

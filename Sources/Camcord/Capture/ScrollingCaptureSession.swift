@@ -23,13 +23,31 @@ actor ScrollStitchWorker {
         let state: State
         let preview: CGImage?
     }
-    private let stitcher: ScrollStitcher
+    private var stitcher: ScrollStitcher
     private let workHook: (@Sendable () -> Void)?
+    private let caps: (height: Int, pixels: Int)
 
     init(maxTotalHeight: Int = 40_000, maxTotalPixels: Int = 50_000_000,
          workHook: (@Sendable () -> Void)? = nil) {
         stitcher = ScrollStitcher(maxTotalHeight: maxTotalHeight, maxTotalPixels: maxTotalPixels)
+        caps = (maxTotalHeight, maxTotalPixels)
         self.workHook = workHook
+    }
+
+    /// Starts the stitch over: auto-scroll climbed to the page top and captures down from there.
+    func reset() {
+        stitcher = ScrollStitcher(maxTotalHeight: caps.height, maxTotalPixels: caps.pixels)
+    }
+
+    /// How `to` sits relative to `from`: the same view (still), or moved, measured the way `add`
+    /// measures it.
+    func compare(_ from: CGImage, _ to: CGImage, header: Int, footer: Int,
+                 predicted: Int) -> (still: Bool, motion: ScrollStitcher.Motion) {
+        workHook?()
+        guard let a = ScrollStitcher.makeFrame(from), let b = ScrollStitcher.makeFrame(to) else { return (false, .none) }
+        if ScrollStitcher.isStill(a, b, headerH: header, footerH: footer) { return (true, .none) }
+        return (false, ScrollStitcher.motion(from: a, to: b, headerH: header, footerH: footer, predicted: predicted,
+                                             minimumShift: 2))
     }
 
     func add(_ image: CGImage, predictedOffset: Int) -> Update {
@@ -97,6 +115,8 @@ final class ScrollingCaptureSession {
         var hint: (String) -> Void = { _ in }
         var preparationCompleted: () -> Void = {}
         var captureCompleted: () -> Void = {}
+        /// Moves the scripted page for an auto scroll.
+        var actuator: (any ScrollActuator)?
     }
     private let region: CGRect
     private let display: SCDisplay?
@@ -133,18 +153,20 @@ final class ScrollingCaptureSession {
     private var captureFailures = 0
     private let triggerPoints: CGFloat
 
-    // Optional auto-scroll: synthesizes smooth scrolling so the page advances by itself.
+    // Optional auto-scroll: one calm step at a time, each frame settled before it is stitched.
     // Manual scrolling always works too; auto is a toggle on top of it.
-    private var autoScroller: AutoScroller?
+    private var autoTask: Task<Void, Never>?
     private var autoScrolling = false
-    private var calibrating = false
-    private var autoProgress = AutoScrollProgress()
-    /// Set once the page end was reached: auto must never post again in this session, or the
-    /// bottom gets stitched again on every restart. Manual scrolling stays available.
+    /// Set once auto has run its course: it never runs again in this session. Manual
+    /// scrolling stays available.
     private var autoEnded = false
-    /// Bumped whenever an auto-scroll segment starts or stops, so a capture launched under
-    /// one segment can't feed its outcome into a later segment's freshly-reset progress.
+    /// Bumped whenever an auto-scroll run starts or stops, so a run that is still awaiting a
+    /// frame can never act after it was stopped or replaced.
     private var autoGeneration = 0
+    /// The newest settled frame of the run, the reference for the next comparison.
+    private var autoFrame: CGImage?
+    private static let maxClimbSteps = 120
+    private static let maxAutoSteps = 600
 
     private var continuation: CheckedContinuation<Outcome, Never>?
 
@@ -277,9 +299,7 @@ final class ScrollingCaptureSession {
         // monitor asynchronously — we already counted them at post time (autoScrollAdvance).
         // Match by source identity, not the `autoScrolling` flag, so a late echo arriving
         // after auto has stopped is still dropped (else its delta is counted twice).
-        if event.cgEvent?.getIntegerValueField(.eventSourceUserData) == AutoScroller.echoSentinel {
-            return
-        }
+        if WheelScrollActuator.isOwnEvent(event.cgEvent) { return }
         // While auto drives, it is the sole delta source — ignore genuine manual scroll too.
         guard !autoScrolling else { return }
         accumulatedDeltaPoints += abs(event.scrollingDeltaY)
@@ -287,17 +307,12 @@ final class ScrollingCaptureSession {
         if accumulatedDeltaPoints >= triggerPoints { pump() }
     }
 
-    /// Fed by the AutoScroller each posting tick with the scroll amount (in points — a
-    /// `.pixel` wheel event reports the same unit `NSEvent.scrollingDeltaY` does, so this
-    /// mirrors handleScroll exactly). The single delta source while auto is on.
-    private func autoScrollAdvance(points: CGFloat) {
-        guard !finished, !finishing, autoScrolling, !calibrating else { return }
-        accumulatedDeltaPoints += points
-        armSettle()
-        if accumulatedDeltaPoints >= triggerPoints { pump() }
-    }
-
     // MARK: - Auto-scroll
+    //
+    // The owner scrolls to where the capture should end, then lets Camcord scroll: it climbs
+    // to the top of the page and captures down, one settled step at a time, until it is back
+    // where the owner started — or, started at the top, until the page ends. Then it
+    // finishes by itself.
 
     private func toggleAuto() {
         if autoScrolling { stopAutoScroll(reachedEnd: false); return }
@@ -306,113 +321,237 @@ final class ScrollingCaptureSession {
             flashHint(String(localized: "End of page"), warning: false)
             return
         }
-        // Synthesized events only reach other apps when we're an Accessibility-trusted
-        // process (same requirement as the app's event tap).
-        guard AXIsProcessTrusted() else {
+        // Synthesized scrolling (and the scroll bar route) need the Accessibility permission.
+        guard hooks != nil || AXIsProcessTrusted() else {
             flashHint(String(localized: "Needs Accessibility permission"))
             return
         }
-        guard prepared, stitchState.firstFrame != nil else {
+        guard prepared, stitchState.firstFrame != nil, !captureInFlight else {
             flashHint(String(localized: "Not ready yet · Try again"), warning: false)
             return
         }
         autoScrolling = true
-        calibrating = true
-        settleGeneration &+= 1
-        autoGeneration &+= 1   // start of a new auto segment; stale captures won't feed it
-        autoProgress = AutoScrollProgress()
-        let scroller = autoScroller ?? {
-            let s = AutoScroller()
-            s.onTick = { [weak self] points in self?.autoScrollAdvance(points: points) }
-            autoScroller = s
-            return s
-        }()
-        preview.setAuto(running: true, reachedEnd: false)
-        let generation = autoGeneration
-        Task { @MainActor in await self.calibrate(scroller, generation: generation) }
+        autoGeneration &+= 1
+        settleGeneration &+= 1   // a manual settle capture still pending must not fire
+        accumulatedDeltaPoints = 0
+        pendingCapture = false
+        let run = autoGeneration
+        if hooks == nil { preview.setAuto(running: true, reachedEnd: false) }
+        autoTask = Task { @MainActor [weak self] in await self?.runAuto(run) }
     }
 
-    private func calibrate(_ scroller: AutoScroller, generation: Int) async {
-        defer {
-            if calibrating, autoGeneration == generation {
-                stopAutoScroll(reachedEnd: false)
-                flashHint(String(localized: "This page can't be scrolled"))
+    private func autoAlive(_ run: Int) -> Bool {
+        autoScrolling && autoGeneration == run && !finished && !finishing && !Task.isCancelled
+    }
+
+    private func runAuto(_ run: Int) async {
+        let actuator: any ScrollActuator
+        if let scripted = hooks?.actuator { actuator = scripted }
+        else if let bar = await AXScrollActuator.resolve(region: region) { actuator = bar }
+        else { actuator = WheelScrollActuator(region: region) }
+        guard autoAlive(run) else { return }
+        logAuto("start route=\(actuator.route) sections=\(stitchState.sections)")
+        guard let start = await settledFrame(run) else { return }
+        autoFrame = start
+        var boundary: Boundary?
+        // A fresh capture starts from the top; one the owner has already scrolled on carries on.
+        if stitchState.sections <= 1 {
+            if hooks == nil { preview.setClimbing(true) }
+            let climb = await climbToTop(actuator, from: start, run: run)
+            if hooks == nil { preview.setClimbing(false) }
+            guard autoAlive(run) else { return }
+            if let climb {
+                logAuto("climbed points=\(Int(climb.distance)) exact=\(climb.exact)")
+                boundary = Boundary(frame: start, distance: climb.distance, exact: climb.exact)
+                await worker.reset()
+                guard autoAlive(run) else { return }
+                stitchState = ScrollStitchWorker.State()
+                guard await stitch(climb.top, predictedPx: 0, sessionGeneration: generation) != nil else { return }
+                autoFrame = climb.top
             }
         }
-        let ready = ContinuousClock.now.advanced(by: .milliseconds(500))
-        while captureInFlight, ContinuousClock.now < ready, autoGeneration == generation {
-            try? await Task.sleep(for: .milliseconds(16))
+        await descend(actuator, to: boundary, run: run)
+    }
+
+    /// Where the owner started: the frame, and how far above it the top was.
+    private struct Boundary {
+        let frame: CGImage
+        let distance: CGFloat
+        /// Measured step by step (or read from the scroll bar), not estimated.
+        let exact: Bool
+    }
+
+    /// Up to the top of the page: one jump where the scroll bar takes it, otherwise overlapping
+    /// steps, each measured, until the view stops changing. Nil when the page was already at
+    /// its top.
+    private func climbToTop(_ actuator: any ScrollActuator, from start: CGImage, run: Int)
+        async -> (top: CGImage, distance: CGFloat, exact: Bool)? {
+        let startPosition = actuator.position()
+        if await actuator.jumpToTop() {
+            guard let top = await settledFrame(run) else { return nil }
+            if await worker.compare(start, top, header: 0, footer: 0, predicted: 0).still { return nil }
+            return (top, startPosition ?? 0, startPosition != nil)
         }
-        for attempt in 0..<2 {
-            // Per ATTEMPT, not per calibration: one shared 1 s budget could never fit the
-            // second burst (430 ms of sleeps + a screenshot each), so the flip-and-retry
-            // branch — the whole point of measuring — was unreachable.
-            let deadline = ContinuousClock.now.advanced(by: .milliseconds(1200))
-            guard autoGeneration == generation, !captureInFlight,
-                  let baseline = stitchState.firstFrame else { return }
-            // 5 % of the viewport: enough to measure the sign, small enough that a wrong
-            // first guess is barely visible (the persisted sign is tried FIRST).
-            let burst = region.height * 0.05
-            scroller.start(at: CGPoint(x: region.midX, y: region.midY), region: region, burstPoints: burst)
-            try? await Task.sleep(for: .milliseconds(250))
-            guard autoGeneration == generation else { return }
-            scroller.stop()
-            try? await Task.sleep(for: .milliseconds(180))
-            guard autoGeneration == generation, ContinuousClock.now < deadline else { return }
-            captureInFlight = true
-            // Probe only: a 5 % burst is below the stitcher's motion floor, so feeding it
-            // would just look like a lost alignment and flash a spurious gap warning.
-            let image = await captureAndStitch(
-                predictedPoints: burst,
-                timeout: ContinuousClock.now.duration(to: deadline),
-                stitch: false
-            )
-            captureInFlight = false
-            guard autoGeneration == generation, ContinuousClock.now < deadline,
-                  let image else { return }
-            let predictedPx = Int((burst * scale).rounded())
-            let motion = await worker.motion(from: baseline, to: image,
-                                             header: stitchState.header, footer: stitchState.footer,
-                                             predicted: predictedPx, minimumShift: max(4, predictedPx / 2))
-            guard autoGeneration == generation, !finished, !finishing else { return }
-            switch motion {
-            case .down:
-                scroller.confirmDirection()
-            case .up:
-                // The flip IS the measurement: the corrected sign is exactly as proven as
-                // a `.down` under the current one, so remember it (S.3).
-                scroller.flipDirection()
-                scroller.confirmDirection()
-            case .none:
-                if attempt == 0 { scroller.flipDirection(); continue }
+        let stepPoints = region.height * 0.8
+        var previous = start
+        var distance: CGFloat = 0
+        var exact = true
+        var stillSteps = 0
+        var first = true
+        for _ in 0..<Self.maxClimbSteps {
+            // The first step is short: it tells which way the wheel runs here.
+            let length = first ? region.height * 0.3 : stepPoints
+            guard autoAlive(run), let frame = await step(actuator, by: -length, run: run) else { return nil }
+            // Measured from the higher view down to the lower one: a downward shift, which the
+            // stitcher finds seeded by the step, however long.
+            let predicted = Int((length * scale).rounded())
+            let measured = await worker.compare(frame, previous, header: 0, footer: 0, predicted: predicted)
+            guard autoAlive(run) else { return nil }
+            if measured.still {
+                if first { return nil }
+                stillSteps += 1
+                if stillSteps >= 2 { return (frame, distance, exact) }
+                continue
+            }
+            stillSteps = 0
+            if case .down(let pixels, _) = measured.motion {
+                distance += CGFloat(pixels) / scale
+            } else if first, case .down(let pixels, _) = await worker.compare(previous, frame, header: 0, footer: 0,
+                                                                              predicted: predicted).motion {
+                // The wheel runs the other way here: the start is that much further up now.
+                actuator.reverse()
+                logAuto("reversed")
+                distance -= CGFloat(pixels) / scale
+            } else {
+                distance += length
+                exact = false
+            }
+            first = false
+            previous = frame
+        }
+        logAuto("climb-budget")
+        return (previous, distance, false)
+    }
+
+    /// Down one settled step at a time, back to where the owner started (or, started at the
+    /// top, to the page end). The last step is exactly what remains, and the frame it lands on
+    /// is checked against the frame the owner started from.
+    private func descend(_ actuator: any ScrollActuator, to boundary: Boundary?, run: Int) async {
+        var stepPoints = region.height * (actuator.route == "ax" ? 0.7 : 0.6)
+        var descended: CGFloat = 0
+        var stalls = 0
+        var verified = false
+        var searching = false
+        for _ in 0..<Self.maxAutoSteps {
+            guard autoAlive(run) else { return }
+            var length = stepPoints
+            var last = false
+            if let boundary, !searching {
+                // The scroll bar reads exactly where the page is; otherwise the measured steps say.
+                let remaining = actuator.position().map { boundary.distance - $0 } ?? (boundary.distance - descended)
+                if remaining <= stepPoints * 1.4 {
+                    length = max(1, remaining)
+                    last = true
+                }
+            }
+            if searching { length = region.height * 0.25 }
+            guard let frame = await step(actuator, by: length, run: run), autoAlive(run) else { return }
+            guard let outcome = await stitch(frame, predictedPx: Int((length * scale).rounded()),
+                                             sessionGeneration: generation), autoAlive(run) else { return }
+            switch outcome {
+            case .appended, .buffered, .baselined:
+                autoFrame = frame
+                stalls = 0
+                verified = true
+                descended += stitchState.offset > 0 ? CGFloat(stitchState.offset) / scale : length
+            case .noMotion:
+                stalls += 1
+                if stalls >= 2 { finishAuto(reason: "page-end"); return }
+                // A page may still be loading what comes next.
+                try? await Task.sleep(for: .milliseconds(900))
+                continue
+            case .movedUp:
+                // Before the first measured advance this can only be a wheel running the other way.
+                if !verified { actuator.reverse(); verified = true; logAuto("reversed") }
+                continue
+            case .ignored:
+                // Too far for the overlap: smaller steps from here on.
+                stepPoints = max(region.height * 0.25, stepPoints * 0.6)
+                autoFrame = frame
+                descended += length
+                continue
+            case .atCap:
                 return
             }
-            // Only a measured advance seeds the run. Recording a calibration `.up` would
-            // spend the run's single allowed flip before it starts, so the first two
-            // stalled frames would report "page end" without ever having advanced.
-            if case .down = motion { _ = autoProgress.record(motion) }
-            calibrating = false
-            accumulatedDeltaPoints = 0
-            pendingCapture = false
-            scroller.start(at: CGPoint(x: region.midX, y: region.midY), region: region)
-            return
+            guard let boundary, last || searching else { continue }
+            let atStart = await worker.compare(frame, boundary.frame, header: stitchState.header,
+                                               footer: stitchState.footer, predicted: 0).still
+            if atStart || boundary.exact && !searching {
+                finishAuto(reason: atStart ? "start-reached" : "start-measured")
+                return
+            }
+            // An estimated climb: walk on in short steps until the start comes back into view,
+            // but never far past where it should have been.
+            searching = true
+            if descended > boundary.distance + region.height * 1.5 {
+                finishAuto(reason: "start-approx")
+                return
+            }
         }
+        finishAuto(reason: "step-budget")
+    }
+
+    /// One step and the frame it settles on. While the pointer is away from the region the
+    /// wheel route waits instead of scrolling whatever is under it now.
+    private func step(_ actuator: any ScrollActuator, by points: CGFloat, run: Int) async -> CGImage? {
+        while autoAlive(run) {
+            if await actuator.scroll(by: points) { return await settledFrame(run) }
+            try? await Task.sleep(for: .milliseconds(120))
+        }
+        return nil
+    }
+
+    /// The page as it rests: frames are taken until two in a row agree (a fading scroll bar
+    /// or a blinking caret stay under the threshold), or a short cap passes for a page that
+    /// never rests (video, animation).
+    private func settledFrame(_ run: Int) async -> CGImage? {
+        guard var previous = await captureImage(), autoAlive(run) else { return nil }
+        let deadline = ContinuousClock.now + .milliseconds(1200)
+        var pause = 40
+        while ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(pause))
+            pause = min(90, pause + 20)
+            guard autoAlive(run), let next = await captureImage() else { return nil }
+            if await worker.compare(previous, next, header: 0, footer: 0, predicted: 0).still { return next }
+            previous = next
+        }
+        logAuto("unsettled")
+        return previous
+    }
+
+    /// The run has done its job: Camcord finishes the capture by itself.
+    private func finishAuto(reason: String) {
+        stopAutoScroll(reachedEnd: true, reason: reason)
+        finish(keep: true)
     }
 
     private func stopAutoScroll(reachedEnd: Bool, reason: String = "manual") {
         guard autoScrolling else { return }
-        // The owner reads the file log to explain a run that ended early, so the reason the
-        // end-of-page rules fired has to be in it — the per-capture line cannot show it.
-        let line = "scroll auto-stop reason=\(reason) end=\(reachedEnd) sections=\(stitchState.sections)"
-        logger.notice("\(line, privacy: .public)")
-        if hooks == nil { DiagnosticsLog.append(line) }
+        // The owner reads the file log to explain a run that ended early.
+        logAuto("stop reason=\(reason) end=\(reachedEnd) sections=\(stitchState.sections)")
         if reachedEnd { autoEnded = true }
         autoScrolling = false
-        calibrating = false
-        autoGeneration &+= 1   // captures launched under the old segment must not feed the next
-        autoScroller?.stop()
-        autoProgress = AutoScrollProgress()
+        autoGeneration &+= 1
+        autoTask?.cancel()
+        autoTask = nil
+        autoFrame = nil
         if hooks == nil { preview.setAuto(running: false, reachedEnd: reachedEnd) }
+    }
+
+    private func logAuto(_ message: String) {
+        let line = "scroll auto " + message
+        logger.notice("\(line, privacy: .public)")
+        if hooks == nil { DiagnosticsLog.append(line) }
     }
 
     /// After a short quiet period, grab one more frame so the last bit scrolled (and any
@@ -434,7 +573,7 @@ final class ScrollingCaptureSession {
     /// Serialises captures: only one SCScreenshotManager call in flight, with a single
     /// pending follow-up so bursts of scroll events don't pile up.
     private func pump(force: Bool = false) {
-        guard !finished, !finishing, !calibrating else { return }
+        guard !finished, !finishing, !autoScrolling else { return }
         // Scrolls can arrive before the filter is built; remember them so the baseline
         // capture (fired the instant prepare() finishes) picks them up.
         guard prepared else {
@@ -471,7 +610,6 @@ final class ScrollingCaptureSession {
 
     /// Auto-scroll state for the per-capture diagnostics line.
     private var autoState: String {
-        if calibrating { return "calibrating" }
         if autoScrolling { return "running" }
         return autoEnded ? "ended" : "off"
     }
@@ -488,18 +626,23 @@ final class ScrollingCaptureSession {
     }
 
     @discardableResult
-    private func captureAndStitch(
-        predictedPoints: CGFloat, timeout: Duration = .seconds(2), stitch: Bool = true
-    ) async -> CGImage? {
+    private func captureAndStitch(predictedPoints: CGFloat, timeout: Duration = .seconds(2)) async -> CGImage? {
+        guard hooks != nil || (filter != nil && config != nil) else { return nil }
+        defer { hooks?.captureCompleted() }
+        let sessionGeneration = generation
+        guard let image = await captureImage(timeout: timeout) else { return nil }
+        guard await stitch(image, predictedPx: Int((predictedPoints * scale).rounded()),
+                           sessionGeneration: sessionGeneration) != nil else { return nil }
+        return image
+    }
+
+    /// One cursor-free frame of the region, or nil (failures are counted; the session ends
+    /// itself after a few in a row).
+    private func captureImage(timeout: Duration = .seconds(2)) async -> CGImage? {
         // Never attempt a capture before the filter/config exist (a very fast Done can
         // reach the flush before prepare() finished) — safe no-op instead of a crash.
         guard hooks != nil || (filter != nil && config != nil) else { return nil }
-        defer { hooks?.captureCompleted() }
-        // Which auto-scroll segment launched this capture — captured before the await so a
-        // slow frame that resolves after auto is toggled off/on can't feed the next segment.
         let sessionGeneration = generation
-        let capturedGeneration = autoGeneration
-        let predictedPx = Int((predictedPoints * scale).rounded())
         let image: CGImage
         do {
             if let hooks {
@@ -519,11 +662,11 @@ final class ScrollingCaptureSession {
         }
         guard !finished, generation == sessionGeneration else { return nil }
         captureFailures = 0
-        guard !finished else { return nil }
-        guard stitch else {
-            logCapture("probe", offset: 0, score: .nan)
-            return image
-        }
+        return image
+    }
+
+    /// Feeds one settled frame to the stitcher and shows what changed.
+    private func stitch(_ image: CGImage, predictedPx: Int, sessionGeneration: Int) async -> ScrollStitcher.Outcome? {
         let rebaselines = stitchState.rebaselines
         let update = await worker.add(image, predictedOffset: predictedPx)
         guard !finished, generation == sessionGeneration else { return nil }
@@ -543,27 +686,8 @@ final class ScrollingCaptureSession {
             break
         case .atCap:
             finish(keep: true, notice: .outputLimit, flush: false)
-            return nil
         }
-        // A lost alignment (`.ignored`) is neither an advance nor a stall: the stitcher
-        // re-baselines itself after two of them, and counting them as stalls would end the
-        // run mid-page at exactly the count where that recovery starts.
-        if autoScrolling, !calibrating, capturedGeneration == autoGeneration, outcome != .ignored {
-            let motion = stitchState.motion
-            if case .down = motion { autoScroller?.confirmDirection() }
-            // A strip that merely repeats the band above it means the page bottom was just
-            // stitched twice — the end, however the motion happened to classify.
-            if stitchState.tailRepeated {
-                stopAutoScroll(reachedEnd: true, reason: "tail-dup")
-            } else {
-                switch autoProgress.record(motion) {
-                case .keepScrolling: break
-                case .flipDirection: autoScroller?.flipDirection()
-                case .reachedEnd: stopAutoScroll(reachedEnd: true, reason: autoProgress.endReason)
-                }
-            }
-        }
-        return image
+        return outcome
     }
 
     // MARK: - Finish
@@ -621,8 +745,8 @@ final class ScrollingCaptureSession {
     private func teardown() {
         settleGeneration &+= 1
         autoScrolling = false
-        autoScroller?.stop()
-        autoScroller = nil
+        autoTask?.cancel()
+        autoTask = nil
         for monitor in scrollMonitors { NSEvent.removeMonitor(monitor) }
         scrollMonitors = []
         if let hooks { hooks.hide() }
@@ -636,14 +760,14 @@ final class ScrollingCaptureSession {
         if let hooks { hooks.hint(message) } else { preview.flashHint(message, warning: warning) }
     }
 
-    /// Inert auto producer for generation tests; never creates/posts an AutoScroller.
-    func resetAutoSegmentForTesting() {
+    /// Starts or stops auto-scroll as the HUD's control does.
+    func toggleAutoForTesting() { toggleAuto() }
+    var autoScrollingForTesting: Bool { autoScrolling }
+    /// Cancel, as the HUD's ×; scripted sessions only.
+    func cancelForTesting() {
         guard hooks != nil else { return }
-        autoScrolling = true
-        autoGeneration &+= 1
-        autoProgress = AutoScrollProgress()
+        finish(keep: false)
     }
-    var autoProgressForTesting: AutoScrollProgress { autoProgress }
 
     func captureNextFrameForTesting(predictedPoints: CGFloat = 0) async {
         guard hooks != nil, !finished, !finishing, prepared, !captureInFlight else { return }

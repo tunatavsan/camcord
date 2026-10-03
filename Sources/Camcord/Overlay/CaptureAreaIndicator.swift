@@ -97,7 +97,7 @@ final class CaptureAreaIndicator {
     /// The window's own corner radius to trace: the standard rounded corner for a normal
     /// window, or 0 for a window that fills a whole display (full-screen / borderless — e.g.
     /// a game — which has sharp corners).
-    private static func windowCornerRadius(forSize size: CGSize) -> CGFloat {
+    static func windowCornerRadius(forSize size: CGSize) -> CGFloat {
         let coversWholeScreen = NSScreen.screens.contains {
             abs(size.width - $0.frame.width) < 2 && abs(size.height - $0.frame.height) < 2
         }

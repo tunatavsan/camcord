@@ -197,26 +197,6 @@ struct ScrollingSessionTests {
         #expect(script.hidden == 1)
     }
 
-    @Test("a suspended capture cannot advance a replacement auto-scroll segment")
-    func staleAutoSegmentDoesNotAdvance() async {
-        let script = Script()
-        script.results = [.success(image(offset: 0)), .success(image(offset: 30))]
-        let session = ScrollingCaptureSession(region: CGRect(x: 0, y: 0, width: 40, height: 120), hooks: script.hooks)
-        let run = Task { await session.run() }
-        await waitUntil { script.calls == 1 && session.readyForCaptureForTesting }
-        session.resetAutoSegmentForTesting()
-        script.pauseCapture = true
-        let capture = Task { await session.captureNextFrameForTesting(predictedPoints: 30) }
-        await waitUntil { script.captureContinuation != nil }
-        session.resetAutoSegmentForTesting()
-        script.captureContinuation?.resume()
-        script.captureContinuation = nil
-        await capture.value
-        #expect(session.autoProgressForTesting == AutoScrollProgress())
-        script.cancel?()
-        _ = await run.value
-    }
-
     @Test("synchronous presenter cancellation resolves before preparation begins")
     func cancelOnPresentation() async {
         var prepares = 0

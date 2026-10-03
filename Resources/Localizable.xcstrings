@@ -11235,6 +11235,22 @@
           }
         }
       }
+    },
+    "Scrolling to the top…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scrolling to the top…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En üste kaydırılıyor…"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

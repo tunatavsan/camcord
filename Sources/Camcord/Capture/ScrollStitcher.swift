@@ -622,6 +622,13 @@ final class ScrollStitcher {
 
     // MARK: - Pixel helpers
 
+    /// True when `b` shows what `a` shows — the page has not moved between them (a live
+    /// caret, a fading scroll bar and anti-aliasing stay under the same limit `add` uses).
+    static func isStill(_ a: Frame, _ b: Frame, headerH: Int = 0, footerH: Int = 0) -> Bool {
+        guard a.height == b.height, a.width == b.width else { return false }
+        return regionMAD(a.sig, b.sig, from: headerH, to: a.height - footerH) <= staticLimit
+    }
+
     static func makeFrame(_ image: CGImage) -> Frame? {
         guard let sig = rowSignature(image) else { return nil }
         return Frame(image: image, sig: sig, height: image.height, width: image.width)
