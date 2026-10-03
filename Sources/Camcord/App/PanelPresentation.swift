@@ -31,6 +31,8 @@ final class PanelPresentation {
     @ObservationIgnored private var request: Task<Void, Never>?
     @ObservationIgnored private var requestedItems = [CaptureItem]()
     @ObservationIgnored private var revision: UInt64 = 0
+    /// Thumbnails outlive the panel: reopening shows them at once and loads only what is new.
+    @ObservationIgnored private var cache = [String: CGImage]()
     private(set) var visible = false
     private(set) var settings: RecordingSettings?
     private(set) var thumbnails = [String: CGImage]()
@@ -70,17 +72,43 @@ final class PanelPresentation {
         request?.cancel()
         request = nil
         requestedItems = items
-        thumbnails = [:]
-        guard !items.isEmpty else { return }
-        let token = revision, loader = loadThumbnail
+        thumbnails = Dictionary(uniqueKeysWithValues: items.compactMap { item in cache[item.id].map { (item.id, $0) } })
+        let missing = items.filter { cache[$0.id] == nil }
+        guard !missing.isEmpty else { return }
+        let token = revision
         request = Task { [weak self] in
-            for item in items {
-                let image = await loader(item)
-                guard let self, !Task.isCancelled, self.visible,
-                      self.revision == token, self.recent == items else { return }
-                if let image { self.thumbnails[item.id] = image }
+            await self?.load(missing) { [weak self] item, image in
+                guard let self, self.visible, self.revision == token, self.recent == items else { return }
+                self.thumbnails[item.id] = image
             }
         }
+    }
+
+    /// Loads in parallel, newest first, into the cache; `arrived` sees each one as it lands.
+    private func load(_ items: [CaptureItem], arrived: @escaping @MainActor (CaptureItem, CGImage) -> Void) async {
+        let loader = loadThumbnail
+        // Started in order on the main actor, so the newest is asked for first.
+        let requests = items.map { item in Task { @MainActor in (item, await loader(item)) } }
+        for request in requests {
+            let (item, image) = await request.value
+            guard !Task.isCancelled else { return }
+            guard let image else { continue }
+            cache[item.id] = image
+            arrived(item, image)
+        }
+        trimCache()
+    }
+
+    /// Keeps the cache to the captures the panel could show soon.
+    private func trimCache() {
+        let keep = Set(library?.items.prefix(Self.recentLimit * 2).map(\.id) ?? [])
+        cache = cache.filter { keep.contains($0.key) }
+    }
+
+    /// Before the panel ever opens: thumbnails for the newest captures, ready in the cache.
+    func prewarm() async {
+        guard let items = library?.items.prefix(Self.recentLimit) else { return }
+        await load(items.filter { cache[$0.id] == nil }) { _, _ in }
     }
 
     func selectSource(_ source: PanelRecordingSource, canConfigure: Bool) {

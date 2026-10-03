@@ -27,6 +27,8 @@ final class PanelController: NSObject, NSWindowDelegate {
     typealias DetachedPanelPresenter = @MainActor (_ panel: NSPanel, _ shouldFocus: Bool) -> Bool
 
     private let hostingController: NSHostingController<CapturePanelView>
+
+    private let presentation: PanelPresentation
     private let model: RecordingStateModel
     private let detachedPanelPresenter: DetachedPanelPresenter
     private var modelObservers = Set<AnyCancellable>()
@@ -62,7 +64,9 @@ final class PanelController: NSObject, NSWindowDelegate {
             }
             return panel.isVisible
         }
-        hostingController = NSHostingController(rootView: CapturePanelView(model: model, actions: actions, library: library, defaults: defaults))
+        let presentation = PanelPresentation(library: library, defaults: defaults)
+        self.presentation = presentation
+        hostingController = NSHostingController(rootView: CapturePanelView(model: model, actions: actions, presentation: presentation))
         // Windows are sized from the same state that sizes the SwiftUI view, never from
         // the host's measurements, so the panel always opens at its fixed dimension.
         hostingController.sizingOptions = []
@@ -79,6 +83,9 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
 
     var isShown: Bool { anchoredIsPresented || detachedIsPresented }
+
+    /// Thumbnails for the newest captures, ready before the panel first opens.
+    func prewarmRecent() async { await presentation.prewarm() }
 
     /// Narrow test seam for native-window lifecycle and policy assertions.
     var detachedPanelForTesting: NSPanel? { detachedPanel }

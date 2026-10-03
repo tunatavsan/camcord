@@ -44,9 +44,15 @@ struct CapturePanelView: View {
 
     init(model: RecordingStateModel, actions: PanelActions,
          library: LibraryStore? = nil, defaults: UserDefaults? = nil) {
+        self.init(model: model, actions: actions, presentation: PanelPresentation(library: library, defaults: defaults))
+    }
+
+    /// The controller owns the presentation, so it can warm the recent captures before the
+    /// panel first opens.
+    init(model: RecordingStateModel, actions: PanelActions, presentation: PanelPresentation) {
         self.model = model
         self.actions = actions
-        _context = State(initialValue: PanelPresentation(library: library, defaults: defaults))
+        _context = State(initialValue: presentation)
     }
 
     private var canConfigure: Bool { model.state == .idle && !model.isStarting && !model.isArmed }

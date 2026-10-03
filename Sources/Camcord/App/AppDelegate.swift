@@ -199,6 +199,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let panelController = PanelController(model: recordingStateModel, actions: panelActions,
                                               library: services.library, defaults: services.defaults)
         self.panelController = panelController
+        // The first open shows recent captures at once: scan the Library and warm their
+        // thumbnails at launch, off the critical path.
+        Task { @MainActor [weak services, weak panelController] in
+            try? await Task.sleep(for: .seconds(1))
+            await services?.library.refresh()
+            await panelController?.prewarmRecent()
+        }
 
         statusItemController.onOpenMainWindow = { [weak self] in self?.showMainWindow() }
         statusItemController.onOpenSettings = { [weak self] in self?.showSettingsModule() }
