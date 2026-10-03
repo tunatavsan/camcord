@@ -111,7 +111,6 @@ final class RecordingController: NSObject {
     private var startCueTask: Task<Void, Never>?
     /// Resume remains logically paused until this cue finishes. The token prevents a
     /// cancelled old task from resuming a stopped or replacement recording.
-    private var pendingResumeCue: (id: UUID, task: Task<Void, Never>)?
 
     private var accumulatedElapsed: TimeInterval = 0
     private var segmentStart: Date?
@@ -129,6 +128,9 @@ final class RecordingController: NSObject {
         let lowDiskThresholdBytes: Int64
     }
     private var activeLimits: ActiveLimits?
+    /// Whether the live recording has a microphone track: a cue played through the speakers
+    /// could reach it, so resuming stays silent then.
+    private var recordsMicrophone = false
     /// Latches once a limit fires so the 1 Hz timer can't spawn a second auto-stop.
     private var didHitLimit = false
 
@@ -515,7 +517,6 @@ final class RecordingController: NSObject {
         isTerminating = true
         cancelArmed()
         startCueTask?.cancel()
-        cancelPendingResumeCue()
         engine.cancelPendingStart()
         await performTerminationStop()
         // The audio mix runs in the background after a normal stop; on the quit path we
@@ -570,32 +571,21 @@ final class RecordingController: NSObject {
             pushUI()
             FeedbackSound.recordPause.play(in: defaults)
         case .paused:
-            guard pendingResumeCue == nil else { return }
-            let id = UUID()
-            let task = Task { @MainActor [weak self] in
-                guard let self else { return }
-                await self.finishResume(after: id)
-            }
-            pendingResumeCue = (id, task)
+            // Resuming is as immediate as pausing. Camcord's own audio is never in the system
+            // track, so the cue only waits out a recorded microphone — and then it is skipped.
+            guard !isTerminating, engine.isRecording else { return }
+            resume()
+            if !recordsMicrophone { FeedbackSound.recordResume.play(in: defaults) }
         }
     }
 
-    private func finishResume(after id: UUID) async {
-        await FeedbackSound.recordResume.playAndWait(in: defaults)
-        guard pendingResumeCue?.id == id else { return }
-        pendingResumeCue = nil
-        guard !Task.isCancelled, !isTerminating, uiState == .paused, engine.isRecording else { return }
+    private func resume() {
         engine.resume()
         microphoneHealthGraceUntilUptime = ProcessInfo.processInfo.systemUptime + 2
         segmentStart = Date()
         startElapsedTimer()
         uiState = .recording
         pushUI()
-    }
-
-    private func cancelPendingResumeCue() {
-        pendingResumeCue?.task.cancel()
-        pendingResumeCue = nil
     }
 
     // MARK: - Start
@@ -776,6 +766,7 @@ final class RecordingController: NSObject {
             // Auto-stop guards + best-effort Do Not Disturb, captured for this recording.
             let codec = settings.resolvedCodec
             let limitBytes: Int64 = codec.isProRes ? 3000 * 1024 * 1024 : 500 * 1024 * 1024
+            recordsMicrophone = settings.microphone
             activeLimits = ActiveLimits(
                 maxSeconds: settings.maxDurationMinutes > 0 ? Double(settings.maxDurationMinutes) * 60 : 0,
                 diskGuard: settings.stopWhenDiskLow,
@@ -869,7 +860,6 @@ final class RecordingController: NSObject {
     // MARK: - Stop
 
     private func stop() async {
-        cancelPendingResumeCue()
         // A second stop while the first is finalizing just waits for it.
         if let stopTask {
             await stopTask.value
@@ -936,7 +926,6 @@ final class RecordingController: NSObject {
     func handleUnexpectedStop(salvagedURL: URL?, error: Error) {
         startCueTask?.cancel()
         startCueTask = nil
-        cancelPendingResumeCue()
         MicrophoneMonitor.shared.recordingEnded()
         if recordingCameraEnabled {
             CameraPreviewMonitor.shared.recordingEnded()
