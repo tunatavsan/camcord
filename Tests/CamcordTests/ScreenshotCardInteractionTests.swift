@@ -24,8 +24,9 @@ import Testing
         func views<T: NSView>(_ type: T.Type, in view: NSView) -> [T] {
             (view as? T).map { [$0] } ?? view.subviews.flatMap { views(type, in: $0) }
         }
-        // The card stands on the window tray's frost itself, without a glass pane over it.
-        #expect(views(NSGlassEffectView.self, in: entry.host).isEmpty)
+        // The card stands on the window tray's frost itself; only its two chips are Liquid Glass.
+        let glass = views(NSGlassEffectView.self, in: entry.host)
+        #expect(glass.count == 2 && glass.allSatisfy { $0.superview is ScreenshotCardChip })
         if !NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency {
             #expect(views(TrayBlurView.self, in: entry.host).count == 1)
         }
@@ -483,9 +484,9 @@ import Testing
             if !reusedStaging { reusedStaging = true; return staging }
             return makeWindow(frame)
         }, enabled: { true })
-        var history: [ScreenshotPreviewCard.Entry] = [], edits: [String] = [], pins: [String] = []
+        var history: [ScreenshotPreviewCard.Entry] = [], edits: [String] = []
+        let pins: [String] = []  // Pinning now lives in the preview window.
         controller.onEdit = { edits.append($0.id.uuidString) }
-        controller.onPin = { pins.append($0.id.uuidString) }
         defer {
             let before = environment(); controller.hide()
             for window in windows { window.orderOut(nil); window.close() }

@@ -34,8 +34,6 @@ import UniformTypeIdentifiers
         }
     }
     var onEdit: (@MainActor (CapturedScreenshot) -> Void)?
-    /// Pins a capture from the screenshot preview.
-    var onPin: (@MainActor (CapturedScreenshot) -> Void)?
     /// Keeps a capture in the Library when screenshots are not kept by themselves.
     var onKeep: (@MainActor (CapturedScreenshot) -> Void)?
     var claimClipboardPublication: (@MainActor () -> (@MainActor () -> Bool))?
@@ -214,7 +212,6 @@ import UniformTypeIdentifiers
     }
     func openPreview(_ capture: CapturedScreenshot, on visible: CGRect) {
         preview.onEdit = onEdit
-        preview.onPin = onPin
         preview.show(capture, operations: operations, on: visible, claim: claimClipboardPublication)
     }
 }

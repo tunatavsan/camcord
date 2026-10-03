@@ -2,17 +2,15 @@ import AppKit
 import CoreImage
 import QuartzCore
 
-/// The well's backdrop, the action band's blur levels and the chips' frost, rendered once
-/// per capture off the main actor.
+/// The well's backdrop and the action band's blur levels, rendered once per capture off the main actor.
 enum ScreenshotCardBlur {
     struct Rendered: Sendable {
         let fill: CGImage?
         let levels: [CGImage]
-        /// The whole well, heavily blurred: the badge and the close button stand on it.
-        let heavy: CGImage?
     }
-    /// Gaussian sigmas, in points, of the band's stacked levels, lightest first.
-    static let levelSigmas: [CGFloat] = [3, 8, 18]
+    /// Gaussian sigmas, in points, of the band's stacked levels, lightest first: six small
+    /// steps read as one continuous, progressive blur.
+    static let levelSigmas: [CGFloat] = [1.5, 3, 5, 8, 12, 18]
     private static let context = CIContext(options: [.cacheIntermediates: false])
 
     static func render(_ image: CGImage, imageRect: CGRect, wellSize: CGSize, scale: CGFloat) async -> Rendered {
@@ -26,7 +24,7 @@ enum ScreenshotCardBlur {
         let well = CGRect(x: 0, y: 0, width: (wellSize.width * scale).rounded(), height: (wellSize.height * scale).rounded())
         guard source.extent.width > 0, source.extent.height > 0, imageRect.width > 0, imageRect.height > 0,
               well.width > 0, well.height > 0 else {
-            return Rendered(fill: nil, levels: [], heavy: nil)
+            return Rendered(fill: nil, levels: [])
         }
         // Aspect-fill the well and blur it heavily: the letterbox reads as the capture's own colour.
         let fillScale = max(well.width / source.extent.width, well.height / source.extent.height)
@@ -45,11 +43,13 @@ enum ScreenshotCardBlur {
             .transformed(by: CGAffineTransform(translationX: imageRect.minX * scale, y: imageRect.minY * scale))
         let composite = sharp.composited(over: fill).clampedToExtent()
         let band = CGRect(x: 0, y: 0, width: well.width, height: ScreenshotCardGeometry.band * scale)
+        // Like the system's materials, the blur lifts the colour a little instead of greying it.
         let levels = levelSigmas.compactMap { sigma in
-            context.createCGImage(composite.applyingGaussianBlur(sigma: sigma * scale).cropped(to: band), from: band)
+            context.createCGImage(composite.applyingGaussianBlur(sigma: sigma * scale)
+                .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 1 + 0.02 * sigma])
+                .cropped(to: band), from: band)
         }
-        let heavy = context.createCGImage(composite.applyingGaussianBlur(sigma: 18 * scale).cropped(to: well), from: well)
-        return Rendered(fill: context.createCGImage(fill, from: well), levels: levels, heavy: heavy)
+        return Rendered(fill: context.createCGImage(fill, from: well), levels: levels)
     }
 }
 
@@ -100,13 +100,10 @@ enum ScreenshotCardBlur {
     override func layout() {
         super.layout()
         veil.frame = bounds
-        // A centred group: buttons spread across a card but stay together on a wide preview.
-        let count = CGFloat(max(1, buttons.count))
-        let slot = min(64, bounds.width / count)
-        let start = (bounds.width - slot * count) / 2
-        let side: CGFloat = 38
+        // From the left, one even step apart, however many buttons there are.
+        let side: CGFloat = 38, step: CGFloat = 46
         for (index, button) in buttons.enumerated() {
-            button.frame = CGRect(x: (start + CGFloat(index) * slot + (slot - side) / 2).rounded(), y: 7, width: side, height: side)
+            button.frame = CGRect(x: 8 + CGFloat(index) * step, y: 7, width: side, height: side)
         }
     }
 
@@ -144,9 +141,9 @@ private final class ScreenshotCardVeil: NSView {
         rise.colors = [NSColor.black.cgColor, NSColor.black.cgColor, NSColor.clear.cgColor]
         rise.locations = [0, 0.5, 1]
         scrim.startPoint = CGPoint(x: 0.5, y: 0); scrim.endPoint = CGPoint(x: 0.5, y: 1)
-        scrim.colors = [NSColor.black.withAlphaComponent(0.36).cgColor, NSColor.black.withAlphaComponent(0.14).cgColor,
+        scrim.colors = [NSColor.black.withAlphaComponent(0.3).cgColor, NSColor.black.withAlphaComponent(0.12).cgColor,
                         NSColor.clear.cgColor]
-        scrim.locations = [0, 0.45, 1]
+        scrim.locations = [0, 0.4, 0.9]
         veil.addSublayer(scrim)
         layer?.addSublayer(veil)
     }
@@ -157,7 +154,7 @@ private final class ScreenshotCardVeil: NSView {
     /// Heavier blur toward the bottom: each level fades out higher than the one above it.
     func setLevels(_ images: [CGImage]) {
         levels.forEach { $0.removeFromSuperlayer() }
-        let stops: [(solid: Double, clear: Double)] = [(0.45, 0.95), (0.3, 0.75), (0.12, 0.55)]
+        let stops: [(solid: Double, clear: Double)] = [(0.7, 1), (0.58, 0.88), (0.46, 0.76), (0.34, 0.64), (0.22, 0.52), (0.1, 0.4)]
         levels = zip(images, stops).map { image, stop in
             let level = CALayer()
             level.contents = image
@@ -464,42 +461,34 @@ private final class ScreenshotCardVeil: NSView {
     }
 }
 
-/// A small chip over the capture, frosted with the well's own heavy blur and a dark veil.
+/// A small Liquid Glass chip over the capture: the image shows through and bends at its rim.
 @MainActor class ScreenshotCardChip: NSView {
+    private let glass = NSGlassEffectView()
+    private let face = NSView()
+    /// The chip's own drawing (symbol, label) sits on the glass.
     let clip = CALayer()
-    private let frost = CALayer()
-    private let veil = CALayer()
-    private var wellSize: CGSize = .zero
+    private static let veil: CGFloat = 0.16
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        clip.masksToBounds = true
-        clip.cornerCurve = .continuous
-        veil.backgroundColor = NSColor.black.withAlphaComponent(0.34).cgColor
-        clip.addSublayer(frost)
-        clip.addSublayer(veil)
-        layer?.addSublayer(clip)
+        glass.style = .clear
+        glass.tintColor = NSColor.black.withAlphaComponent(Self.veil)
+        face.wantsLayer = true
+        face.layer?.addSublayer(clip)
+        glass.contentView = face
+        addSubview(glass)
     }
     required init?(coder: NSCoder) { nil }
-    func setBackdrop(_ image: CGImage?, wellSize: CGSize) {
-        frost.contents = image
-        self.wellSize = wellSize
-        needsLayout = true
+    /// Hover darkens the glass a little.
+    func setVeil(active: Bool) {
+        glass.tintColor = NSColor.black.withAlphaComponent(active ? Self.veil + 0.18 : Self.veil)
     }
-    func setVeil(_ alpha: CGFloat) {
-        CATransaction.begin(); CATransaction.setAnimationDuration(0.15)
-        veil.backgroundColor = NSColor.black.withAlphaComponent(alpha).cgColor
-        CATransaction.commit()
-    }
-    override func setFrameOrigin(_ newOrigin: NSPoint) { super.setFrameOrigin(newOrigin); needsLayout = true }
     override func layout() {
         super.layout()
+        glass.frame = bounds
+        glass.cornerRadius = min(bounds.width, bounds.height) / 2
         CATransaction.begin(); CATransaction.setDisableActions(true)
         clip.frame = bounds
-        clip.cornerRadius = min(bounds.width, bounds.height) / 2
-        veil.frame = bounds
-        // The frost is the whole well's blur, placed so it lines up with the capture beneath.
-        frost.frame = CGRect(x: -frame.minX, y: -frame.minY, width: wellSize.width, height: wellSize.height)
         CATransaction.commit()
     }
     /// Fades in and settles from just above; hidden chips ignore the mouse.
@@ -632,8 +621,8 @@ private final class ScreenshotCardVeil: NSView {
         tracking = area; addTrackingArea(area)
     }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func mouseEntered(with event: NSEvent) { setVeil(0.55) }
-    override func mouseExited(with event: NSEvent) { setVeil(0.34) }
+    override func mouseEntered(with event: NSEvent) { setVeil(active: true) }
+    override func mouseExited(with event: NSEvent) { setVeil(active: false) }
     override func mouseDown(with event: NSEvent) {}
     override func mouseUp(with event: NSEvent) {
         if bounds.contains(convert(event.locationInWindow, from: nil)) { action?() }

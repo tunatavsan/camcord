@@ -177,15 +177,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // The shared main host presents the actual pending-unsaved confirmation.
             self.mainWindowController?.show(module: .edit)
         }
-        screenshotPreviewCard.onPin = { [weak self, weak services] capture in
-            guard let services else { return }
-            do {
-                try services.editor.pins.pin(EditorRendered(image: capture.image, pointSize: capture.pointSize))
-            } catch {
-                self?.hudToast?.show(text: error.localizedDescription, systemSymbol: "exclamationmark.triangle",
-                                     tint: Theme.Palette.warn.ns, respectsSetting: false)
-            }
-        }
         let deliveryFanout = ScreenshotDeliveryFanout(
             ingest: { [weak services] event in services?.library.ingest(event) },
             ready: { [weak screenshotPreviewCard] capture in screenshotPreviewCard?.show(capture: capture) },

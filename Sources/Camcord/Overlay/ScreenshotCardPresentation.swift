@@ -248,7 +248,11 @@ private final class ScreenshotCardContent: NSView {
     private let backdrop = NSView()
     private let fill = CALayer()
     private let dim = CALayer()
+    private let capture: CapturedScreenshot
+    private var renderedSize: CGSize = .zero
+    private var renderGeneration = 0
     init(capture: CapturedScreenshot, size: CGSize) {
+        self.capture = capture
         super.init(frame: CGRect(origin: .zero, size: size))
         wantsLayer = true
         layer?.cornerRadius = Theme.Radius.well
@@ -268,11 +272,21 @@ private final class ScreenshotCardContent: NSView {
         lift.shadowColor = NSColor.black.withAlphaComponent(0.35); lift.shadowBlurRadius = 6; lift.shadowOffset = CGSize(width: 0, height: -1)
         imageView.shadow = lift
         for view in [backdrop, imageView, band, badge, closeButton] { addSubview(view) }
+        rerender()
+    }
+    /// Renders the blurs for the well's current size; a resized preview calls it again.
+    func rerender() {
+        let size = bounds.size
+        guard size != renderedSize, size.width > 0, size.height > 0 else { return }
+        renderedSize = size
+        renderGeneration += 1
+        let generation = renderGeneration, capture = capture
         let geometry = ScreenshotCardGeometry(sourceSize: capture.pointSize, in: size)
         let scale = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
         Task { [weak self] in
             let rendered = await ScreenshotCardBlur.render(capture.image, imageRect: geometry.imageRect, wellSize: size, scale: scale)
-            self?.apply(rendered)
+            guard let self, self.renderGeneration == generation else { return }
+            self.apply(rendered)
         }
     }
     required init?(coder: NSCoder) { nil }
@@ -287,8 +301,6 @@ private final class ScreenshotCardContent: NSView {
         fill.opacity = rendered.fill == nil ? 0 : 1
         CATransaction.commit()
         band.setBlurLevels(rendered.levels)
-        badge.setBackdrop(rendered.heavy, wellSize: bounds.size)
-        closeButton.setBackdrop(rendered.heavy, wellSize: bounds.size)
     }
     override func layout() {
         super.layout()
@@ -312,6 +324,8 @@ private final class ScreenshotCardContent: NSView {
     var preparedPNG: Data?
     /// A short click: opens the screenshot preview.
     var open: (() -> Void)?
+    /// The preview's capture moves its window like a title bar instead of dragging the file out.
+    var movesWindow = false
     /// When set, a rightward drag dismisses instead of dragging the file out:
     /// (translation, velocity, ended, cancelled). Every other direction drags the file.
     var swipe: ((CGPoint, CGPoint, Bool, Bool) -> Void)?
@@ -339,6 +353,7 @@ private final class ScreenshotCardContent: NSView {
     }
     override func mouseDown(with event: NSEvent) {
         guard canInteract() else { downPoint = nil; return }
+        if movesWindow { window?.performDrag(with: event); return }
         let location = convert(event.locationInWindow, from: nil)
         downPoint = location; gesture = .undecided; velocity = .zero
         lastSample = (location, event.timestamp)
