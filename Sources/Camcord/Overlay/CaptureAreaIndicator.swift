@@ -173,6 +173,9 @@ final class CaptureAreaIndicator {
         onTogglePreview: (() -> Void)? = nil,
         onStop: @escaping () -> Void
     ) {
+        // A hub handed over at Başlat stays on screen and simply takes the recording's controls.
+        let kept = handingOff ? hub : nil
+        if kept != nil { hub = nil }
         hide()
         guard let primaryHeight = NSScreen.screens.first?.frame.height else { return }
         let cgBounds = Self.windowBounds(windowID) ?? initialCGRect
@@ -186,15 +189,25 @@ final class CaptureAreaIndicator {
         } else {
             beginRecordingFrame()
         }
-        hub = makeHub(
-            mode: mode,
-            target: target,
-            insideWindow: true,
-            onStop: onStop,
-            onPauseResume: onPauseResume,
-            onTogglePreview: onTogglePreview,
-            onCancel: onCancel
-        )
+        if let kept {
+            kept.onStop = onStop
+            kept.onPauseResume = onPauseResume
+            kept.onTogglePreview = onTogglePreview
+            kept.onCancel = onCancel
+            kept.morph(to: mode)
+            kept.updateWindow(target, on: relevantScreen(for: target))
+            hub = kept
+        } else {
+            hub = makeHub(
+                mode: mode,
+                target: target,
+                insideWindow: true,
+                onStop: onStop,
+                onPauseResume: onPauseResume,
+                onTogglePreview: onTogglePreview,
+                onCancel: onCancel
+            )
+        }
         applyFrameVisibility(animated: true)
         followWindowID = windowID
         lastFollowedBounds = cgBounds
@@ -224,7 +237,24 @@ final class CaptureAreaIndicator {
         }
     }
 
+    /// Başlat: the armed hub stays and turns into the recording one while the stream starts;
+    /// its controls answer nothing until the recording is live.
+    private var handingOff = false
+    func beginHandoff(elapsed: String) {
+        guard let hub else { return }
+        handingOff = true
+        hub.onStop = nil; hub.onCancel = nil; hub.onPauseResume = nil
+        hub.morph(to: .recording)
+        hub.setElapsed(elapsed)
+    }
+    /// The start failed or recorded something else: the handed-over hub leaves.
+    func endHandoff() {
+        guard handingOff else { return }
+        hide()
+    }
+
     func hide() {
+        handingOff = false
         displayLink?.invalidate()
         displayLink = nil
         displayLinkProxy = nil

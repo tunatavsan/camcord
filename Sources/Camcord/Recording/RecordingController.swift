@@ -398,7 +398,8 @@ final class RecordingController: NSObject {
         guard let requestedTarget = armed, !isTerminating, !isStarting, requireStudioLayersReady() else { return }
         isStarting = true
         defer { isStarting = false }
-        clearArmedControls()
+        // The armed hub becomes the recording one in place instead of leaving and coming back.
+        clearArmedControls(handingOff: true)
         armed = nil
         onArmedChange?(false)
         // A display-sized pick (a fullscreen game) records the DISPLAY instead: window-surface
@@ -413,6 +414,7 @@ final class RecordingController: NSObject {
             target = .display(display, scale: scale(for: display), excluding: ownApp)
         }
         await begin(target: target, convertsFullscreen: false)
+        indicator.endHandoff()
         if uiState == .idle { CameraOverlayController.shared.recordingEnded() }
     }
 
@@ -436,14 +438,14 @@ final class RecordingController: NSObject {
         return true
     }
 
-    private func clearArmedControls() {
+    private func clearArmedControls(handingOff: Bool = false) {
         armedPoll?.invalidate()
         armedPoll = nil
         if let armedEscapeMonitor { NSEvent.removeMonitor(armedEscapeMonitor) }
         armedEscapeMonitor = nil
         if let armedEscapeLocalMonitor { NSEvent.removeMonitor(armedEscapeLocalMonitor) }
         armedEscapeLocalMonitor = nil
-        indicator.hide()
+        if handingOff { indicator.beginHandoff(elapsed: Self.formatElapsed(0)) } else { indicator.hide() }
     }
 
     /// The display whose frame the window covers (±2pt), either at point size or at the

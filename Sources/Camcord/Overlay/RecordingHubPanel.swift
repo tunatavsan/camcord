@@ -222,6 +222,8 @@ final class RecordingHubPanel {
     /// Fires as the pointer arrives on and leaves the hub — the recording frame rides on
     /// this, so hovering the hub is what reveals it.
     var onHoverChange: ((Bool) -> Void)?
+    /// Where a newly shown hub flies in from — the status item — so the owner sees where it lands.
+    static var arrivalOrigin: (@MainActor () -> CGPoint?)?
 
     private let panel: NSPanel
     private let view: RecordingHubView
@@ -347,13 +349,41 @@ final class RecordingHubPanel {
         refreshPreviewState()
         refreshElevation()
         present(panel)
-        // It arrives the way the panel leaves: a short drop and a fade, at the display's rate.
-        if let layer = view.layer, !Self.reducesMotion {
-            let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0; fade.toValue = 1; fade.duration = 0.2
+        arrive()
+    }
+
+    /// The first appearance: out of the status item and onto the dock on the released
+    /// spring, fading in, at the display's rate — so the owner sees where the hub lives.
+    private func arrive() {
+        guard !Self.reducesMotion, let layer = view.layer else { return }
+        let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0; fade.toValue = 1; fade.duration = 0.22
+        fade.preferFullRefreshRate(on: panel.screen)
+        layer.add(fade, forKey: "hub-arrive-fade")
+        guard let origin = Self.arrivalOrigin?(), NSScreen.screens.contains(where: { $0.frame.contains(origin) }) else {
             let drop = CASpringAnimation.card(keyPath: "transform.translation.y", from: 10, to: 0, response: 0.4, dampingRatio: 0.78)
-            fade.preferFullRefreshRate(on: panel.screen); drop.preferFullRefreshRate(on: panel.screen)
-            layer.add(fade, forKey: "hub-arrive-fade"); layer.add(drop, forKey: "hub-arrive-drop")
+            drop.preferFullRefreshRate(on: panel.screen)
+            layer.add(drop, forKey: "hub-arrive-drop")
+            return
         }
+        let target = dock.anchor(of: capsule)
+        capsule = dock.rect(size: capsule.size, anchoredAt: origin)
+        placeWindow()
+        settle = (target, .zero, hypot(target.x - origin.x, target.y - origin.y))
+        startMotion()
+    }
+
+    /// Becomes another mode in place — armed into recording at Başlat — with a soft crossfade
+    /// instead of leaving and coming back.
+    func morph(to mode: RecordingHubMode) {
+        guard mode != self.mode else { return }
+        if !Self.reducesMotion, let layer = view.layer {
+            let fade = CATransition()
+            fade.type = .fade
+            fade.duration = 0.38
+            fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            layer.add(fade, forKey: "hub-morph")
+        }
+        setMode(mode)
     }
 
     func hide() {
@@ -486,10 +516,12 @@ final class RecordingHubPanel {
         view.progress = expansion.progress
     }
 
-    /// The window is the OPEN capsule's size and only ever moves: opening and closing are a
-    /// layer change inside it at the display's rate, never a window resize per frame.
+    /// The window is the widest OPEN capsule's size (armed or recording) and only ever moves:
+    /// opening, closing and the Başlat morph are layer changes inside it, never a resize.
     private func placeWindow() {
-        let open = RecordingHubLayout.size(mode: mode, progress: 1, growth: dock.growth)
+        let open = CGSize(width: [RecordingHubMode.armed, .recording].map {
+            RecordingHubLayout.expandedWidth(mode: $0, growth: dock.growth)
+        }.max() ?? 0, height: RecordingHubLayout.disc)
         let anchor = dock.anchor(of: capsule)
         let full = dock.rect(size: open, anchoredAt: anchor)
         let inset = RecordingHubLayout.shadowInset

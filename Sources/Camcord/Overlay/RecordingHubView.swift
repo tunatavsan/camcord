@@ -54,7 +54,7 @@ enum RecordingHubLayout {
     static let button: CGFloat = 36
     static let dividerZone: CGFloat = 9
     static let meterZone: CGFloat = 30
-    static let startLabelZone: CGFloat = 58
+    static let startLabelZone: CGFloat = 68
     static let trailing: CGFloat = 6
     /// The panel is grown by this on every side so the hub's own shadow has room inside
     /// it; the capsule itself is `bounds` inset by the same amount.
@@ -210,8 +210,7 @@ final class RecordingHubView: NSView {
     var previewVisible = false {
         didSet {
             guard previewVisible != oldValue else { return }
-            chips[.preview]?.setSymbol(previewVisible ? "video.fill" : "video.slash.fill",
-                                       color: previewVisible ? .white : NSColor.white.withAlphaComponent(0.55))
+            chips[.preview]?.setSymbol(previewVisible ? "video.fill" : "video.slash.fill", color: .white)
             rebuildAccessibility()
         }
     }
@@ -238,7 +237,7 @@ final class RecordingHubView: NSView {
     private var focus: RecordingHubItem?
     private var tracking: NSTrackingArea?
     /// Glass tints: dark for every chip, the record red for stop and Başlat.
-    private static let neutral = NSColor.black.withAlphaComponent(0.3)
+    private static let neutral = NSColor.black.withAlphaComponent(0.18)
     private static let red = Theme.Palette.record.ns.withAlphaComponent(0.62)
 
     override init(frame frameRect: NSRect) {
@@ -332,10 +331,9 @@ final class RecordingHubView: NSView {
             case .stop:
                 chips[item] = HubChip(kind: .button, symbol: "stop.fill", tint: Self.red)
             case .preview:
-                chips[item] = HubChip(kind: .button, symbol: previewVisible ? "video.fill" : "video.slash.fill", tint: Self.neutral,
-                                      symbolColor: previewVisible ? .white : NSColor.white.withAlphaComponent(0.55))
+                chips[item] = HubChip(kind: .button, symbol: previewVisible ? "video.fill" : "video.slash.fill", tint: Self.neutral)
             case .cancel:
-                chips[item] = HubChip(kind: .button, symbol: "xmark", tint: Self.neutral, symbolColor: NSColor.white.withAlphaComponent(0.8))
+                chips[item] = HubChip(kind: .button, symbol: "xmark", tint: Self.neutral)
             case .divider, .micLevel:
                 break
             }
@@ -560,7 +558,6 @@ private final class HubContent: NSView {
     private let ring = CALayer()
     private let tint: NSColor
     private var focus: Bool?
-    private static let raised = CATransform3DConcat(CATransform3DMakeScale(1.16, 1.16, 1), CATransform3DMakeTranslation(0, 1.5, 0))
 
     init(kind: Kind, symbol: String?, tint: NSColor, symbolColor: NSColor = .white) {
         self.kind = kind
@@ -603,8 +600,8 @@ private final class HubContent: NSView {
             label.font = Theme.Font.ns.mono(13, weight: .semibold)
             label.fontSize = 13
         } else {
-            label.font = Theme.Font.ns.text(13, weight: .semibold)
-            label.fontSize = 13
+            label.font = Theme.Font.ns.text(14, weight: .semibold)
+            label.fontSize = 14
         }
         if let symbol { setSymbol(symbol, color: symbolColor) }
     }
@@ -642,6 +639,9 @@ private final class HubContent: NSView {
         glass.cornerRadius = min(bounds.width, bounds.height) / 2
         CATransaction.begin(); CATransaction.setDisableActions(true)
         face.layer?.cornerRadius = min(bounds.width, bounds.height) / 2
+        layer?.masksToBounds = false
+        layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: min(bounds.width, bounds.height) / 2,
+                                   cornerHeight: min(bounds.width, bounds.height) / 2, transform: nil)
         let iconBox: CGRect
         switch kind {
         case .button:
@@ -657,7 +657,7 @@ private final class HubContent: NSView {
             label.frame = CGRect(x: 26, y: (bounds.height - 17) / 2, width: bounds.width - 30, height: 17)
         case .start:
             iconBox = CGRect(x: 2, y: 0, width: bounds.height, height: bounds.height)
-            label.frame = CGRect(x: iconBox.maxX - 2, y: (bounds.height - 17) / 2, width: bounds.width - iconBox.maxX, height: 17)
+            label.frame = CGRect(x: iconBox.maxX - 2, y: (bounds.height - 18) / 2, width: bounds.width - iconBox.maxX, height: 18)
         }
         press.frame = iconBox
         lift.frame = press.bounds
@@ -665,30 +665,36 @@ private final class HubContent: NSView {
         CATransaction.commit()
     }
 
-    /// Hover: the symbol rises, grows and glows; a sibling in focus steps this one back.
+    /// Hover blooms like the panel's Record, Start and Open: the symbol swells a little on a
+    /// spring and the chip glows in its own colour. Nothing rises and nothing steps back.
     func setFocus(_ focus: Bool?, screen: NSScreen?) {
-        guard focus != self.focus else { return }
-        self.focus = focus
         let lifted = focus == true
+        let was = self.focus == true
+        self.focus = focus
+        guard lifted != was, let layer else { return }
+        let glowColor = tint.alphaComponent > 0.5 ? Theme.Palette.record.ns : NSColor.white
         CATransaction.begin(); CATransaction.setDisableActions(true)
         let from = lift.presentation()?.transform ?? lift.transform
-        lift.transform = lifted ? Self.raised : CATransform3DIdentity
-        let rise = CASpringAnimation.card(keyPath: "transform", from: NSValue(caTransform3D: from),
-                                          to: NSValue(caTransform3D: lift.transform), response: 0.32, dampingRatio: lifted ? 0.6 : 0.85)
-        rise.preferFullRefreshRate(on: screen)
-        lift.add(rise, forKey: "hub-lift")
-        let fromGlow = icon.presentation()?.shadowOpacity ?? icon.shadowOpacity
-        icon.shadowOpacity = lifted ? 0.8 : 0
+        lift.transform = lifted ? CATransform3DMakeScale(1.14, 1.14, 1) : CATransform3DIdentity
+        let swell = CASpringAnimation.card(keyPath: "transform", from: NSValue(caTransform3D: from),
+                                           to: NSValue(caTransform3D: lift.transform), response: 0.3, dampingRatio: lifted ? 0.55 : 0.8)
+        swell.preferFullRefreshRate(on: screen)
+        lift.add(swell, forKey: "hub-swell")
+        layer.shadowColor = glowColor.cgColor
+        layer.shadowRadius = 10
+        layer.shadowOffset = .zero
+        let fromGlow = layer.presentation()?.shadowOpacity ?? layer.shadowOpacity
+        layer.shadowOpacity = lifted ? 0.6 : 0
         let glow = CABasicAnimation(keyPath: "shadowOpacity")
-        glow.fromValue = fromGlow; glow.toValue = icon.shadowOpacity; glow.duration = 0.18
-        icon.add(glow, forKey: "hub-glow")
-        let fromDim = lift.presentation()?.opacity ?? lift.opacity
-        lift.opacity = focus == false ? 0.5 : 1
-        let dim = CABasicAnimation(keyPath: "opacity")
-        dim.fromValue = fromDim; dim.toValue = lift.opacity; dim.duration = 0.18
-        lift.add(dim, forKey: "hub-dim")
+        glow.fromValue = fromGlow; glow.toValue = layer.shadowOpacity; glow.duration = lifted ? 0.16 : 0.22
+        glow.preferFullRefreshRate(on: screen)
+        layer.add(glow, forKey: "hub-glow")
+        let fromIcon = icon.presentation()?.shadowOpacity ?? icon.shadowOpacity
+        icon.shadowOpacity = lifted ? 0.7 : 0
+        let iconGlow = CABasicAnimation(keyPath: "shadowOpacity")
+        iconGlow.fromValue = fromIcon; iconGlow.toValue = icon.shadowOpacity; iconGlow.duration = 0.16
+        icon.add(iconGlow, forKey: "hub-icon-glow")
         CATransaction.commit()
-        glass.tintColor = lifted ? tint.withAlphaComponent(min(1, tint.alphaComponent + 0.14)) : tint
     }
 
     func setPressed(_ down: Bool, screen: NSScreen?) {
