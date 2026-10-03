@@ -475,13 +475,24 @@ final class RecordingHubPanel {
     private func applyGeometry() {
         let size = RecordingHubLayout.size(mode: mode, progress: expansion.progress, growth: dock.growth)
         capsule = clamped(dock.rect(size: size, anchoredAt: dock.anchor(of: capsule)))
+        placeWindow()
+        view.progress = expansion.progress
+    }
+
+    /// The window is the OPEN capsule's size and only ever moves: opening and closing are a
+    /// layer change inside it at the display's rate, never a window resize per frame.
+    private func placeWindow() {
+        let open = RecordingHubLayout.size(mode: mode, progress: 1, growth: dock.growth)
+        let anchor = dock.anchor(of: capsule)
+        let full = dock.rect(size: open, anchoredAt: anchor)
         let inset = RecordingHubLayout.shadowInset
-        let frame = capsule.insetBy(dx: -inset, dy: -inset)
-        if panel.frame != frame {
+        let frame = full.insetBy(dx: -inset, dy: -inset)
+        if panel.frame.size != frame.size {
             panel.setFrame(frame, display: false)
             view.frame = CGRect(origin: .zero, size: frame.size)
+        } else if panel.frame.origin != frame.origin {
+            panel.setFrameOrigin(frame.origin)
         }
-        view.progress = expansion.progress
     }
 
     private func clamped(_ rect: CGRect) -> CGRect {
@@ -520,8 +531,7 @@ final class RecordingHubPanel {
             capsule = clamped(start.capsule.offsetBy(dx: point.x - start.point.x,
                                                      dy: point.y - start.point.y))
             sampleVelocity(at: point, time: time)
-            let inset = RecordingHubLayout.shadowInset
-            panel.setFrameOrigin(capsule.insetBy(dx: -inset, dy: -inset).origin)
+            placeWindow()
             if phase == .ended {
                 dragStart = nil
                 dragSample = nil

@@ -178,21 +178,23 @@ struct RecordingHubTests {
 
     // MARK: - Layout
 
-    @Test("collapsed is a 44 pt disc holding the identity cell")
+    @Test("collapsed is the identity pill: the time while recording, Başlat while armed")
     func collapsedDisc() {
         for mode in [RecordingHubMode.recording, .paused, .armed] {
-            #expect(RecordingHubLayout.size(mode: mode, progress: 0) == CGSize(width: 44, height: 44))
+            #expect(RecordingHubLayout.size(mode: mode, progress: 0)
+                == CGSize(width: RecordingHubLayout.collapsedWidth(mode: mode), height: 44))
         }
+        #expect(RecordingHubLayout.collapsedWidth(mode: .recording) == RecordingHubLayout.timePill)
         #expect(RecordingHubLayout.identity(mode: .recording) == .elapsed)
         #expect(RecordingHubLayout.identity(mode: .paused) == .elapsed)
         #expect(RecordingHubLayout.identity(mode: .armed) == .start)
         // The capsule is wider than the disc in both modes, and grows monotonically.
         for mode in [RecordingHubMode.recording, .armed] {
             let expanded = RecordingHubLayout.expandedWidth(mode: mode)
-            #expect(expanded > RecordingHubLayout.disc)
+            let collapsed = RecordingHubLayout.collapsedWidth(mode: mode)
+            #expect(expanded > collapsed)
             #expect(RecordingHubLayout.width(mode: mode, progress: 1) == expanded)
-            #expect(RecordingHubLayout.width(mode: mode, progress: 0.5)
-                == RecordingHubLayout.disc + (expanded - RecordingHubLayout.disc) / 2)
+            #expect(RecordingHubLayout.width(mode: mode, progress: 0.5) == collapsed + (expanded - collapsed) / 2)
             #expect(RecordingHubLayout.width(mode: mode, progress: 2) == expanded)
         }
     }
@@ -235,13 +237,13 @@ struct RecordingHubTests {
         }
     }
 
-    @Test("the recording hub offers pause, stop, the camera eye and a mic level; armed offers Başlat and ×")
+    @Test("the recording hub offers pause, stop, the camera and a mic level; armed offers Başlat, × and the camera")
     func itemsPerMode() {
         #expect(RecordingHubLayout.items(mode: .recording) == [.elapsed, .divider, .pause, .stop, .preview, .micLevel])
         #expect(RecordingHubLayout.items(mode: .paused) == RecordingHubLayout.items(mode: .recording))
-        #expect(RecordingHubLayout.items(mode: .armed) == [.start, .divider, .cancel])
+        #expect(RecordingHubLayout.items(mode: .armed) == [.start, .divider, .cancel, .preview])
         #expect(RecordingHubLayout.items(mode: .recording).filter(\.isControl) == [.pause, .stop, .preview])
-        #expect(RecordingHubLayout.items(mode: .armed).filter(\.isControl) == [.start, .cancel])
+        #expect(RecordingHubLayout.items(mode: .armed).filter(\.isControl) == [.start, .cancel, .preview])
         #expect(!RecordingHubItem.elapsed.isControl)
         #expect(!RecordingHubItem.divider.isControl)
         #expect(!RecordingHubItem.micLevel.isControl)

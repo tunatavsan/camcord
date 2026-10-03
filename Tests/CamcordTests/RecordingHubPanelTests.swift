@@ -18,12 +18,12 @@ struct RecordingHubPanelTests {
         return defaults
     }
 
-    /// The identity disc's centre, in screen coordinates.
+    /// The identity pill's centre, in screen coordinates.
     private func discCenter(_ hub: RecordingHubPanel) throws -> CGFloat {
         let view = hub.viewForTesting
         let identity = RecordingHubLayout.identity(mode: view.mode)
         let cell = try #require(view.cells.first { $0.item == identity })
-        return hub.panelForTesting.frame.minX + cell.rect.minX + RecordingHubLayout.disc / 2
+        return hub.panelForTesting.frame.minX + cell.rect.midX
     }
 
     @Test("at top-centre the disc stays on the dock's centre, open or closed, before and after a drag and drop",
@@ -36,7 +36,7 @@ struct RecordingHubPanelTests {
         let dockCenter = RecordingHubDock.topCenter.rect(size: CGSize(width: 44, height: 44), in: area).midX
 
         // Collapsed: a 44 pt disc on the dock's centre.
-        #expect(hub.capsuleForTesting.width == RecordingHubLayout.disc)
+        #expect(hub.capsuleForTesting.width == RecordingHubLayout.collapsedWidth(mode: hub.viewForTesting.mode))
         #expect(abs(hub.capsuleForTesting.midX - dockCenter) <= 1)
         #expect(abs(try discCenter(hub) - dockCenter) <= 1)
 
@@ -62,7 +62,7 @@ struct RecordingHubPanelTests {
         // Close: back to the disc, still on the dock's centre.
         hub.setHoveredForTesting(false)
         hub.settleForTesting()
-        #expect(hub.capsuleForTesting.width == RecordingHubLayout.disc)
+        #expect(hub.capsuleForTesting.width == RecordingHubLayout.collapsedWidth(mode: hub.viewForTesting.mode))
         #expect(abs(hub.capsuleForTesting.midX - dockCenter) <= 1)
         #expect(abs(try discCenter(hub) - dockCenter) <= 1)
         hub.hide()
@@ -91,7 +91,7 @@ struct RecordingHubPanelTests {
         hub.expireHoverGraceForTesting()
         hub.advanceMotionForTesting(seconds: 10)
 
-        #expect(hub.capsuleForTesting.width == RecordingHubLayout.disc)
+        #expect(hub.capsuleForTesting.width == RecordingHubLayout.collapsedWidth(mode: hub.viewForTesting.mode))
         #expect(abs(hub.capsuleForTesting.midX - dockCenter) <= 1)
         #expect(abs(try discCenter(hub) - dockCenter) <= 1)
         hub.hide()
@@ -166,7 +166,7 @@ struct RecordingHubPanelTests {
             let width = RecordingHubLayout.expandedWidth(mode: mode, growth: .centered)
             let capsule = CGRect(x: center - width / 2, y: 100 - 22, width: width, height: 44)
             let identity = cells.first { $0.item == RecordingHubLayout.identity(mode: mode) }
-            #expect(identity?.rect.minX == center - RecordingHubLayout.disc / 2)
+            #expect(identity?.rect.midX == center)
             for cell in cells {
                 #expect(capsule.contains(cell.rect))
                 if cell.item.isControl {
@@ -197,39 +197,35 @@ struct RecordingHubPanelTests {
         }
     }
 
-    @Test("the hub is Liquid Glass: one dark tinted glass capsule that follows the spring, never dimmed at rest")
-    func glassSurface() throws {
+    @Test("the hub is a tray capsule carrying Liquid Glass chips, and opening never resizes its window")
+    func traySurface() throws {
         _ = NSApplication.shared
         let hub = RecordingHubPanel(defaults: try freshDefaults(), panelPresenter: { _ in })
         hub.showForTesting(mode: .recording, area: area)
         let view = hub.viewForTesting
-        let glass = view.glass
-        #expect(glass.superview === view)
-        #expect(glass.style == .regular)
-        #expect(glass.tintColor == RecordingHubView.glassTint)
+        func views<T: NSView>(_ type: T.Type, in root: NSView) -> [T] {
+            ((root as? T).map { [$0] } ?? []) + root.subviews.flatMap { views(type, in: $0) }
+        }
         #expect(view.appearance?.name == .darkAqua)
-
-        // Idle, not hovered: fully opaque.
+        #expect(views(TraySurface.self, in: view).count == 1)
+        // The time disc, pause, stop and the camera eye are each a glass chip.
+        #expect(views(HubChip.self, in: view).count == 4)
         #expect(hub.panelForTesting.alphaValue == 1)
-        #expect(glass.frame == view.capsuleRect)
-        #expect(glass.cornerRadius == RecordingHubLayout.disc / 2)
+        let windowSize = hub.panelForTesting.frame.size
 
-        // The springs now run tick by tick; the window server rounds the panel's frame to
-        // whole points, so the view (and its glass) can trail the exact width by a sub-pixel.
         hub.setHoveredForTesting(true)
         hub.settleForTesting()
-        #expect(glass.frame == view.capsuleRect)
-        #expect(abs(glass.frame.width - RecordingHubLayout.expandedWidth(mode: .recording, growth: .centered)) < 0.5)
-        #expect(hub.panelForTesting.alphaValue == 1)
+        #expect(hub.panelForTesting.frame.size == windowSize)
+        #expect(abs(view.capsuleRect.width - RecordingHubLayout.expandedWidth(mode: .recording, growth: .centered)) < 0.5)
 
         hub.setHoveredForTesting(false)
         hub.settleForTesting()
-        #expect(glass.frame == view.capsuleRect)
-        #expect(abs(glass.frame.width - RecordingHubLayout.disc) < 0.5)
-        #expect(hub.panelForTesting.alphaValue == 1)
-        // Hit testing still belongs to the hub view, not the glass it hosts.
+        #expect(hub.panelForTesting.frame.size == windowSize)
+        #expect(abs(view.capsuleRect.width - RecordingHubLayout.collapsedWidth(mode: .recording)) < 0.5)
+        // Hit testing belongs to the hub view, and only inside the capsule as it is now.
         let center = CGPoint(x: view.frame.midX, y: view.frame.midY)
         #expect(view.hitTest(center) === view)
+        #expect(view.hitTest(CGPoint(x: view.frame.minX + 2, y: view.frame.midY)) == nil)
         hub.hide()
     }
 

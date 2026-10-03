@@ -109,8 +109,10 @@ struct RecordingIndicatorTests {
         )
 
         let hub = try #require(indicator.hubForTesting)
+        // The window holds the open capsule; collapsed, the hub shows Başlat alone inside it.
         #expect(hub.panelForTesting.frame.size
-            == CGSize(width: 44 + 24, height: 44 + 24))
+            == CGSize(width: RecordingHubLayout.expandedWidth(mode: .armed, growth: hub.viewForTesting.growth) + 24, height: 44 + 24))
+        #expect(hub.capsuleForTesting.width == RecordingHubLayout.collapsedWidth(mode: .armed))
         #expect(indicator.frameVisibilityForTesting.mode == .armed)
         #expect(indicator.frameAlphaForTesting == 0.6)
 

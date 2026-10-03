@@ -102,9 +102,9 @@ struct AuditRenderShots {
                 hub.setElapsed("1:24")
                 if open { hub.setHoveredForTesting(true) }
                 hub.settleForTesting()
-                // The glass itself is a compositor effect and draws nothing offscreen: this is
-                // the cells as drawn inside it, on a dark stand-in for the glass.
-                let content = try #require(hub.viewForTesting.glass.contentView)
+                // Glass and frost are compositor effects and draw nothing offscreen: this is the
+                // hub's own marks on a dark stand-in for them.
+                let content = hub.viewForTesting
                 let rep = try #require(content.bitmapImageRepForCachingDisplay(in: content.bounds))
                 NSGraphicsContext.saveGraphicsState()
                 NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
