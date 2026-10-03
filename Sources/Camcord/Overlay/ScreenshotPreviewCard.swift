@@ -52,8 +52,12 @@ import UniformTypeIdentifiers
     private let operations: ScreenshotCardModel.Operations
     private let quickLook = EditorQuickLook()
     private static var hasCleanedExports = false
-    static func cardCornerRadius(for size: CGSize) -> CGFloat { Theme.Radius.floating }
-    static func shadowInset(for size: CGSize) -> CGFloat { 12 }
+    /// Visible space between stacked cards; their shadow margins overlap.
+    static let stackGap: CGFloat = 10
+    static func capacity(for visible: CGRect) -> Int {
+        let card = ScreenshotCardGeometry.card.height, inset = ScreenshotCardGeometry.shadowInset
+        return max(1, min(3, Int((visible.height - 2 * inset + stackGap) / (card + stackGap))))
+    }
     init(presenter: Presenter? = nil, screenFrame: (@MainActor () -> CGRect?)? = nil,
          operations: ScreenshotCardModel.Operations = .init(), hostFactory: HostFactory? = nil,
          animator: Animator? = nil, timing: Timing = .init(), displayFrames: DisplayFrames? = nil,
@@ -88,13 +92,18 @@ import UniformTypeIdentifiers
         }
         // A repeated delivery never resets an existing capture's clock.
         guard !entries.contains(where: { $0.model.capture.id == capture.id }) else { return }
+        // Every card keeps its size: the oldest leaves when the display has no room for another.
+        let capacity = Self.capacity(for: visible)
+        while let oldest = entries.first(where: { $0.visibleFrame == visible }),
+              entries.filter({ $0.visibleFrame == visible }).count >= capacity {
+            dismiss(oldest, reason: "evicted", animated: false)
+        }
         if entries.count == 3 { dismiss(entries[0], reason: "evicted", animated: false) }
         nextGeneration &+= 1
         let generation = nextGeneration
         let model = ScreenshotCardModel(capture: capture, operations: operations)
-        let preview = ScreenshotCardGeometry(sourceSize: CGSize(width: capture.image.width, height: capture.image.height))
-        let width = preview.canvasSize.width + 48
-        let frame = CGRect(x: visible.maxX - width, y: visible.minY + 12, width: width, height: preview.canvasSize.height + 100)
+        let size = ScreenshotCardGeometry.window
+        let frame = CGRect(x: visible.maxX - size.width, y: visible.minY, width: size.width, height: size.height)
         let window = hostFactory(frame)
         window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = false
         window.animationBehavior = .none; window.isReleasedWhenClosed = false
@@ -186,23 +195,15 @@ import UniformTypeIdentifiers
     }
     private func reflow() {
         let displays = Set(entries.map { ScreenshotCardDisplayFrame($0.visibleFrame) })
+        let size = ScreenshotCardGeometry.window
+        let step = ScreenshotCardGeometry.card.height + Self.stackGap
         for display in displays {
-            let group = entries.filter { $0.visibleFrame == display.frame }
-            let available = max(0, display.frame.height - 40 - CGFloat(max(0, group.count - 1)) * 4)
-            // Fixed chrome is paid for per card before sharing the remaining image space.
-            // An error/busy card can be taller without clipping its rows or wasting the
-            // quiet cards' space through equal-height slots.
-            let chromeHeights = group.map { $0.host.measuredChromeHeight + 24 }
-            let imageBudget = max(0, available - chromeHeights.reduce(0, +)) / CGFloat(group.count)
-            var y = display.frame.minY + 12
-            for entry in group {
-                entry.host.previewLimit = min(ScreenshotCardGeometry.maximumPreview.height, imageBudget)
-                let height = entry.host.measuredHeight + 24
-                let width = entry.host.measuredWidth + 24
-                let frame = CGRect(x: display.frame.maxX - width, y: y, width: width, height: height)
+            var y = display.frame.minY
+            for entry in entries where entry.visibleFrame == display.frame {
+                let frame = CGRect(x: display.frame.maxX - size.width, y: y, width: size.width, height: size.height)
                 entry.host.reposition(from: entry.window.frame, to: frame, reduceMotion: reduceMotion())
                 entry.window.setFrame(frame, display: true)
-                y += height + 4
+                y += step
             }
         }
     }

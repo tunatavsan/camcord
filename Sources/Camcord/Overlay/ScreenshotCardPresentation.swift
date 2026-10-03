@@ -1,24 +1,31 @@
 import AppKit
+import Combine
 import QuartzCore
-import SwiftUI
 import UniformTypeIdentifiers
 
-/// The complete image fits inside the preview bounds; narrow captures retain a useful
-/// control width without stretching or trimming the image itself.
+/// The card keeps one size for every capture; the whole capture fits inside its preview well.
 struct ScreenshotCardGeometry {
-    static let maximumPreview = CGSize(width: 300, height: 220)
-    static let minimumWidth: CGFloat = 160
-    let imageSize: CGSize
-    let canvasSize: CGSize
-    init(sourceSize: CGSize, maximumHeight: CGFloat = ScreenshotCardGeometry.maximumPreview.height) {
-        let height = maximumHeight.isFinite ? min(Self.maximumPreview.height, max(0, maximumHeight)) : 0
+    static let card = CGSize(width: 320, height: 232)
+    /// The glass ring around the well; the well's radius stays concentric with the card's.
+    static let ring: CGFloat = 8
+    static let footer: CGFloat = 20
+    static let footerGap: CGFloat = 6
+    /// The hover band over the well's lower edge.
+    static let band: CGFloat = 72
+    static let well = CGSize(width: card.width - 2 * ring, height: card.height - 2 * ring - footer - footerGap)
+    /// Room around the card for the glass's own shadow.
+    static let shadowInset: CGFloat = 12
+    static let window = CGSize(width: card.width + 2 * shadowInset, height: card.height + 2 * shadowInset)
+    /// The capture's frame inside the well: aspect-fit, centred, never magnified past its own size.
+    let imageRect: CGRect
+    init(sourceSize: CGSize) {
         guard sourceSize.width.isFinite, sourceSize.height.isFinite,
-              sourceSize.width > 0, sourceSize.height > 0 else {
-            imageSize = .zero; canvasSize = CGSize(width: Self.minimumWidth, height: 0); return
-        }
-        let scale = min(Self.maximumPreview.width / sourceSize.width, height / sourceSize.height)
-        imageSize = CGSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
-        canvasSize = CGSize(width: max(Self.minimumWidth, imageSize.width), height: imageSize.height)
+              sourceSize.width > 0, sourceSize.height > 0 else { imageRect = .zero; return }
+        let well = Self.well
+        let scale = min(1, well.width / sourceSize.width, well.height / sourceSize.height)
+        let size = CGSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
+        imageRect = CGRect(x: (well.width - size.width) / 2, y: (well.height - size.height) / 2,
+                           width: size.width, height: size.height)
     }
 }
 
@@ -30,71 +37,115 @@ struct ScreenshotCardGeometry {
     var onSave: (@MainActor () -> Void)?
     var onPin: (@MainActor () -> Void)?
     var onQuickLook: (@MainActor (URL) -> Void)?
-    var previewLimit: CGFloat = ScreenshotCardGeometry.maximumPreview.height { didSet { if previewLimit != oldValue { updateBody() } } }
     private let model: ScreenshotCardModel
     private let canEdit: Bool
     private let canPin: Bool
-    private var bodyHost: NSHostingView<ScreenshotCardBody>!
+    /// Frost and glass move as one surface: entrance, reflow and the dismissal swipe.
+    private let surface = NSView()
     private let glass = NSGlassEffectView()
+    let well: ScreenshotCardWell
+    private let chrome = ScreenshotCardChrome(frame: .zero)
+    private let share: ScreenshotCardShare
+    private var observers: Set<AnyCancellable> = []
     private var alive = true
+    private var hovering = false
     private var reducedMotion = false
     private var tracking: NSTrackingArea?
     private(set) var animationDuration: TimeInterval = 0
-    var measuredWidth: CGFloat { geometry.canvasSize.width + 24 }
-    var measuredHeight: CGFloat { bodyHost.fittingSize.height }
-    private var geometry: ScreenshotCardGeometry {
-        ScreenshotCardGeometry(sourceSize: CGSize(width: model.capture.image.width, height: model.capture.image.height), maximumHeight: previewLimit)
-    }
-    var measuredChromeHeight: CGFloat {
-        // Refresh the same view tree before measuring published error/busy state.
-        updateBody(); bodyHost.layoutSubtreeIfNeeded()
-        return max(0, measuredHeight - geometry.canvasSize.height)
-    }
+    var measuredHeight: CGFloat { ScreenshotCardGeometry.card.height }
+    private var cardRect: CGRect { bounds.insetBy(dx: ScreenshotCardGeometry.shadowInset, dy: ScreenshotCardGeometry.shadowInset) }
     init(model: ScreenshotCardModel, canEdit: Bool, canPin: Bool) {
         self.model = model; self.canEdit = canEdit; self.canPin = canPin
-        super.init(frame: .zero)
+        well = ScreenshotCardWell(capture: model.capture)
+        share = ScreenshotCardShare(model: model, pause: { _, _ in })
+        super.init(frame: CGRect(origin: .zero, size: ScreenshotCardGeometry.window))
         wantsLayer = true
-        bodyHost = NSHostingView(rootView: body())
-        bodyHost.wantsLayer = true
-        glass.wantsLayer = true
+        surface.wantsLayer = true
+        // The window tray's light frost sets the card apart from whatever it floats over.
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency {
+            surface.addSubview(TrayBlurView(cornerRadius: Theme.Radius.floating))
+        }
         glass.style = .regular; glass.tintColor = nil; glass.cornerRadius = Theme.Radius.floating
-        glass.contentView = bodyHost
-        addSubview(glass)
+        glass.adoptSidebarGlass()
+        glass.contentView = ScreenshotCardContent(well: well, chrome: chrome)
+        surface.addSubview(glass)
+        addSubview(surface)
+        wire()
     }
     required init?(coder: NSCoder) { nil }
-    private func body() -> ScreenshotCardBody {
-        ScreenshotCardBody(model: model, geometry: geometry, canEdit: canEdit, canPin: canPin,
-            edit: { [weak self] in self?.onEdit?() }, save: { [weak self] in self?.onSave?() }, pin: { [weak self] in self?.onPin?() },
-            quickLook: { [weak self] url in self?.onQuickLook?(url) },
-            dismiss: { [weak self] in self?.onDismiss?("close") },
-            pause: { [weak self] reason, active in self?.onPause?(reason, active) },
-            pan: { [weak self] translation, velocity, ended, cancelled in self?.pan(translation, velocity: velocity, ended: ended, cancelled: cancelled) })
+    private func wire() {
+        share.pause = { [weak self] reason, active in self?.onPause?(reason, active) }
+        let image = well.imageView
+        image.export = model.export
+        image.edit = canEdit ? { [weak self] in self?.onEdit?() } : nil
+        image.pause = { [weak self] in self?.onPause?(.dragging, $0) }
+        image.canInteract = { [weak model] in model?.isAlive == true }
+        well.band.actions = [
+            .init(title: String(localized: "Copy"), symbol: "doc.on.doc") { [weak model] _ in Task { _ = await model?.copy() } },
+            .init(title: String(localized: "Save…"), symbol: "square.and.arrow.down") { [weak self] _ in self?.onSave?() },
+            .init(title: String(localized: "Edit"), symbol: "pencil", enabled: canEdit) { [weak self] _ in self?.onEdit?() },
+            .init(title: String(localized: "Pin"), symbol: "pin", enabled: canPin) { [weak self] _ in self?.onPin?() },
+            .init(title: String(localized: "Quick Look"), symbol: "eye") { [weak self] _ in self?.quickLook() },
+            .init(title: String(localized: "Share"), symbol: "square.and.arrow.up") { [weak self] anchor in self?.share.share(anchor) },
+        ]
+        chrome.dismiss = { [weak self] in self?.onDismiss?("close") }
+        chrome.pan = { [weak self] translation, velocity, ended, cancelled in
+            self?.pan(translation, velocity: velocity, ended: ended, cancelled: cancelled)
+        }
+        chrome.setDimensions("\(model.capture.image.width) × \(model.capture.image.height)")
+        model.$isBusy.sink { [weak self] busy in self?.update(busy: busy, error: self?.model.error) }.store(in: &observers)
+        model.$error.sink { [weak self] error in self?.update(busy: self?.model.isBusy ?? false, error: error) }.store(in: &observers)
+        model.$preparedExportURL.sink { image.preparedURL = $0 }.store(in: &observers)
+        model.$preparedExportPNG.sink { image.preparedPNG = $0 }.store(in: &observers)
     }
-    private func updateBody() { guard bodyHost != nil else { return }; bodyHost.rootView = body(); needsLayout = true }
+    private func update(busy: Bool, error: String?) {
+        guard alive else { return }
+        chrome.setState(busy: busy, error: error)
+        well.band.isEnabled = !busy
+        well.band.setRevealed(hovering || busy, reduceMotion: reducedMotion)
+    }
+    private func quickLook() {
+        Task { [weak self, model] in
+            do {
+                let url = try await model.exportedFileURL()
+                if model.isAlive { self?.onQuickLook?(url) }
+            } catch {
+                if model.isAlive, !(error is CancellationError) { model.error = error.localizedDescription }
+            }
+        }
+    }
     override func layout() {
         super.layout()
-        glass.frame = bounds.insetBy(dx: 12, dy: 12)
-        bodyHost.frame = glass.bounds
+        if surface.frame != cardRect { surface.frame = cardRect }
+        for view in surface.subviews where view.frame != surface.bounds { view.frame = surface.bounds }
     }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: bounds.insetBy(dx: 12, dy: 12), options: [.mouseEnteredAndExited, .activeAlways], owner: self, userInfo: nil)
+        let area = NSTrackingArea(rect: cardRect, options: [.mouseEnteredAndExited, .activeAlways], owner: self, userInfo: nil)
         tracking = area; addTrackingArea(area)
     }
-    override func mouseEntered(with event: NSEvent) { if alive { onPause?(.hover, true) } }
-    override func mouseExited(with event: NSEvent) { if alive { onPause?(.hover, false) } }
+    override func mouseEntered(with event: NSEvent) { setHovering(true) }
+    override func mouseExited(with event: NSEvent) { setHovering(false) }
     func reconcileHover(at screenPoint: CGPoint) {
         guard alive, let window else { return }
-        let point = convert(window.convertPoint(fromScreen: screenPoint), from: nil)
-        onPause?(.hover, bounds.insetBy(dx: 12, dy: 12).contains(point))
+        setHovering(cardRect.contains(convert(window.convertPoint(fromScreen: screenPoint), from: nil)))
+    }
+    private func setHovering(_ active: Bool) {
+        guard alive else { return }
+        hovering = active
+        onPause?(.hover, active)
+        well.band.setRevealed(active || model.isBusy, reduceMotion: reducedMotion)
     }
     override func cancelOperation(_ sender: Any?) { if alive { onDismiss?("escape") } }
-    func invalidate() { alive = false; onPause = nil; onDismiss = nil; onEdit = nil; onSave = nil; onPin = nil; onQuickLook = nil }
+    func invalidate() {
+        alive = false; observers.removeAll(); share.close()
+        onPause = nil; onDismiss = nil; onEdit = nil; onSave = nil; onPin = nil; onQuickLook = nil
+    }
     func animate(entering: Bool, reduceMotion: Bool, completion: @escaping @MainActor () -> Void) {
         reducedMotion = reduceMotion
         layoutSubtreeIfNeeded()
-        guard let layer = glass.layer else { completion(); return }
+        guard let layer = surface.layer else { completion(); return }
         let keyPath = reduceMotion ? "opacity" : "transform.translation.x"
         let travel = max(0, bounds.width)
         let end: CGFloat = entering ? (reduceMotion ? 1 : 0) : (reduceMotion ? 0 : travel)
@@ -108,7 +159,7 @@ struct ScreenshotCardGeometry {
             animation.fromValue = start; animation.toValue = end
             animation.duration = Theme.Motion.Duration.reduced
         } else { animation = Theme.Motion.interactionSpring(keyPath: keyPath, from: start, to: end) }
-        preferRefreshRate(for: animation)
+        animation.preferFullRefreshRate(on: window?.screen)
         animationDuration = animation.duration
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -119,19 +170,19 @@ struct ScreenshotCardGeometry {
     }
     func reposition(from oldFrame: CGRect, to newFrame: CGRect, reduceMotion: Bool) {
         reducedMotion = reduceMotion
-        guard !reduceMotion, oldFrame != newFrame, let layer = glass.layer else { return }
+        guard !reduceMotion, oldFrame != newFrame, let layer = surface.layer else { return }
         // The window changes its logical anchor immediately; the persistent body preserves continuity.
         let previous = (layer.presentation()?.value(forKeyPath: "transform.translation.y") as? CGFloat) ?? 0
         let delta = oldFrame.minY - newFrame.minY + previous
         CATransaction.begin(); CATransaction.setDisableActions(true)
         layer.setValue(0, forKeyPath: "transform.translation.y")
         let animation = Theme.Motion.interactionSpring(keyPath: "transform.translation.y", from: delta, to: 0)
-        preferRefreshRate(for: animation)
+        animation.preferFullRefreshRate(on: window?.screen)
         layer.add(animation, forKey: "card-reflow")
         CATransaction.commit()
     }
     private func pan(_ translation: CGPoint, velocity: CGPoint, ended: Bool, cancelled: Bool) {
-        guard alive, let layer = glass.layer else { return }
+        guard alive, let layer = surface.layer else { return }
         onPause?(.gesture, !ended)
         if ended {
             if !cancelled, ScreenshotCardChrome.commits(translation: translation, velocity: velocity) { onDismiss?("fling"); return }
@@ -140,7 +191,7 @@ struct ScreenshotCardGeometry {
             layer.setValue(0, forKeyPath: "transform.translation.x")
             if !reducedMotion {
                 let animation = Theme.Motion.interactionSpring(keyPath: "transform.translation.x", from: position, to: 0)
-                preferRefreshRate(for: animation)
+                animation.preferFullRefreshRate(on: window?.screen)
                 layer.add(animation, forKey: "card-return")
             }
             CATransaction.commit()
@@ -151,68 +202,99 @@ struct ScreenshotCardGeometry {
             CATransaction.commit()
         }
     }
-    private func preferRefreshRate(for animation: CAAnimation) {
-        let fps = Float(min(120, max(1, window?.screen?.maximumFramesPerSecond ?? 60)))
-        animation.preferredFrameRateRange = CAFrameRateRange(minimum: min(80, fps), maximum: fps, preferred: fps)
+}
+
+extension CAAnimation {
+    /// Card motion asks for the display's full rate (120 Hz on ProMotion).
+    func preferFullRefreshRate(on screen: NSScreen?) {
+        let fps = Float(min(120, max(1, screen?.maximumFramesPerSecond ?? 60)))
+        preferredFrameRateRange = CAFrameRateRange(minimum: min(80, fps), maximum: fps, preferred: fps)
     }
 }
 
-private struct ScreenshotCardBody: View {
-    @ObservedObject var model: ScreenshotCardModel
-    let geometry: ScreenshotCardGeometry
-    let canEdit: Bool, canPin: Bool
-    let edit: () -> Void, save: () -> Void, pin: () -> Void, quickLook: (URL) -> Void, dismiss: () -> Void
-    let pause: (ScreenshotCardDwell.Pause, Bool) -> Void
-    let pan: (CGPoint, CGPoint, Bool, Bool) -> Void
-    @State private var hovering = false
-    var body: some View {
-        VStack(spacing: 6) {
-            ScreenshotCardImage(model: model, edit: canEdit ? edit : nil, pause: pause)
-                .frame(width: geometry.canvasSize.width, height: geometry.canvasSize.height)
-                .background(RoundedRectangle(cornerRadius: Theme.Radius.well).fill(Theme.Palette.well.color))
-                .accessibilityLabel("Screenshot preview")
-                .help("Drag the screenshot to another app")
-            ScreenshotCardChromeView(dimensions: "\(model.capture.image.width) × \(model.capture.image.height)", dismiss: dismiss, pan: pan)
-                .frame(height: 20)
-            HStack(spacing: 0) {
-                action("Copy", symbol: "doc.on.doc") { Task { _ = await model.copy() } }
-                action("Save…", symbol: "square.and.arrow.down", perform: save)
-                action("Edit", symbol: "pencil", enabled: canEdit, perform: edit)
-                action("Close", symbol: "xmark", perform: dismiss)
-                action("Pin", symbol: "pin", enabled: canPin, perform: pin)
-                action("Quick Look", symbol: "eye") {
-                    Task {
-                        do { let url = try await model.exportedFileURL(); if model.isAlive { quickLook(url) } }
-                        catch { if model.isAlive, !(error is CancellationError) { model.error = error.localizedDescription } }
-                    }
-                }
-                ScreenshotCardShareButton(model: model, pause: pause).frame(maxWidth: .infinity).frame(height: 26)
-            }
-            .disabled(model.isBusy)
-            .opacity(hovering || model.isBusy ? 1 : 0)
-            .allowsHitTesting(hovering || model.isBusy)
-            if let error = model.error { Text(error).font(Theme.Font.caption).foregroundStyle(Theme.Palette.record.color).lineLimit(2).fixedSize(horizontal: false, vertical: true) }
-            if model.isBusy { ProgressView().controlSize(.mini).accessibilityLabel("Preparing screenshot") }
+/// The glass's content: the preview well above a one-line footer.
+private final class ScreenshotCardContent: NSView {
+    private let well: NSView
+    private let chrome: NSView
+    init(well: NSView, chrome: NSView) {
+        self.well = well; self.chrome = chrome
+        super.init(frame: .zero)
+        addSubview(well); addSubview(chrome)
+    }
+    required init?(coder: NSCoder) { nil }
+    override func layout() {
+        super.layout()
+        typealias G = ScreenshotCardGeometry
+        chrome.frame = CGRect(x: G.ring + 4, y: G.ring, width: max(0, bounds.width - 2 * G.ring - 6), height: G.footer)
+        well.frame = CGRect(x: G.ring, y: G.ring + G.footer + G.footerGap, width: G.well.width, height: G.well.height)
+    }
+}
+
+/// The whole capture over a dimmed blur of itself; the action band rises over its lower edge.
+@MainActor final class ScreenshotCardWell: NSView {
+    let imageView = ScreenshotCardImageView(frame: .zero)
+    let band = ScreenshotCardActionBand(frame: .zero)
+    private let backdrop = NSView()
+    private let fill = CALayer()
+    private let dim = CALayer()
+    init(capture: CapturedScreenshot) {
+        super.init(frame: CGRect(origin: .zero, size: ScreenshotCardGeometry.well))
+        wantsLayer = true
+        layer?.cornerRadius = Theme.Radius.well
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = true
+        layer?.backgroundColor = Theme.Palette.well.ns.cgColor
+        backdrop.wantsLayer = true
+        fill.contentsGravity = .resizeAspectFill
+        fill.opacity = 0
+        dim.backgroundColor = NSColor.black.withAlphaComponent(0.3).cgColor
+        backdrop.layer?.addSublayer(fill)
+        backdrop.layer?.addSublayer(dim)
+        imageView.image = NSImage(cgImage: capture.image, size: capture.pointSize)
+        imageView.imageScaling = .scaleProportionallyDown
+        imageView.setAccessibilityHelp(String(localized: "Drag the screenshot to another app"))
+        imageView.toolTip = String(localized: "Drag the screenshot to another app")
+        let lift = NSShadow()
+        lift.shadowColor = NSColor.black.withAlphaComponent(0.35); lift.shadowBlurRadius = 6; lift.shadowOffset = CGSize(width: 0, height: -1)
+        imageView.shadow = lift
+        for view in [backdrop, imageView, band] { addSubview(view) }
+        let geometry = ScreenshotCardGeometry(sourceSize: capture.pointSize)
+        let scale = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
+        Task { [weak self] in
+            let rendered = await ScreenshotCardBlur.render(capture.image, imageRect: geometry.imageRect, scale: scale)
+            self?.apply(rendered)
         }
-        .frame(width: geometry.canvasSize.width)
-        .padding(12)
-        .foregroundStyle(Theme.Palette.ink.color)
-        .tint(Theme.Palette.ink.color)
-        .onHover { active in hovering = active; pause(.hover, active) }
     }
-    private func action(_ title: LocalizedStringKey, symbol: String, enabled: Bool = true, perform: @escaping () -> Void) -> some View {
-        Button(action: perform) { Image(systemName: symbol).frame(maxWidth: .infinity).frame(height: 26) }
-            .buttonStyle(.plain).disabled(!enabled).accessibilityLabel(Text(title)).help(Text(title))
+    required init?(coder: NSCoder) { nil }
+    private func apply(_ rendered: ScreenshotCardBlur.Rendered) {
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.18)
+        fill.contents = rendered.fill
+        fill.opacity = rendered.fill == nil ? 0 : 1
+        CATransaction.commit()
+        band.setBlurLevels(rendered.levels)
+    }
+    override func layout() {
+        super.layout()
+        backdrop.frame = bounds
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        fill.frame = bounds; dim.frame = bounds
+        CATransaction.commit()
+        imageView.frame = bounds
+        band.frame = CGRect(x: 0, y: 0, width: bounds.width, height: ScreenshotCardGeometry.band)
     }
 }
 
-/// Only this chrome strip owns the dismissal gesture; image file drags and action controls are excluded.
+/// Only this footer owns the dismissal gesture; image file drags and action controls are excluded.
 @MainActor final class ScreenshotCardChrome: NSView, NSGestureRecognizerDelegate {
     var dismiss: (() -> Void)?
     var pan: ((CGPoint, CGPoint, Bool, Bool) -> Void)?
     private let status = NSTextField(labelWithString: String(localized: "Copied"))
     private let dimensions = NSTextField(labelWithString: "")
+    private let spinner = NSProgressIndicator()
     private let close = NSButton()
+    private var busy = false
+    private var error: String?
     static func commits(translation: CGPoint, velocity: CGPoint) -> Bool {
         translation.x > 0 && abs(translation.x) >= 1.5 * abs(translation.y)
             && (translation.x >= 60 || (translation.x >= 12 && velocity.x >= 600))
@@ -220,23 +302,42 @@ private struct ScreenshotCardBody: View {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         status.font = Theme.Font.ns.text(12, weight: .medium); status.textColor = Theme.Palette.ink.ns
+        status.lineBreakMode = .byTruncatingTail
         dimensions.font = Theme.Font.ns.mono(11); dimensions.textColor = Theme.Palette.ink2.ns
         status.isSelectable = false; dimensions.isSelectable = false
-        close.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: String(localized: "Dismiss screenshot"))
+        spinner.style = .spinning; spinner.controlSize = .small; spinner.isDisplayedWhenStopped = false
+        spinner.setAccessibilityLabel(String(localized: "Preparing screenshot"))
+        close.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: String(localized: "Dismiss screenshot"))?
+            .withSymbolConfiguration(.init(pointSize: 11, weight: .semibold))
+        close.contentTintColor = Theme.Palette.ink2.ns
         close.isBordered = false; close.target = self; close.action = #selector(closeCard)
         close.setAccessibilityLabel(String(localized: "Dismiss screenshot"))
-        for view in [status, dimensions, close] { addSubview(view) }
+        for view in [spinner, status, dimensions, close] { addSubview(view) }
         let recognizer = NSPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         recognizer.delegate = self; addGestureRecognizer(recognizer)
         toolTip = String(localized: "Swipe right to dismiss")
     }
     required init?(coder: NSCoder) { nil }
-    func setDimensions(_ text: String) { dimensions.stringValue = text }
+    func setDimensions(_ text: String) { dimensions.stringValue = text; needsLayout = true }
+    func setState(busy: Bool, error: String?) {
+        self.busy = busy; self.error = error
+        if busy { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
+        status.stringValue = error ?? String(localized: "Copied")
+        status.textColor = error == nil ? Theme.Palette.ink.ns : Theme.Palette.record.ns
+        status.toolTip = error
+        dimensions.isHidden = error != nil
+        needsLayout = true
+    }
     override func layout() {
         super.layout()
-        status.frame = CGRect(x: 0, y: 1, width: 58, height: 18)
-        dimensions.frame = CGRect(x: 62, y: 1, width: max(0, bounds.width - 86), height: 18)
-        close.frame = CGRect(x: bounds.maxX - 20, y: 0, width: 20, height: 20)
+        var x: CGFloat = 0
+        if busy { spinner.frame = CGRect(x: 0, y: 2, width: 16, height: 16); x = 22 }
+        let closeX = bounds.maxX - 20
+        let statusWidth = min(ceil(status.attributedStringValue.size().width) + 4, max(0, closeX - 8 - x))
+        status.frame = CGRect(x: x, y: 1, width: statusWidth, height: 18)
+        x += statusWidth + 8
+        dimensions.frame = CGRect(x: x, y: 1, width: max(0, closeX - 8 - x), height: 18)
+        close.frame = CGRect(x: closeX, y: 0, width: 20, height: 20)
     }
     func gestureRecognizer(_ gestureRecognizer: NSGestureRecognizer, shouldAttemptToRecognizeWith event: NSEvent) -> Bool {
         !close.frame.contains(convert(event.locationInWindow, from: nil))
@@ -246,27 +347,6 @@ private struct ScreenshotCardBody: View {
         let translation = recognizer.translation(in: self), velocity = recognizer.velocity(in: self)
         let ended = recognizer.state == .ended || recognizer.state == .cancelled || recognizer.state == .failed
         pan?(translation, velocity, ended, recognizer.state != .ended && ended)
-    }
-}
-private struct ScreenshotCardChromeView: NSViewRepresentable {
-    let dimensions: String
-    let dismiss: () -> Void
-    let pan: (CGPoint, CGPoint, Bool, Bool) -> Void
-    func makeNSView(context: Context) -> ScreenshotCardChrome { ScreenshotCardChrome(frame: .zero) }
-    func updateNSView(_ view: ScreenshotCardChrome, context: Context) { view.setDimensions(dimensions); view.dismiss = dismiss; view.pan = pan }
-}
-
-private struct ScreenshotCardImage: NSViewRepresentable {
-    let model: ScreenshotCardModel
-    let edit: (() -> Void)?
-    let pause: (ScreenshotCardDwell.Pause, Bool) -> Void
-    func makeNSView(context: Context) -> ScreenshotCardImageView { ScreenshotCardImageView(frame: .zero) }
-    func updateNSView(_ view: ScreenshotCardImageView, context: Context) {
-        view.image = NSImage(cgImage: model.capture.image, size: model.capture.pointSize)
-        view.export = model.export; view.preparedURL = model.preparedExportURL
-        view.preparedPNG = model.preparedExportPNG
-        view.edit = edit; view.pause = { pause(.dragging, $0) }
-        view.canInteract = { [weak model] in model?.isAlive == true }
     }
 }
 
@@ -380,56 +460,44 @@ private final class ScreenshotCardPromiseCompletion: @unchecked Sendable {
     }
 }
 
-struct ScreenshotCardShareButton: NSViewRepresentable {
-    let model: ScreenshotCardModel
-    let pause: (ScreenshotCardDwell.Pause, Bool) -> Void
-    func makeCoordinator() -> Coordinator { Coordinator(model: model, pause: pause) }
-    func makeNSView(context: Context) -> NSButton {
-        let button = NSButton(image: NSImage(systemSymbolName: "square.and.arrow.up", accessibilityDescription: String(localized: "Share"))!, target: context.coordinator, action: #selector(Coordinator.share(_:)))
-        button.isBordered = false; button.contentTintColor = Theme.Palette.ink.ns
-        button.setAccessibilityLabel(String(localized: "Share")); button.toolTip = String(localized: "Share")
-        button.sendAction(on: [.leftMouseDown])
-        return button
+
+/// Owns one sharing picker at a time and its sharing pause.
+@MainActor final class ScreenshotCardShare: NSObject, @preconcurrency NSSharingServicePickerDelegate, @preconcurrency NSCloudSharingServiceDelegate {
+    var model: ScreenshotCardModel
+    var pause: (ScreenshotCardDwell.Pause, Bool) -> Void
+    private(set) var picker: NSSharingServicePicker?
+    private let present: @MainActor (NSSharingServicePicker, NSView) -> Void
+    private var service: NSSharingService?
+    private var finish: (() -> Void)?
+    private var snapshot: ScreenshotCardModel?
+    init(model: ScreenshotCardModel, pause: @escaping (ScreenshotCardDwell.Pause, Bool) -> Void,
+         present: @escaping @MainActor (NSSharingServicePicker, NSView) -> Void = { picker, anchor in
+             picker.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+         }) { self.model = model; self.pause = pause; self.present = present }
+    func share(_ anchor: NSView) {
+        guard picker == nil, model.isAlive else { return }
+        let pause = pause
+        pause(.sharing, true); finish = { pause(.sharing, false) }; snapshot = model
+        let picker = NSSharingServicePicker(items: [model.dragProvider()])
+        self.picker = picker; picker.delegate = self
+        present(picker, anchor)
     }
-    func updateNSView(_ view: NSButton, context: Context) { context.coordinator.model = model; context.coordinator.pause = pause; view.isEnabled = !model.isBusy }
-    static func dismantleNSView(_ nsView: NSButton, coordinator: Coordinator) { coordinator.close() }
-    @MainActor final class Coordinator: NSObject, @preconcurrency NSSharingServicePickerDelegate, @preconcurrency NSCloudSharingServiceDelegate {
-        var model: ScreenshotCardModel
-        var pause: (ScreenshotCardDwell.Pause, Bool) -> Void
-        private(set) var picker: NSSharingServicePicker?
-        private let present: @MainActor (NSSharingServicePicker, NSButton) -> Void
-        private var service: NSSharingService?
-        private var finish: (() -> Void)?
-        private var snapshot: ScreenshotCardModel?
-        init(model: ScreenshotCardModel, pause: @escaping (ScreenshotCardDwell.Pause, Bool) -> Void,
-             present: @escaping @MainActor (NSSharingServicePicker, NSButton) -> Void = { picker, button in
-                 picker.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-             }) { self.model = model; self.pause = pause; self.present = present }
-        @objc func share(_ button: NSButton) {
-            guard picker == nil, model.isAlive else { return }
-            let pause = pause
-            pause(.sharing, true); finish = { pause(.sharing, false) }; snapshot = model
-            let picker = NSSharingServicePicker(items: [model.dragProvider()])
-            self.picker = picker; picker.delegate = self
-            present(picker, button)
-        }
-        func sharingServicePicker(_ sharingServicePicker: NSSharingServicePicker, delegateFor sharingService: NSSharingService) -> (any NSSharingServiceDelegate)? { self }
-        func sharingServicePicker(_ sharingServicePicker: NSSharingServicePicker, didChoose service: NSSharingService?) {
-            guard picker === sharingServicePicker else { return }
-            if let service { self.service = service } else { release() }
-        }
-        func sharingService(_ sharingService: NSSharingService, didShareItems items: [Any]) { if service === sharingService { release() } }
-        func sharingService(_ sharingService: NSSharingService, didFailToShareItems items: [Any], error: Error) {
-            guard service === sharingService else { return }
-            if snapshot?.isAlive == true { snapshot?.error = error.localizedDescription }
-            release()
-        }
-        func sharingService(_ sharingService: NSSharingService, didCompleteForItems items: [Any], error: Error?) {
-            guard service === sharingService else { return }
-            if let error, snapshot?.isAlive == true { snapshot?.error = error.localizedDescription }
-            release()
-        }
-        func close() { picker?.close(); release() }
-        private func release() { let callback = finish; finish = nil; picker = nil; service = nil; snapshot = nil; callback?() }
+    func sharingServicePicker(_ sharingServicePicker: NSSharingServicePicker, delegateFor sharingService: NSSharingService) -> (any NSSharingServiceDelegate)? { self }
+    func sharingServicePicker(_ sharingServicePicker: NSSharingServicePicker, didChoose service: NSSharingService?) {
+        guard picker === sharingServicePicker else { return }
+        if let service { self.service = service } else { release() }
     }
+    func sharingService(_ sharingService: NSSharingService, didShareItems items: [Any]) { if service === sharingService { release() } }
+    func sharingService(_ sharingService: NSSharingService, didFailToShareItems items: [Any], error: Error) {
+        guard service === sharingService else { return }
+        if snapshot?.isAlive == true { snapshot?.error = error.localizedDescription }
+        release()
+    }
+    func sharingService(_ sharingService: NSSharingService, didCompleteForItems items: [Any], error: Error?) {
+        guard service === sharingService else { return }
+        if let error, snapshot?.isAlive == true { snapshot?.error = error.localizedDescription }
+        release()
+    }
+    func close() { picker?.close(); release() }
+    private func release() { let callback = finish; finish = nil; picker = nil; service = nil; snapshot = nil; callback?() }
 }

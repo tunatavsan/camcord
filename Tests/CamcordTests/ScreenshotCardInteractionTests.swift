@@ -6,10 +6,10 @@ import Testing
 
 @Suite("Screenshot card interaction", .serialized)
 @MainActor struct ScreenshotCardInteractionTests {
-    @Test("actual card hosts adapt to image aspect and use one untinted native glass surface", arguments: [
+    @Test("every card host keeps one fixed size and one untinted native glass surface", arguments: [
         CGSize(width: 60, height: 30), CGSize(width: 30, height: 60), CGSize(width: 30, height: 600)
     ])
-    func nativeAspectHost(size: CGSize) throws {
+    func nativeFixedHost(size: CGSize) throws {
         let clock = CardClock(), animations = CardAnimations()
         let card = controller(clock: clock, animations: animations)
         defer { card.hide(); clock.finish() }
@@ -19,11 +19,14 @@ import Testing
         card.show(capture: CapturedScreenshot(id: UUID(), image: image,
             pointSize: CGSize(width: size.width / 2, height: size.height / 2), kind: .screenshot, saveToDiskRequested: false))
         let entry = try #require(card.entries.first)
-        #expect(entry.window.frame.width == (size.width > size.height ? 348 : 208))
+        #expect(entry.window.frame.size == ScreenshotCardGeometry.window)
         #expect(entry.window.frame.maxX == 0)
-        let surfaces = entry.host.subviews.compactMap { $0 as? NSGlassEffectView }
-        let glass = try #require(surfaces.first)
-        #expect(surfaces.count == 1 && glass.style == .regular && glass.tintColor == nil)
+        func glass(in view: NSView) -> [NSGlassEffectView] {
+            (view as? NSGlassEffectView).map { [$0] } ?? view.subviews.flatMap { glass(in: $0) }
+        }
+        let surfaces = glass(in: entry.host)
+        let surface = try #require(surfaces.first)
+        #expect(surfaces.count == 1 && surface.style == .regular && surface.tintColor == nil)
     }
 
     @Test("Save chooser's pause is independent of hover and preserves the remaining dwell")
@@ -49,7 +52,7 @@ import Testing
         context.setFillColor(NSColor.systemBlue.cgColor); context.fill(CGRect(x: 0, y: 0, width: 400, height: 200))
         return CapturedScreenshot(id: id, image: try #require(context.makeImage()), pointSize: CGSize(width: 200, height: 100), kind: .screenshot, saveToDiskRequested: false, originDisplayID: originDisplayID)
     }
-    private func controller(clock: CardClock, animations: CardAnimations, visible: CGRect = CGRect(x: -1440, y: -200, width: 1440, height: 600),
+    private func controller(clock: CardClock, animations: CardAnimations, visible: CGRect = CGRect(x: -1440, y: -200, width: 1440, height: 900),
                             operations suppliedOperations: ScreenshotCardModel.Operations? = nil) -> ScreenshotPreviewCard {
         _ = NSApplication.shared
         var operations = suppliedOperations ?? ScreenshotCardModel.Operations()
@@ -170,8 +173,10 @@ import Testing
         card.saved(id: first.id, to: url)
         #expect(original.model.savedURL == nil)
         let frames = card.entries.map { $0.window.frame }
-        #expect(frames.allSatisfy { $0.minX >= -1440 && $0.maxX == 0 && $0.minY >= -200 && $0.maxY <= 400 })
-        #expect(zip(frames, frames.dropFirst()).allSatisfy { $0.maxY <= $1.minY })
+        #expect(frames.allSatisfy { $0.minX >= -1440 && $0.maxX == 0 && $0.minY >= -200 && $0.maxY <= 700 })
+        // Shadow margins may overlap; the visible cards never do.
+        let cards = frames.map { $0.insetBy(dx: 0, dy: ScreenshotCardGeometry.shadowInset) }
+        #expect(zip(cards, cards.dropFirst()).allSatisfy { $0.maxY + ScreenshotPreviewCard.stackGap <= $1.minY + 0.001 })
         await settle()
     }
     @Test("stale hover, entrance and exit completions cannot mutate a newer presentation with the same UUID")
@@ -254,7 +259,7 @@ import Testing
         #expect(replacement.dwell.pauses.isEmpty)
         #expect(!old.model.isAlive)
     }
-    @Test("short displays fit three actual bodies including error and busy chrome without clipping")
+    @Test("short displays keep only the fixed cards that fit, including error and busy states")
     func shortDisplayBusyAndError() async throws {
         let clock = CardClock(), animations = CardAnimations()
         var continuation: CheckedContinuation<Void, Never>?
@@ -276,7 +281,8 @@ import Testing
         while !busyStarted { await Task.yield() }
         await settle()
         #expect(oldest.model.isBusy)
-        #expect(card.entries.count == 3)
+        #expect(card.entries.count == 2)
+        #expect(ScreenshotPreviewCard.capacity(for: CGRect(x: -600, y: 0, width: 600, height: 500)) == 2)
         for entry in card.entries {
             #expect(entry.host.measuredHeight <= entry.window.frame.height - 24 + 0.5)
             #expect(entry.window.frame.maxY <= 500)
@@ -319,7 +325,7 @@ import Testing
     func sharingLifecycle() throws {
         let model = ScreenshotCardModel(capture: try capture())
         var transitions: [(ScreenshotCardDwell.Pause, Bool)] = [], shown = 0
-        let coordinator = ScreenshotCardShareButton.Coordinator(model: model, pause: { transitions.append(($0, $1)) }, present: { _, _ in shown += 1 })
+        let coordinator = ScreenshotCardShare(model: model, pause: { transitions.append(($0, $1)) }, present: { _, _ in shown += 1 })
         let button = NSButton()
         coordinator.share(button)
         let picker = try #require(coordinator.picker)

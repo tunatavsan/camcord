@@ -7,29 +7,26 @@ import UniformTypeIdentifiers
 
 @Suite("Typed screenshot card", .serialized)
 @MainActor struct ScreenshotCardTests {
-    @Test("portrait, landscape and long captures fit wholly without a minimum image height", arguments: [
-        CGSize(width: 1920, height: 1080), CGSize(width: 1080, height: 1920),
-        CGSize(width: 600, height: 12_000), CGSize(width: 1920, height: 50)
+    @Test("portrait, landscape, long and small captures fit wholly inside the fixed well", arguments: [
+        CGSize(width: 960, height: 540), CGSize(width: 540, height: 960),
+        CGSize(width: 300, height: 6_000), CGSize(width: 960, height: 25), CGSize(width: 120, height: 60)
     ])
     func wholeCaptureGeometry(size: CGSize) {
-        let geometry = ScreenshotCardGeometry(sourceSize: size)
-        #expect(geometry.imageSize.width <= 300 && geometry.imageSize.height <= 220)
-        #expect(geometry.canvasSize.width >= 160 && geometry.canvasSize.width <= 300)
-        #expect(geometry.canvasSize.height == geometry.imageSize.height)
-        #expect(abs(geometry.imageSize.width / size.width - geometry.imageSize.height / size.height) < 0.000_001)
-        let compressed = ScreenshotCardGeometry(sourceSize: size, maximumHeight: 35)
-        #expect(compressed.imageSize.height <= 35)
-        #expect(abs(compressed.imageSize.width / size.width - compressed.imageSize.height / size.height) < 0.000_001)
+        let well = CGRect(origin: .zero, size: ScreenshotCardGeometry.well)
+        let rect = ScreenshotCardGeometry(sourceSize: size).imageRect
+        #expect(well.insetBy(dx: -0.001, dy: -0.001).contains(rect))
+        #expect(abs(rect.width / size.width - rect.height / size.height) < 0.000_001)
+        #expect(abs(rect.midX - well.midX) < 0.001 && abs(rect.midY - well.midY) < 0.001)
+        // Large captures reach the well on one axis; small ones keep their own size.
+        let fills = abs(rect.width - well.width) < 0.001 || abs(rect.height - well.height) < 0.001
+        #expect(fills || rect.size == size)
     }
 
     @Test("invalid preview bounds remain finite and never divide by zero")
     func invalidPreviewGeometry() {
         for size in [CGSize.zero, CGSize(width: CGFloat.infinity, height: 1), CGSize(width: 1, height: -2)] {
-            let geometry = ScreenshotCardGeometry(sourceSize: size)
-            #expect(geometry.imageSize == .zero)
-            #expect(geometry.canvasSize == CGSize(width: 160, height: 0))
+            #expect(ScreenshotCardGeometry(sourceSize: size).imageRect == .zero)
         }
-        #expect(ScreenshotCardGeometry(sourceSize: CGSize(width: 400, height: 200), maximumHeight: -CGFloat.infinity).imageSize == .zero)
     }
 
     @Test("explicit Save writes the complete Retina PNG and publishes only its own destination")
