@@ -237,12 +237,19 @@ struct RecordingHubTests {
         }
     }
 
-    @Test("the recording hub offers pause, stop, the camera and a mic level; armed offers Başlat, × and the camera")
-    func itemsPerMode() {
-        #expect(RecordingHubLayout.items(mode: .recording) == [.elapsed, .divider, .pause, .stop, .preview, .micLevel])
+    @Test("the recording hub offers pause, the camera and a mic level beside a time pill that stops; armed offers Başlat, × and the camera")
+    @MainActor func itemsPerMode() {
+        #expect(RecordingHubLayout.items(mode: .recording) == [.elapsed, .divider, .pause, .preview, .micLevel])
         #expect(RecordingHubLayout.items(mode: .paused) == RecordingHubLayout.items(mode: .recording))
         #expect(RecordingHubLayout.items(mode: .armed) == [.start, .divider, .cancel, .preview])
-        #expect(RecordingHubLayout.items(mode: .recording).filter(\.isControl) == [.pause, .stop, .preview])
+        #expect(RecordingHubLayout.items(mode: .recording).filter(\.isControl) == [.pause, .preview])
+        // Stop lives on the time pill itself.
+        let view = RecordingHubView(frame: CGRect(x: 0, y: 0, width: 300, height: 68))
+        view.mode = .recording
+        view.growth = .leading
+        view.progress = 1
+        let pill = view.cells.first { $0.item == .elapsed }?.rect ?? .zero
+        #expect(view.control(at: CGPoint(x: pill.midX, y: pill.midY)) == .stop)
         #expect(RecordingHubLayout.items(mode: .armed).filter(\.isControl) == [.start, .cancel, .preview])
         #expect(!RecordingHubItem.elapsed.isControl)
         #expect(!RecordingHubItem.divider.isControl)

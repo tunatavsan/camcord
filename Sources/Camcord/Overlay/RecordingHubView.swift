@@ -64,7 +64,7 @@ enum RecordingHubLayout {
     static func items(mode: RecordingHubMode) -> [RecordingHubItem] {
         mode.isArmed
             ? [.start, .divider, .cancel, .preview]
-            : [.elapsed, .divider, .pause, .stop, .preview, .micLevel]
+            : [.elapsed, .divider, .pause, .preview, .micLevel]
     }
 
     /// The identity cell — the one thing the hub shows while collapsed.
@@ -111,7 +111,7 @@ enum RecordingHubLayout {
     static func centeredItems(mode: RecordingHubMode) -> (left: [RecordingHubItem], right: [RecordingHubItem]) {
         mode.isArmed
             ? ([.cancel, .divider], [.divider, .preview])
-            : ([.pause, .stop, .divider], [.divider, .preview, .micLevel])
+            : ([.pause, .divider], [.divider, .preview, .micLevel])
     }
 
     /// How far the open capsule reaches either side of the identity's centre: half the
@@ -300,7 +300,9 @@ final class RecordingHubView: NSView {
 
     /// The control a press at `point` (view coordinates) fires. A control answers only once
     /// it is fully uncovered, so a click can only land on something already at rest.
+    /// While recording, the time pill IS the stop control: it turns into Stop under the pointer.
     func control(at point: CGPoint) -> RecordingHubItem? {
+        if !mode.isArmed, let pill = cells.first(where: { $0.item == .elapsed })?.rect, pill.contains(point) { return .stop }
         guard progress > 0.001 else { return mode.isArmed ? .start : nil }
         let visible = capsuleRect.insetBy(dx: -0.5, dy: -0.5)
         return cells.first { $0.item.isControl && visible.contains($0.rect) && $0.rect.contains(point) }?.item
@@ -329,7 +331,7 @@ final class RecordingHubView: NSView {
             case .pause:
                 chips[item] = HubChip(kind: .button, symbol: mode == .paused ? "play.fill" : "pause.fill", tint: Self.neutral, bare: true)
             case .stop:
-                chips[item] = HubChip(kind: .button, symbol: "stop.fill", tint: Self.red)
+                break
             case .preview:
                 let chip = HubChip(kind: .button, symbol: nil, tint: Self.neutral, bare: true)
                 chip.setCamera(on: previewVisible)
@@ -395,8 +397,9 @@ final class RecordingHubView: NSView {
     private func setFocus(_ item: RecordingHubItem?) {
         guard item != focus else { return }
         focus = item
-        for (key, chip) in chips where chip.kind != .identity {
-            chip.setFocus(item.map { $0 == key }, screen: window?.screen)
+        for (key, chip) in chips {
+            // The time pill answers for Stop.
+            chip.setFocus(item.map { $0 == key || ($0 == .stop && key == .elapsed) }, screen: window?.screen)
         }
     }
 
@@ -480,7 +483,8 @@ final class RecordingHubView: NSView {
     private func rebuildAccessibility() {
         setAccessibilityValue(elapsed)
         var elements: [Any] = []
-        let controls = cells.filter { $0.item.isControl }
+        var controls = cells.filter { $0.item.isControl }
+        if !mode.isArmed, let pill = cells.first(where: { $0.item == .elapsed }) { controls.insert((.stop, pill.rect), at: 0) }
         let visible = controls.isEmpty
             ? [(item: mode.isArmed ? RecordingHubItem.start : .stop, rect: capsuleRect)]
             : controls
@@ -562,6 +566,11 @@ private final class HubContent: NSView {
     /// A bare control stands on the tray itself; only stop and Start carry a glass disc.
     private let bare: Bool
     private let light = CALayer()
+    /// The time pill's other face: solid Record red with Stop, shown under the pointer.
+    private let timeFace = CALayer()
+    private let stopFace = CALayer()
+    private let stopIcon = CALayer()
+    private let stopLabel = CATextLayer()
     private var focus: Bool?
 
     init(kind: Kind, symbol: String?, tint: NSColor, symbolColor: NSColor = .white, bare: Bool = false) {
@@ -606,15 +615,36 @@ private final class HubContent: NSView {
         if kind == .identity {
             ring.backgroundColor = Theme.Palette.record.ns.cgColor
             ring.opacity = 0
-            face.layer?.addSublayer(ring)
-            face.layer?.addSublayer(dot)
+            label.removeFromSuperlayer()
+            for layer in [ring, dot, label] { timeFace.addSublayer(layer) }
+            face.layer?.addSublayer(timeFace)
             label.font = Theme.Font.ns.mono(13, weight: .semibold)
             label.fontSize = 13
+            stopFace.backgroundColor = Theme.Palette.record.ns.withAlphaComponent(0.92).cgColor
+            stopFace.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
+            stopFace.borderWidth = 1
+            stopFace.cornerCurve = .continuous
+            stopFace.opacity = 0
+            stopFace.shadowColor = Theme.Palette.record.ns.cgColor
+            stopFace.shadowRadius = 10
+            stopFace.shadowOffset = .zero
+            stopFace.shadowOpacity = 0.55
+            stopIcon.contents = InkCenteredSymbol.render("stop.fill", pointSize: 11, weight: .bold, canvas: 18, scale: scale, color: .white)
+            stopIcon.contentsScale = scale
+            stopLabel.string = String(localized: "Stop")
+            stopLabel.font = Theme.Font.ns.text(13, weight: .semibold)
+            stopLabel.fontSize = 13
+            stopLabel.foregroundColor = NSColor.white.cgColor
+            stopLabel.contentsScale = scale
+            stopFace.addSublayer(stopIcon)
+            stopFace.addSublayer(stopLabel)
+            face.layer?.addSublayer(stopFace)
         } else {
             label.font = Theme.Font.ns.text(14, weight: .semibold)
             label.fontSize = 14
         }
         lift.addSublayer(light)
+        if bare { lift.opacity = Self.bareRest }
         if let symbol { setSymbol(symbol, color: symbolColor) }
     }
 
@@ -670,6 +700,11 @@ private final class HubContent: NSView {
             iconBox = bounds
         case .identity:
             iconBox = .zero
+            timeFace.frame = bounds
+            stopFace.frame = bounds
+            stopFace.cornerRadius = bounds.height / 2
+            stopIcon.frame = CGRect(x: 10, y: (bounds.height - 18) / 2, width: 18, height: 18)
+            stopLabel.frame = CGRect(x: 32, y: (bounds.height - 17) / 2, width: bounds.width - 36, height: 17)
             let center = CGPoint(x: 15, y: bounds.midY)
             for layer in [dot, ring] {
                 layer.bounds = CGRect(x: 0, y: 0, width: 8, height: 8)
@@ -690,38 +725,59 @@ private final class HubContent: NSView {
         CATransaction.commit()
     }
 
-    /// Hover blooms like the panel's Record, Start and Open: the symbol swells a little on a
-    /// spring and the chip glows in its own colour. Nothing rises and nothing steps back.
+    /// Hover, as on the panel's buttons. The time pill turns into a red Stop; a red disc (Start)
+    /// glows in its colour; a bare control on the tray only swells a little and brightens.
     func setFocus(_ focus: Bool?, screen: NSScreen?) {
         let lifted = focus == true
         let was = self.focus == true
         self.focus = focus
         guard lifted != was, let layer else { return }
-        let glowColor = tint.alphaComponent > 0.5 ? Theme.Palette.record.ns : NSColor.white
         CATransaction.begin(); CATransaction.setDisableActions(true)
+        if kind == .identity {
+            let fromStop = stopFace.presentation()?.opacity ?? stopFace.opacity
+            stopFace.opacity = lifted ? 1 : 0
+            timeFace.opacity = lifted ? 0 : 1
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = fromStop; fade.toValue = stopFace.opacity; fade.duration = lifted ? 0.16 : 0.2
+            stopFace.add(fade, forKey: "stop-fade")
+            let back = CABasicAnimation(keyPath: "opacity")
+            back.fromValue = 1 - fromStop; back.toValue = timeFace.opacity; back.duration = fade.duration
+            timeFace.add(back, forKey: "time-fade")
+            if lifted {
+                let bloom = CASpringAnimation.card(keyPath: "transform.scale", from: 0.94, to: 1, response: 0.3, dampingRatio: 0.6)
+                bloom.preferFullRefreshRate(on: screen)
+                stopFace.add(bloom, forKey: "stop-bloom")
+            }
+            CATransaction.commit()
+            return
+        }
         let from = lift.presentation()?.transform ?? lift.transform
-        lift.transform = lifted ? CATransform3DMakeScale(1.14, 1.14, 1) : CATransform3DIdentity
+        lift.transform = lifted ? CATransform3DMakeScale(bare ? 1.1 : 1.12, bare ? 1.1 : 1.12, 1) : CATransform3DIdentity
         let swell = CASpringAnimation.card(keyPath: "transform", from: NSValue(caTransform3D: from),
                                            to: NSValue(caTransform3D: lift.transform), response: 0.3, dampingRatio: lifted ? 0.55 : 0.8)
         swell.preferFullRefreshRate(on: screen)
         lift.add(swell, forKey: "hub-swell")
-        // A bare control glows through its symbol alone; a disc glows around its edge.
-        layer.shadowColor = glowColor.cgColor
-        layer.shadowRadius = 10
-        layer.shadowOffset = .zero
-        let fromGlow = layer.presentation()?.shadowOpacity ?? layer.shadowOpacity
-        layer.shadowOpacity = lifted && !bare ? 0.6 : 0
-        let glow = CABasicAnimation(keyPath: "shadowOpacity")
-        glow.fromValue = fromGlow; glow.toValue = layer.shadowOpacity; glow.duration = lifted ? 0.16 : 0.22
-        glow.preferFullRefreshRate(on: screen)
-        layer.add(glow, forKey: "hub-glow")
-        let fromIcon = icon.presentation()?.shadowOpacity ?? icon.shadowOpacity
-        icon.shadowOpacity = lifted ? 0.7 : 0
-        let iconGlow = CABasicAnimation(keyPath: "shadowOpacity")
-        iconGlow.fromValue = fromIcon; iconGlow.toValue = icon.shadowOpacity; iconGlow.duration = 0.16
-        icon.add(iconGlow, forKey: "hub-icon-glow")
+        if bare {
+            let fromOpacity = lift.presentation()?.opacity ?? lift.opacity
+            lift.opacity = lifted ? 1 : Self.bareRest
+            let brighten = CABasicAnimation(keyPath: "opacity")
+            brighten.fromValue = fromOpacity; brighten.toValue = lift.opacity; brighten.duration = 0.16
+            lift.add(brighten, forKey: "hub-brighten")
+        } else {
+            layer.shadowColor = Theme.Palette.record.ns.cgColor
+            layer.shadowRadius = 10
+            layer.shadowOffset = .zero
+            let fromGlow = layer.presentation()?.shadowOpacity ?? layer.shadowOpacity
+            layer.shadowOpacity = lifted ? 0.6 : 0
+            let glow = CABasicAnimation(keyPath: "shadowOpacity")
+            glow.fromValue = fromGlow; glow.toValue = layer.shadowOpacity; glow.duration = lifted ? 0.16 : 0.22
+            glow.preferFullRefreshRate(on: screen)
+            layer.add(glow, forKey: "hub-glow")
+        }
         CATransaction.commit()
     }
+    /// Bare controls rest a little quieter and come up to full white under the pointer.
+    private static let bareRest: Float = 0.82
 
     func setPressed(_ down: Bool, screen: NSScreen?) {
         let from = press.presentation()?.transform ?? press.transform
