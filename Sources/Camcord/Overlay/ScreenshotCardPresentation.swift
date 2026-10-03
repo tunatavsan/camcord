@@ -6,14 +6,14 @@ import UniformTypeIdentifiers
 /// The card keeps one size for every capture; the whole capture fits inside its preview well.
 struct ScreenshotCardGeometry {
     static let card = CGSize(width: 320, height: 232)
-    /// The glass ring around the well; the well's radius stays concentric with the card's.
+    /// The tray around the well; the well's radius stays concentric with the card's.
     static let ring: CGFloat = 8
-    static let footer: CGFloat = 20
-    static let footerGap: CGFloat = 6
+    static let header: CGFloat = 20
+    static let headerGap: CGFloat = 6
     /// The hover band over the well's lower edge.
     static let band: CGFloat = 72
-    static let well = CGSize(width: card.width - 2 * ring, height: card.height - 2 * ring - footer - footerGap)
-    /// Room around the card for the glass's own shadow.
+    static let well = CGSize(width: card.width - 2 * ring, height: card.height - 2 * ring - header - headerGap)
+    /// Room around the card for its shadow.
     static let shadowInset: CGFloat = 12
     static let window = CGSize(width: card.width + 2 * shadowInset, height: card.height + 2 * shadowInset)
     /// The capture's frame inside the well: aspect-fit, centred, never magnified past its own size.
@@ -40,9 +40,8 @@ struct ScreenshotCardGeometry {
     private let model: ScreenshotCardModel
     private let canEdit: Bool
     private let canPin: Bool
-    /// Frost and glass move as one surface: entrance, reflow and the dismissal swipe.
+    /// Shadow, frost, content and rim move as one surface: entrance, reflow and the dismissal swipe.
     private let surface = NSView()
-    private let glass = NSGlassEffectView()
     let well: ScreenshotCardWell
     private let chrome = ScreenshotCardChrome(frame: .zero)
     private let share: ScreenshotCardShare
@@ -61,14 +60,12 @@ struct ScreenshotCardGeometry {
         super.init(frame: CGRect(origin: .zero, size: ScreenshotCardGeometry.window))
         wantsLayer = true
         surface.wantsLayer = true
-        // The window tray's light frost sets the card apart from whatever it floats over.
-        if !NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency {
-            surface.addSubview(TrayBlurView(cornerRadius: Theme.Radius.floating))
-        }
-        glass.style = .regular; glass.tintColor = nil; glass.cornerRadius = Theme.Radius.floating
-        glass.adoptSidebarGlass()
-        glass.contentView = ScreenshotCardContent(well: well, chrome: chrome)
-        surface.addSubview(glass)
+        // The card is the main window's tray: its light frost, a window rim and a soft shadow.
+        surface.addSubview(ScreenshotCardShadow())
+        surface.addSubview(NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+            ? ScreenshotCardSolid() : TrayBlurView(cornerRadius: Theme.Radius.floating))
+        surface.addSubview(ScreenshotCardContent(well: well, chrome: chrome))
+        surface.addSubview(ScreenshotCardRim())
         addSubview(surface)
         wire()
     }
@@ -212,7 +209,7 @@ extension CAAnimation {
     }
 }
 
-/// The glass's content: the preview well above a one-line footer.
+/// The card's content: a one-line header above the preview well.
 private final class ScreenshotCardContent: NSView {
     private let well: NSView
     private let chrome: NSView
@@ -225,9 +222,82 @@ private final class ScreenshotCardContent: NSView {
     override func layout() {
         super.layout()
         typealias G = ScreenshotCardGeometry
-        chrome.frame = CGRect(x: G.ring + 4, y: G.ring, width: max(0, bounds.width - 2 * G.ring - 6), height: G.footer)
-        well.frame = CGRect(x: G.ring, y: G.ring + G.footer + G.footerGap, width: G.well.width, height: G.well.height)
+        chrome.frame = CGRect(x: G.ring + 4, y: bounds.height - G.ring - G.header,
+                              width: max(0, bounds.width - 2 * G.ring - 6), height: G.header)
+        well.frame = CGRect(x: G.ring, y: G.ring, width: G.well.width, height: G.well.height)
     }
+}
+
+/// The window's rim: a light inner line and a dark outer hairline, the same in light and dark.
+private final class ScreenshotCardRim: NSView {
+    private let inner = CALayer()
+    private let outer = CALayer()
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        for (line, colour, width) in [(inner, NSColor.white.withAlphaComponent(0.16), 1.0),
+                                      (outer, NSColor.black.withAlphaComponent(0.28), 0.5)] {
+            line.borderColor = colour.cgColor
+            line.borderWidth = width
+            line.cornerCurve = .continuous
+            layer?.addSublayer(line)
+        }
+    }
+    required init?(coder: NSCoder) { nil }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func layout() {
+        super.layout()
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        inner.frame = bounds; inner.cornerRadius = Theme.Radius.floating
+        outer.frame = bounds.insetBy(dx: -0.5, dy: -0.5); outer.cornerRadius = Theme.Radius.floating + 0.5
+        CATransaction.commit()
+    }
+}
+
+/// A shadow cast only outside the card, so the frost never samples its own shadow.
+private final class ScreenshotCardShadow: NSView {
+    private let caster = CALayer()
+    private let cutout = CAShapeLayer()
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        caster.shadowColor = NSColor.black.cgColor
+        caster.shadowOpacity = 0.32
+        caster.shadowRadius = 6
+        caster.shadowOffset = CGSize(width: 0, height: -2)
+        cutout.fillRule = .evenOdd
+        caster.mask = cutout
+        layer?.addSublayer(caster)
+    }
+    required init?(coder: NSCoder) { nil }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func layout() {
+        super.layout()
+        let card = CGPath(roundedRect: bounds, cornerWidth: Theme.Radius.floating, cornerHeight: Theme.Radius.floating, transform: nil)
+        let margin = ScreenshotCardGeometry.shadowInset
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        caster.frame = bounds
+        caster.shadowPath = card
+        cutout.frame = bounds.insetBy(dx: -margin, dy: -margin)
+        let path = CGMutablePath()
+        path.addRect(cutout.bounds)
+        path.addPath(card, transform: CGAffineTransform(translationX: margin, y: margin))
+        cutout.path = path
+        CATransaction.commit()
+    }
+}
+
+/// Reduce Transparency: the tray becomes the app's opaque panel colour.
+private final class ScreenshotCardSolid: NSView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = Theme.Palette.glassSolidSidebar.ns.cgColor
+        layer?.cornerRadius = Theme.Radius.floating
+        layer?.cornerCurve = .continuous
+    }
+    required init?(coder: NSCoder) { nil }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 /// The whole capture over a dimmed blur of itself; the action band rises over its lower edge.
@@ -285,7 +355,7 @@ private final class ScreenshotCardContent: NSView {
     }
 }
 
-/// Only this footer owns the dismissal gesture; image file drags and action controls are excluded.
+/// Only this header owns the dismissal gesture; image file drags and action controls are excluded.
 @MainActor final class ScreenshotCardChrome: NSView, NSGestureRecognizerDelegate {
     var dismiss: (() -> Void)?
     var pan: ((CGPoint, CGPoint, Bool, Bool) -> Void)?
@@ -312,7 +382,14 @@ private final class ScreenshotCardContent: NSView {
         close.contentTintColor = Theme.Palette.ink2.ns
         close.isBordered = false; close.target = self; close.action = #selector(closeCard)
         close.setAccessibilityLabel(String(localized: "Dismiss screenshot"))
-        for view in [spinner, status, dimensions, close] { addSubview(view) }
+        // Over the bare tray, a soft halo keeps the header legible on any desktop.
+        let halo = NSShadow()
+        halo.shadowColor = NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                ? NSColor.black.withAlphaComponent(0.6) : NSColor.white.withAlphaComponent(0.85)
+        }
+        halo.shadowBlurRadius = 3; halo.shadowOffset = .zero
+        for view in [spinner, status, dimensions, close] { view.shadow = halo; addSubview(view) }
         let recognizer = NSPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         recognizer.delegate = self; addGestureRecognizer(recognizer)
         toolTip = String(localized: "Swipe right to dismiss")

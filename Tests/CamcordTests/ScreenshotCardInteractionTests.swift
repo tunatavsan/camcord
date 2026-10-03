@@ -6,7 +6,7 @@ import Testing
 
 @Suite("Screenshot card interaction", .serialized)
 @MainActor struct ScreenshotCardInteractionTests {
-    @Test("every card host keeps one fixed size and one untinted native glass surface", arguments: [
+    @Test("every card host keeps one fixed size and stands on the window tray's frost", arguments: [
         CGSize(width: 60, height: 30), CGSize(width: 30, height: 60), CGSize(width: 30, height: 600)
     ])
     func nativeFixedHost(size: CGSize) throws {
@@ -21,12 +21,14 @@ import Testing
         let entry = try #require(card.entries.first)
         #expect(entry.window.frame.size == ScreenshotCardGeometry.window)
         #expect(entry.window.frame.maxX == 0)
-        func glass(in view: NSView) -> [NSGlassEffectView] {
-            (view as? NSGlassEffectView).map { [$0] } ?? view.subviews.flatMap { glass(in: $0) }
+        func views<T: NSView>(_ type: T.Type, in view: NSView) -> [T] {
+            (view as? T).map { [$0] } ?? view.subviews.flatMap { views(type, in: $0) }
         }
-        let surfaces = glass(in: entry.host)
-        let surface = try #require(surfaces.first)
-        #expect(surfaces.count == 1 && surface.style == .regular && surface.tintColor == nil)
+        // The card stands on the window tray's frost itself, without a glass pane over it.
+        #expect(views(NSGlassEffectView.self, in: entry.host).isEmpty)
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency {
+            #expect(views(TrayBlurView.self, in: entry.host).count == 1)
+        }
     }
 
     @Test("Save chooser's pause is independent of hover and preserves the remaining dwell")
