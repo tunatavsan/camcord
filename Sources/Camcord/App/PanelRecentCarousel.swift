@@ -445,10 +445,11 @@ final class PanelCarouselTile: CALayer {
     }
     private let panel: InfoPanel
     private let content = InfoContent()
-    /// Holds the glass at the size it has now; the menu scales it rather than resizing it, so
-    /// the glass keeps the note's own look as it grows.
+    /// Holds the tray and its glass at the size they have now; the menu scales them rather
+    /// than resizing them, so the glass keeps the note's own look as it grows.
     private let holder = NSView()
     private let glass = NSGlassEffectView()
+    private lazy var tray = TraySurface(content: InfoWell(glass: glass), shadowRadius: 6, cornerRadius: 12 + Self.ring)
     private let titleLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
     private var rows: [InfoRow] = []
@@ -469,6 +470,10 @@ final class PanelCarouselTile: CALayer {
     private static let menuWidth: CGFloat = 228
     private static let rowHeight: CGFloat = 30
     private static let header: CGFloat = 44
+    /// The tray shows this much around the glass, like the panel's cells on its tray.
+    fileprivate static let ring: CGFloat = 4
+    /// Room around the tray inside the panel for its shadow.
+    private static let margin: CGFloat = 16
 
     init() {
         panel = InfoPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
@@ -486,7 +491,7 @@ final class PanelCarouselTile: CALayer {
         detailLabel.textColor = .secondaryLabelColor
         for label in [titleLabel, detailLabel] { label.isSelectable = false }
         holder.wantsLayer = true
-        holder.addSubview(glass)
+        holder.addSubview(tray)
         content.addSubview(holder)
         content.addSubview(titleLabel)
         content.addSubview(detailLabel)
@@ -506,8 +511,8 @@ final class PanelCarouselTile: CALayer {
         detailLabel.stringValue = Self.details(item)
         let width = min(300, max(titleLabel.intrinsicContentSize.width, detailLabel.intrinsicContentSize.width) + 32)
         noteSize = CGSize(width: ceil(width), height: Self.header)
-        panel.setContentSize(noteSize)
-        layoutNote(in: CGRect(origin: .zero, size: noteSize))
+        panel.setContentSize(CGSize(width: noteSize.width + 2 * Self.margin, height: noteSize.height + 2 * Self.margin))
+        layoutNote(in: CGRect(origin: CGPoint(x: Self.margin, y: Self.margin), size: noteSize))
         move(to: mouse)
         if !panel.isVisible {
             place()
@@ -582,30 +587,32 @@ final class PanelCarouselTile: CALayer {
         stopFollowing()
         resetMotion()
         isMenuOpen = true
-        let note = panel.frame
-        let size = CGSize(width: max(Self.menuWidth, noteSize.width), height: Self.header + CGFloat(actions.count) * Self.rowHeight + 8)
+        let note = panel.frame.insetBy(dx: Self.margin, dy: Self.margin)
+        let size = CGSize(width: max(Self.menuWidth, noteSize.width), height: Self.header + CGFloat(actions.count) * Self.rowHeight + 10)
         var frame = CGRect(x: note.minX, y: note.maxY - size.height, width: size.width, height: size.height)
         if let visible = (panel.screen ?? NSScreen.main)?.visibleFrame {
             frame.origin.x = min(max(frame.minX, visible.minX + 4), visible.maxX - size.width - 4)
             frame.origin.y = max(frame.minY, visible.minY + 4)
         }
-        panel.setFrame(frame, display: false)
+        panel.setFrame(frame.insetBy(dx: -Self.margin, dy: -Self.margin), display: false)
         panel.ignoresMouseEvents = false
-        content.frame = CGRect(origin: .zero, size: size)
+        content.frame = CGRect(origin: .zero, size: panel.frame.size)
         rows.forEach { $0.removeFromSuperview() }
         rows = actions.enumerated().map { index, action in
             let row = InfoRow(action: action) { [weak self] row in
                 self?.hide()
                 action.perform(row)
             }
-            row.frame = CGRect(x: 4, y: Self.header + CGFloat(index) * Self.rowHeight, width: size.width - 8, height: Self.rowHeight)
+            let inset = Self.ring + 4
+            row.frame = CGRect(x: Self.margin + inset, y: Self.margin + Self.header + CGFloat(index) * Self.rowHeight,
+                               width: size.width - 2 * inset, height: Self.rowHeight)
             content.addSubview(row)
             return row
         }
         // The note's frame, inside the menu: its top-left corner stays where it was.
         let start = CGRect(x: note.minX - frame.minX, y: frame.maxY - note.maxY, width: note.width, height: note.height)
         let full = CGRect(origin: .zero, size: size)
-        layoutNote(in: full)
+        layoutNote(in: full.offsetBy(dx: Self.margin, dy: Self.margin))
         // The glass is menu-sized at once and grows out of the note's rectangle by a transform.
         foldedTransform = CATransform3DConcat(CATransform3DMakeScale(start.width / full.width, start.height / full.height, 1),
                                               CATransform3DMakeTranslation(start.minX, start.minY, 0))
@@ -627,9 +634,9 @@ final class PanelCarouselTile: CALayer {
 
     private func layoutNote(in bounds: CGRect) {
         holder.frame = bounds
-        glass.frame = holder.bounds
-        titleLabel.frame = CGRect(x: 12, y: 6, width: bounds.width - 20, height: 16)
-        detailLabel.frame = CGRect(x: 12, y: 23, width: bounds.width - 20, height: 14)
+        tray.frame = holder.bounds
+        titleLabel.frame = CGRect(x: bounds.minX + 13, y: bounds.minY + 6, width: bounds.width - 24, height: 16)
+        detailLabel.frame = CGRect(x: bounds.minX + 13, y: bounds.minY + 23, width: bounds.width - 24, height: 14)
     }
 
     /// A click elsewhere, Esc, or the strip's panel leaving puts the menu away.
@@ -720,14 +727,16 @@ final class PanelCarouselTile: CALayer {
             position = target; place(); stopFollowing()
         }
     }
+    /// `position` is the note's own corner; the panel stands a shadow's margin around it.
     private func place() {
         var origin = position
         if let screen = NSScreen.screens.first(where: { $0.frame.contains(target) }) ?? NSScreen.main {
             let visible = screen.visibleFrame
-            origin.x = min(max(origin.x, visible.minX + 4), visible.maxX - panel.frame.width - 4)
-            origin.y = min(max(origin.y, visible.minY + 4), visible.maxY - panel.frame.height - 4)
+            let note = panel.frame.insetBy(dx: Self.margin, dy: Self.margin).size
+            origin.x = min(max(origin.x, visible.minX + 4), visible.maxX - note.width - 4)
+            origin.y = min(max(origin.y, visible.minY + 4), visible.maxY - note.height - 4)
         }
-        panel.setFrameOrigin(CGPoint(x: origin.x.rounded(), y: origin.y.rounded()))
+        panel.setFrameOrigin(CGPoint(x: origin.x.rounded() - Self.margin, y: origin.y.rounded() - Self.margin))
     }
 }
 
@@ -738,6 +747,21 @@ private final class InfoPanel: NSPanel {
 
 private final class InfoContent: NSView {
     override var isFlipped: Bool { true }
+}
+
+/// The note's glass, a ring in from the tray's edge.
+private final class InfoWell: NSView {
+    private let glass: NSView
+    init(glass: NSView) {
+        self.glass = glass
+        super.init(frame: .zero)
+        addSubview(glass)
+    }
+    required init?(coder: NSCoder) { nil }
+    override func layout() {
+        super.layout()
+        glass.frame = bounds.insetBy(dx: PanelHoverInfo.ring, dy: PanelHoverInfo.ring)
+    }
 }
 
 /// One menu row: a symbol and its title; hovered, a soft band appears and the symbol swells.
