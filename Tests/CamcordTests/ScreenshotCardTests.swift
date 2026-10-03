@@ -57,6 +57,25 @@ import UniformTypeIdentifiers
         #expect(!model.isBusy && model.error == nil)
     }
 
+    @Test("a press prepares one well-named PNG for dragging out, as a real file any app accepts")
+    func dragFilePreparation() async throws {
+        let root = try physicalTemporaryRoot().appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var operations = ScreenshotCardModel.Operations()
+        operations.exports = ScreenshotTemporaryExports(directory: root.appendingPathComponent("exports"))
+        let model = ScreenshotCardModel(capture: try capture(), operations: operations)
+        model.prepareDragFile(); model.prepareDragFile()
+        let deadline = Date().addingTimeInterval(5)
+        while model.dragFile == nil, !model.dragFileFailed, Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        let url = try #require(model.dragFile)
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        #expect(url.lastPathComponent.hasPrefix(String(localized: "Screenshot") + " ") && url.pathExtension == "png")
+        let source = try #require(CGImageSourceCreateWithURL(url as CFURL, nil))
+        let properties = try #require(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any])
+        #expect(properties[kCGImagePropertyPixelWidth as String] as? Int == 400)
+    }
+
     @Test("a dismissed card cannot finish an encoding Save into the user's destination")
     func staleSave() async throws {
         let root = try physicalTemporaryRoot().appendingPathComponent(UUID().uuidString)

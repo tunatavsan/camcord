@@ -91,7 +91,7 @@ import UniformTypeIdentifiers
         if !Self.hasCleanedExports {
             Self.hasCleanedExports = true
             let exports = operations.exports
-            Task.detached(priority: .background) { exports.cleanup() }
+            Task.detached(priority: .background) { exports.cleanup(); ScreenshotDragFiles.cleanup() }
         }
         // A repeated delivery never resets an existing capture's clock.
         guard !entries.contains(where: { $0.model.capture.id == capture.id }) else { return }
@@ -299,6 +299,11 @@ actor ScreenshotCardExport {
     private(set) var isAlive = true
     private var localRequests = LatestRequestGate()
     private var busyCount = 0
+    /// A real, well-named file for dragging out: apps that refuse file promises accept it.
+    @Published private(set) var dragFile: URL?
+    private(set) var dragFileFailed = false
+    private var dragPreparation: Task<Void, Never>?
+    private let createdAt = Date()
     private let operations: Operations
     var claimClipboardPublication: (@MainActor () -> (@MainActor () -> Bool))?
     var onBusyChange: (@MainActor () -> Void)?
@@ -351,6 +356,24 @@ actor ScreenshotCardExport {
     }
     private func beginBusy() { busyCount += 1; if !isBusy { isBusy = true; onBusyChange?() } }
     private func endBusy() { busyCount -= 1; if busyCount == 0, isBusy { isBusy = false; onBusyChange?() } }
+    /// Starts on the press that may become a drag, never for a card that is only shown.
+    func prepareDragFile() {
+        guard isAlive, dragFile == nil, dragPreparation == nil else { return }
+        let export = export
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH.mm.ss"
+        let name = "\(String(localized: "Screenshot")) \(formatter.string(from: createdAt)).png"
+        dragPreparation = Task { [weak self] in
+            do {
+                let url = try await export.fileURL()
+                let named = await Task.detached { ScreenshotDragFiles.link(url, named: name) }.value
+                guard let self, self.isAlive else { return }
+                self.dragFile = named ?? url
+            } catch {
+                self?.dragFileFailed = true
+            }
+        }
+    }
     func dragProvider() -> NSItemProvider {
         let provider = NSItemProvider()
         provider.suggestedName = String(localized: "Screenshot.png")
@@ -452,6 +475,32 @@ struct ScreenshotTemporaryExports: Sendable {
             do { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700]) } catch { return false }
             root = ScreenshotTemporaryExports.fingerprint(directory, directory: true)
             return root != nil
+        }
+    }
+}
+
+/// Named links to exported screenshots, one folder each, for drags out of the card.
+enum ScreenshotDragFiles {
+    static let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("dev.tavsan.camcord.drag", isDirectory: true)
+    static func link(_ source: URL, named name: String) -> URL? {
+        let folder = directory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let target = folder.appendingPathComponent(name)
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
+                                                    attributes: [.posixPermissions: 0o700])
+            do { try FileManager.default.linkItem(at: source, to: target) }
+            catch { try FileManager.default.copyItem(at: source, to: target) }
+            return target
+        } catch { return nil }
+    }
+    static func cleanup(now: Date = Date()) {
+        guard let folders = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey])
+        else { return }
+        for folder in folders where UUID(uuidString: folder.lastPathComponent) != nil {
+            guard let date = try? folder.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+                  now.timeIntervalSince(date) > 24 * 3600 else { continue }
+            try? FileManager.default.removeItem(at: folder)
         }
     }
 }

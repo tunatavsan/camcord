@@ -73,6 +73,8 @@ struct ScreenshotCardGeometry {
         }
         image.pause = { [weak self] in self?.onPause?(.dragging, $0) }
         image.canInteract = { [weak model] in model?.isAlive == true }
+        image.prepareDrag = { [weak model] in model?.prepareDragFile() }
+        image.dragFile = { [weak model] in (model?.dragFile, model?.dragFileFailed ?? true) }
         well.closeButton.action = { [weak self] in self?.onDismiss?("close") }
         refreshActions()
         model.$isBusy.sink { [weak self] busy in self?.update(busy: busy, error: self?.model.error) }.store(in: &observers)
@@ -326,6 +328,10 @@ private final class ScreenshotCardContent: NSView {
     var open: (() -> Void)?
     /// The preview's capture moves its window like a title bar instead of dragging the file out.
     var movesWindow = false
+    /// Asked on every press: the file a drag will carry is prepared before the drag needs it.
+    var prepareDrag: (() -> Void)?
+    /// The prepared file, or whether preparing it failed (the drag then falls back to a file promise).
+    var dragFile: () -> (url: URL?, failed: Bool) = { (nil, true) }
     /// When set, a rightward drag dismisses instead of dragging the file out:
     /// (translation, velocity, ended, cancelled). Every other direction drags the file.
     var swipe: ((CGPoint, CGPoint, Bool, Bool) -> Void)?
@@ -354,6 +360,7 @@ private final class ScreenshotCardContent: NSView {
     override func mouseDown(with event: NSEvent) {
         guard canInteract() else { downPoint = nil; return }
         if movesWindow { window?.performDrag(with: event); return }
+        prepareDrag?()
         let location = convert(event.locationInWindow, from: nil)
         downPoint = location; gesture = .undecided; velocity = .zero
         lastSample = (location, event.timestamp)
@@ -370,7 +377,7 @@ private final class ScreenshotCardContent: NSView {
         let translation = CGPoint(x: location.x - origin.x, y: location.y - origin.y)
         switch gesture {
         case .swipe: swipe?(translation, velocity, false, false)
-        case .file: return
+        case .file: beginFileDrag(with: event)
         case .undecided:
             guard hypot(translation.x, translation.y) >= 4 else { return }
             if let swipe, translation.x > 0, abs(translation.x) >= 1.5 * abs(translation.y) {
@@ -391,17 +398,32 @@ private final class ScreenshotCardContent: NSView {
         guard canInteract(), gesture == .undecided, !dragging, bounds.contains(location) else { return }
         open?()
     }
+    /// A real file, like a drag from Finder, so every app accepts the drop. Until it is ready
+    /// the drag waits for the next movement; only if preparing it failed does it fall back to a promise.
     private func beginFileDrag(with event: NSEvent) {
-        guard let export else { return }
-        let delegate = ScreenshotCardPromiseDelegate(export: export)
-        let writer = ScreenshotCardPromiseWriter(fileType: UTType.png.identifier, delegate: delegate,
-            preparedURL: preparedURL, preparedPNG: preparedPNG)
-        writer.userInfo = delegate
-        promiseDelegate = delegate
-        let item = NSDraggingItem(pasteboardWriter: writer)
-        item.setDraggingFrame(bounds, contents: image)
+        guard !dragging else { return }
+        let prepared = dragFile()
+        let item: NSDraggingItem
+        if let url = prepared.url {
+            item = NSDraggingItem(pasteboardWriter: url as NSURL)
+        } else if prepared.failed, let export {
+            let delegate = ScreenshotCardPromiseDelegate(export: export)
+            let writer = ScreenshotCardPromiseWriter(fileType: UTType.png.identifier, delegate: delegate,
+                preparedURL: preparedURL, preparedPNG: preparedPNG)
+            writer.userInfo = delegate
+            promiseDelegate = delegate
+            item = NSDraggingItem(pasteboardWriter: writer)
+        } else { return }
+        item.setDraggingFrame(imageFrame, contents: image)
         dragging = true
         beginDraggingSession(with: [item], event: event, source: self)
+    }
+    /// Where the capture is actually drawn inside this view.
+    private var imageFrame: CGRect {
+        guard let size = image?.size, size.width > 0, size.height > 0 else { return bounds }
+        let scale = min(1, bounds.width / size.width, bounds.height / size.height)
+        let drawn = CGSize(width: size.width * scale, height: size.height * scale)
+        return CGRect(x: (bounds.width - drawn.width) / 2, y: (bounds.height - drawn.height) / 2, width: drawn.width, height: drawn.height)
     }
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
     func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) { pause?(true) }
