@@ -30,7 +30,7 @@ struct PanelLayoutTests {
     @Test("the capture palette stays compact in every recording state")
     func sizeTable() {
         #expect(CapturePanelView.panelWidth == 360)
-        #expect(CapturePanelView.panelHeight == 410)
+        #expect(CapturePanelView.panelHeight == 414)
         // Recording status uses the same compact palette footprint as idle capture.
         #expect(CapturePanelView.activeHeight == CapturePanelView.panelHeight)
         for height in [CapturePanelView.panelHeight, CapturePanelView.activeHeight,

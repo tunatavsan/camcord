@@ -27,7 +27,7 @@ struct CapturePanelView: View {
         static let padding: CGFloat = 12
         static let captureCell: CGFloat = 80
         static let recordCell: CGFloat = 112
-        static let recentCell: CGFloat = 134
+        static let recentCell: CGFloat = 138
         static let destinationsCell: CGFloat = 44
     }
 
@@ -217,14 +217,17 @@ private struct PanelRecordCell: View {
     let canConfigure: Bool
     /// One control in focus at a time across the row, like the capture tools.
     @State private var focus: String?
+    @Namespace private var sourceMark
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if model.state == .idle && !model.isArmed && !model.isStarting {
                 HStack(spacing: 4) {
                     ForEach(PanelRecordingSource.allCases) { source in
                         PanelChip(symbol: source.symbol, title: Text(source.label), selected: context.recordingSource == source,
-                                  focus: focusState(source.rawValue), action: {
-                            context.selectSource(source, canConfigure: canConfigure)
+                                  focus: focusState(source.rawValue), mark: sourceMark, action: {
+                            withAnimation(.spring(response: 0.36, dampingFraction: 0.72)) {
+                                context.selectSource(source, canConfigure: canConfigure)
+                            }
                         }, hover: hover(source.rawValue))
                     }
                     Spacer(minLength: 4)
@@ -253,8 +256,6 @@ private struct PanelRecordCell: View {
 /// Recording, paused, armed or starting: a living dot, the state, and the time large.
 private struct PanelRecordingStatus: View {
     @ObservedObject var model: RecordingStateModel
-    @State private var pulse = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         HStack(spacing: 8) {
             if model.isStarting {
@@ -264,21 +265,9 @@ private struct PanelRecordingStatus: View {
                 InkSymbol(name: "macwindow", pointSize: 14, canvas: 20).foregroundStyle(Theme.Palette.ink2.color)
                 Text("Ready to start").font(Theme.Font.bodyStrong)
             } else {
-                let recording = model.state == .recording
-                ZStack {
-                    Circle().fill(Theme.Palette.record.color.opacity(recording ? 0.35 : 0))
-                        .frame(width: 16, height: 16)
-                        .scaleEffect(pulse && recording && !reduceMotion ? 1.3 : 0.7)
-                        .opacity(pulse && recording ? 0 : 1)
-                    Circle().fill(recording ? Theme.Palette.record.color : Theme.Palette.ink3.color)
-                        .frame(width: 9, height: 9)
-                }
-                .frame(width: 18, height: 18)
-                .accessibilityHidden(true)
-                .onAppear {
-                    guard !reduceMotion else { return }
-                    withAnimation(.easeOut(duration: 1.1).repeatForever(autoreverses: false)) { pulse = true }
-                }
+                PanelPulseDot(recording: model.state == .recording)
+                    .frame(width: 18, height: 18)
+                    .accessibilityHidden(true)
                 Text(model.state == .paused ? "Paused" : "Recording").font(Theme.Font.bodyStrong)
             }
             Spacer(minLength: 0)
@@ -292,31 +281,41 @@ private struct PanelRecordingStatus: View {
     }
 }
 
-/// A capsule choice: filled when selected; hovered, its symbol rises and glows and its
-/// siblings step back, like every tool in the panel.
+/// A choice: the selected one in full ink over a short mark that slides between choices, the
+/// others quieter. Hovered, its symbol rises and glows and its siblings step back.
 private struct PanelChip: View {
     let symbol: String
     let title: Text
     let selected: Bool
     let focus: Bool?
+    let mark: Namespace.ID
     let action: () -> Void
     let hover: (Bool) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         let lifted = focus == true
         Button(action: action) {
-            HStack(spacing: 4) {
-                InkSymbol(name: symbol, pointSize: 11, weight: .semibold, canvas: 16)
-                    .scaleEffect(lifted && !reduceMotion ? 1.18 : 1)
-                    .offset(y: lifted && !reduceMotion ? -1 : 0)
-                    .shadow(color: Theme.Palette.ink.color.opacity(lifted ? 0.5 : 0), radius: 5)
-                title.font(Theme.Font.captionStrong).lineLimit(1).fixedSize()
+            VStack(spacing: 3) {
+                HStack(spacing: 4) {
+                    InkSymbol(name: symbol, pointSize: 11, weight: .semibold, canvas: 16)
+                        .scaleEffect(lifted && !reduceMotion ? 1.18 : 1)
+                        .offset(y: lifted && !reduceMotion ? -1 : 0)
+                        .shadow(color: Theme.Palette.ink.color.opacity(lifted ? 0.5 : 0), radius: 5)
+                    title.font(Theme.Font.captionStrong).lineLimit(1).fixedSize()
+                }
+                .foregroundStyle(selected ? Theme.Palette.ink.color : Theme.Palette.ink3.color)
+                ZStack {
+                    if selected {
+                        Capsule().fill(Theme.Palette.ink.color).frame(width: 16, height: 2)
+                            .matchedGeometryEffect(id: "source", in: mark)
+                    }
+                }
+                .frame(height: 2)
             }
-            .padding(.horizontal, 8)
-            .frame(height: 28)
-            .background(selected ? Theme.Palette.selectionStrong.color : .clear, in: .capsule)
+            .padding(.horizontal, 6)
+            .frame(height: 30)
             .opacity(focus == false ? 0.5 : 1)
-            .contentShape(.capsule)
+            .contentShape(.rect)
         }
         .buttonStyle(PanelPressStyle())
         .onHover(perform: hover)
@@ -325,6 +324,8 @@ private struct PanelChip: View {
     }
 }
 
+/// A device for the next recording: on, its symbol is solid with a small green light; off,
+/// it is struck through and quiet.
 private struct PanelDeviceToggle: View {
     let title: LocalizedStringKey
     let symbol: String
@@ -339,13 +340,21 @@ private struct PanelDeviceToggle: View {
         Button(action: action) {
             InkSymbol(name: on ? symbol + ".fill" : symbol + ".slash", pointSize: 13, weight: .semibold, canvas: 20)
                 .foregroundStyle(on ? Theme.Palette.ink.color : Theme.Palette.ink3.color)
+                .overlay(alignment: .topTrailing) {
+                    Circle().fill(Theme.Palette.ok.color)
+                        .frame(width: 5, height: 5)
+                        .shadow(color: Theme.Palette.ok.color.opacity(0.8), radius: 3)
+                        .offset(x: 2, y: -1)
+                        .opacity(on ? 1 : 0)
+                        .scaleEffect(on ? 1 : 0.3)
+                }
                 .scaleEffect(lifted && !reduceMotion ? 1.18 : 1)
                 .offset(y: lifted && !reduceMotion ? -1 : 0)
                 .shadow(color: Theme.Palette.ink.color.opacity(lifted ? 0.5 : 0), radius: 5)
                 .frame(width: 30, height: 28)
-                .background(on ? Theme.Palette.selectionStrong.color : .clear, in: .capsule)
                 .opacity(focus == false ? 0.5 : 1)
-                .contentShape(.capsule)
+                .contentShape(.rect)
+                .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.6), value: on)
         }
         .buttonStyle(PanelPressStyle())
         .disabled(!available)
@@ -466,8 +475,9 @@ private struct PanelRecentCell: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .help(Text(verbatim: issue ?? ""))
             } else {
+                // Room above for a tile's lift, so it never leaves the strip.
                 PanelRecentCarousel(items: items, images: images, open: open)
-                    .frame(height: PanelCarouselView.tile.height + 2)
+                    .frame(height: PanelCarouselView.tile.height + 8)
             }
         }
         .padding(CapturePanelView.Layout.padding)
@@ -500,11 +510,10 @@ private struct PanelCaptureWell: View {
             }
             if playable {
                 Image(systemName: "play.fill")
-                    .font(.system(size: hovered ? 15 : 12, weight: .bold))
+                    .font(.system(size: hovered ? 17 : 14, weight: .bold))
                     .foregroundStyle(.white)
-                    .frame(width: hovered ? 36 : 28, height: hovered ? 36 : 28)
-                    .background(.black.opacity(0.4), in: .circle)
-                    .overlay(Circle().strokeBorder(.white.opacity(0.25), lineWidth: 1))
+                    .frame(width: hovered ? 46 : 40, height: hovered ? 46 : 40)
+                    .glassEffect(.clear.tint(.black.opacity(0.2)), in: .circle)
             }
         }
         .clipShape(.rect(cornerRadius: cornerRadius, style: .continuous))
@@ -988,3 +997,51 @@ enum RecordingRename {
     }
 }
 
+/// The recording light: a steady dot and a ring that keeps leaving it, run by the render
+/// server so a long recording never asks the panel for a frame. Paused, the dot hollows.
+private struct PanelPulseDot: NSViewRepresentable {
+    let recording: Bool
+    func makeNSView(context: Context) -> PulseDotView { PulseDotView() }
+    func updateNSView(_ view: PulseDotView, context: Context) { view.recording = recording }
+
+    final class PulseDotView: NSView {
+        private let dot = CALayer()
+        private let ring = CALayer()
+        var recording = true { didSet { if recording != oldValue { restyle() } } }
+        init() {
+            super.init(frame: .zero)
+            wantsLayer = true
+            layer?.addSublayer(ring)
+            layer?.addSublayer(dot)
+            restyle()
+        }
+        required init?(coder: NSCoder) { nil }
+        override func layout() {
+            super.layout()
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            let center = CGPoint(x: bounds.midX, y: bounds.midY)
+            dot.bounds = CGRect(x: 0, y: 0, width: 9, height: 9); dot.cornerRadius = 4.5; dot.position = center
+            ring.bounds = CGRect(x: 0, y: 0, width: 9, height: 9); ring.cornerRadius = 4.5; ring.position = center
+            CATransaction.commit()
+        }
+        private func restyle() {
+            let red = Theme.Palette.record.ns.cgColor
+            dot.backgroundColor = recording ? red : NSColor.clear.cgColor
+            dot.borderColor = red
+            dot.borderWidth = recording ? 0 : 1.5
+            ring.backgroundColor = red
+            ring.removeAllAnimations()
+            ring.opacity = 0
+            guard recording, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+            let grow = CABasicAnimation(keyPath: "transform.scale"); grow.fromValue = 1; grow.toValue = 2.2
+            let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0.5; fade.toValue = 0
+            let pulse = CAAnimationGroup()
+            pulse.animations = [grow, fade]
+            pulse.duration = 1.3
+            pulse.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            pulse.repeatCount = .infinity
+            pulse.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 120, preferred: 60)
+            ring.add(pulse, forKey: "pulse")
+        }
+    }
+}

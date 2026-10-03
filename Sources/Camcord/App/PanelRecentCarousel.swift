@@ -31,6 +31,7 @@ struct PanelRecentCarousel: NSViewRepresentable {
     private var offset: CGFloat = 0
     private var tracking: NSTrackingArea?
     private var hovered: String?
+    private let info = PanelHoverInfo()
     private enum Gesture { case none, undecided, scroll, file }
     private var gesture = Gesture.none
     private var press: (point: CGPoint, offset: CGFloat, item: CaptureItem?)?
@@ -80,7 +81,7 @@ struct PanelRecentCarousel: NSViewRepresentable {
         let stripFrame = CGRect(x: 0, y: 0, width: max(contentWidth, bounds.width), height: bounds.height)
         if stripView.frame != stripFrame { stripView.frame = stripFrame }
         for (index, item) in items.enumerated() {
-            let frame = CGRect(x: CGFloat(index) * (Self.tile.width + Self.gap), y: (bounds.height - Self.tile.height) / 2,
+            let frame = CGRect(x: CGFloat(index) * (Self.tile.width + Self.gap), y: (bounds.height - Self.tile.height) / 2 + 2,
                                width: Self.tile.width, height: Self.tile.height)
             if tiles[item.id]?.frame != frame { tiles[item.id]?.frame = frame }
         }
@@ -211,6 +212,7 @@ struct PanelRecentCarousel: NSViewRepresentable {
     override func mouseMoved(with event: NSEvent) {
         guard gesture == .none else { return }
         setHovered(item(at: convert(event.locationInWindow, from: nil))?.id)
+        if hovered != nil { info.move(to: NSEvent.mouseLocation) }
     }
     override func mouseExited(with event: NSEvent) { setHovered(nil) }
     private func setHovered(_ id: String?) {
@@ -218,7 +220,11 @@ struct PanelRecentCarousel: NSViewRepresentable {
         if let hovered { tiles[hovered]?.setHovered(false, screen: window?.screen) }
         hovered = id
         if let id { tiles[id]?.setHovered(true, screen: window?.screen) }
-        toolTip = id.flatMap { id in items.first { $0.id == id }?.title }
+        if let item = id.flatMap({ id in items.first { $0.id == id } }) { info.show(item, from: self) } else { info.hide() }
+    }
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil { info.hide() }
     }
 
     // MARK: File drag
@@ -272,6 +278,8 @@ private final class PanelCarouselStrip: NSView {
         play = item.kind == .recording ? PanelPlayChip(frame: .zero) : nil
         super.init(frame: .zero)
         wantsLayer = true
+        // AppKit owns a view layer's clipping: ask it, or the tile's corners stay square.
+        clipsToBounds = true
         if let play { addSubview(play) }
     }
     required init?(coder: NSCoder) { nil }
@@ -279,13 +287,30 @@ private final class PanelCarouselStrip: NSView {
     override func makeBackingLayer() -> CALayer { PanelCarouselTile(item: item) }
     private var tile: PanelCarouselTile? { layer as? PanelCarouselTile }
     func setImage(_ image: CGImage?) { tile?.setImage(image) }
+    /// Hover lifts the tile a little, like every control in the panel, and brightens it.
     func setHovered(_ hovered: Bool, screen: NSScreen?) {
         tile?.setHovered(hovered, screen: screen)
         play?.setVeil(active: hovered)
+        guard let layer else { return }
+        let lifted = CATransform3DConcat(
+            CATransform3DConcat(CATransform3DMakeTranslation(-bounds.width / 2, -bounds.height / 2, 0), CATransform3DMakeScale(1.03, 1.03, 1)),
+            CATransform3DMakeTranslation(bounds.width / 2, bounds.height / 2 - 3, 0))
+        let from = layer.presentation()?.transform ?? layer.transform
+        let to = hovered ? lifted : CATransform3DIdentity
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        layer.transform = to
+        let spring = CASpringAnimation.card(keyPath: "transform", from: NSValue(caTransform3D: from), to: NSValue(caTransform3D: to),
+                                            response: 0.32, dampingRatio: hovered ? 0.62 : 0.85)
+        spring.preferFullRefreshRate(on: screen)
+        layer.add(spring, forKey: "tile-lift")
+        CATransaction.commit()
     }
     func snapshot() -> NSImage? { tile?.snapshot() }
     override func layout() {
         super.layout()
+        layer?.cornerRadius = Theme.Radius.thumb
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = true
         play?.frame = CGRect(x: bounds.midX - 15, y: bounds.midY - 15, width: 30, height: 30)
     }
 }
@@ -323,7 +348,7 @@ final class PanelCarouselTile: CALayer {
     @MainActor init(item: CaptureItem) {
         super.init()
         let scale = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
-        cornerRadius = 10
+        cornerRadius = Theme.Radius.thumb
         cornerCurve = .continuous
         masksToBounds = true
         backgroundColor = Theme.Palette.well.ns.cgColor
@@ -383,12 +408,10 @@ final class PanelCarouselTile: CALayer {
         CATransaction.commit()
     }
 
-    /// Hover brightens the capture and lights the tile's edge; the tile itself never grows.
+    /// Hover brightens the capture.
     @MainActor func setHovered(_ hovered: Bool, screen: NSScreen?) {
         CATransaction.begin(); CATransaction.setAnimationDuration(0.16)
         dim.opacity = hovered ? 0.35 : 1
-        borderWidth = 1
-        borderColor = NSColor.white.withAlphaComponent(hovered ? 0.4 : 0).cgColor
         CATransaction.commit()
     }
 
@@ -396,4 +419,151 @@ final class PanelCarouselTile: CALayer {
         guard let image else { return nil }
         return NSImage(cgImage: image, size: bounds.size)
     }
+}
+
+/// A small glass note that follows the pointer over the strip on a spring: the capture's
+/// name and what it is, at once, instead of the system's delayed tooltip.
+@MainActor final class PanelHoverInfo {
+    private let panel: NSPanel
+    private let glass = NSGlassEffectView()
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let detailLabel = NSTextField(labelWithString: "")
+    private weak var host: NSView?
+    private var link: CADisplayLink?
+    private var proxy: PanelHoverInfoProxy?
+    private var position: CGPoint = .zero
+    private var velocity: CGPoint = .zero
+    private var target: CGPoint = .zero
+    private var lastTick: CFTimeInterval?
+    private(set) var itemID: String?
+    /// The note rides above and to the right of the pointer.
+    private static let offset = CGPoint(x: 14, y: 16)
+
+    init() {
+        panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
+        panel.ignoresMouseEvents = true
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 1)
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
+        panel.animationBehavior = .none
+        let content = NSView()
+        content.wantsLayer = true
+        glass.style = .regular
+        glass.cornerRadius = 12
+        let face = NSView()
+        titleLabel.font = Theme.Font.ns.text(12, weight: .semibold)
+        titleLabel.lineBreakMode = .byTruncatingMiddle
+        detailLabel.font = Theme.Font.ns.mono(10.5, weight: .medium)
+        detailLabel.textColor = .secondaryLabelColor
+        for label in [titleLabel, detailLabel] { label.isSelectable = false; face.addSubview(label) }
+        glass.contentView = face
+        content.addSubview(glass)
+        panel.contentView = content
+    }
+
+    func show(_ item: CaptureItem, from host: NSView) {
+        self.host = host
+        let mouse = NSEvent.mouseLocation
+        if itemID == nil {
+            position = CGPoint(x: mouse.x + Self.offset.x, y: mouse.y + Self.offset.y)
+            velocity = .zero
+        }
+        itemID = item.id
+        titleLabel.stringValue = item.title
+        detailLabel.stringValue = Self.details(item)
+        let width = min(280, max(titleLabel.intrinsicContentSize.width, detailLabel.intrinsicContentSize.width) + 24)
+        let size = CGSize(width: ceil(width), height: 44)
+        panel.setContentSize(size)
+        glass.frame = CGRect(origin: .zero, size: size)
+        titleLabel.frame = CGRect(x: 12, y: 22, width: size.width - 24, height: 16)
+        detailLabel.frame = CGRect(x: 12, y: 6, width: size.width - 24, height: 14)
+        move(to: mouse)
+        if !panel.isVisible {
+            place()
+            panel.orderFrontRegardless()
+            if let layer = panel.contentView?.layer, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                let pop = CASpringAnimation.card(keyPath: "transform.scale", from: 0.92, to: 1, response: 0.3, dampingRatio: 0.7)
+                let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0; fade.toValue = 1; fade.duration = 0.12
+                layer.add(pop, forKey: "info-pop"); layer.add(fade, forKey: "info-fade")
+            }
+        }
+        startFollowing()
+    }
+
+    func move(to mouse: CGPoint) {
+        target = CGPoint(x: mouse.x + Self.offset.x, y: mouse.y + Self.offset.y)
+        startFollowing()
+    }
+
+    func hide() {
+        itemID = nil
+        stopFollowing()
+        panel.orderOut(nil)
+    }
+
+    static func details(_ item: CaptureItem) -> String {
+        let kind: String
+        switch item.kind {
+        case .screenshot: kind = String(localized: "Screenshot")
+        case .scrollCapture: kind = String(localized: "Scroll capture")
+        case .recording: kind = String(localized: "Recording")
+        }
+        var parts = [kind]
+        if let duration = item.duration, duration.isFinite {
+            let total = Int(duration.rounded())
+            parts.append(total >= 3600 ? String(format: "%d:%02d:%02d", total / 3600, total % 3600 / 60, total % 60)
+                                       : String(format: "%d:%02d", total / 60, total % 60))
+        }
+        if let pixels = item.pixelSize, pixels.width > 0 { parts.append("\(Int(pixels.width))×\(Int(pixels.height))") }
+        parts.append(ByteCountFormatter.string(fromByteCount: item.byteSize, countStyle: .file))
+        return parts.joined(separator: " · ")
+    }
+
+    // MARK: Spring follow at the display's rate
+
+    private func startFollowing() {
+        guard link == nil, let view = panel.contentView else { return }
+        let proxy = PanelHoverInfoProxy(owner: self)
+        let link = view.displayLink(target: proxy, selector: #selector(PanelHoverInfoProxy.tick(_:)))
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+        link.add(to: .main, forMode: .common)
+        self.proxy = proxy; self.link = link; lastTick = nil
+    }
+    private func stopFollowing() {
+        link?.invalidate(); link = nil; proxy = nil; lastTick = nil
+    }
+    fileprivate func tick(_ link: CADisplayLink) {
+        // The strip's panel closing takes the note with it.
+        guard host?.window?.isVisible == true else { hide(); return }
+        let dt = min(max(link.timestamp - (lastTick ?? link.timestamp - 1.0 / 120), 0), 1.0 / 30)
+        lastTick = link.timestamp
+        let stiffness = pow(2 * Double.pi / 0.24, 2), damping = 2 * 0.82 * sqrt(stiffness)
+        let steps = 4
+        for _ in 0..<steps {
+            let h = dt / Double(steps)
+            velocity.x += (stiffness * (target.x - position.x) - damping * velocity.x) * h
+            velocity.y += (stiffness * (target.y - position.y) - damping * velocity.y) * h
+            position.x += velocity.x * h
+            position.y += velocity.y * h
+        }
+        place()
+        if hypot(target.x - position.x, target.y - position.y) < 0.2, hypot(velocity.x, velocity.y) < 2 {
+            position = target; place(); stopFollowing()
+        }
+    }
+    private func place() {
+        var origin = position
+        if let screen = NSScreen.screens.first(where: { $0.frame.contains(target) }) ?? NSScreen.main {
+            let visible = screen.visibleFrame
+            origin.x = min(max(origin.x, visible.minX + 4), visible.maxX - panel.frame.width - 4)
+            origin.y = min(max(origin.y, visible.minY + 4), visible.maxY - panel.frame.height - 4)
+        }
+        panel.setFrameOrigin(CGPoint(x: origin.x.rounded(), y: origin.y.rounded()))
+    }
+}
+
+private final class PanelHoverInfoProxy: NSObject {
+    weak var owner: PanelHoverInfo?
+    init(owner: PanelHoverInfo) { self.owner = owner }
+    @MainActor @objc func tick(_ link: CADisplayLink) { owner?.tick(link) }
 }
