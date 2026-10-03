@@ -74,6 +74,12 @@ final class SelectionView: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     private var trackingArea: NSTrackingArea?
+    /// The badge text is laid out once per change, not on every drag frame.
+    private var badgeLayout: (text: String, line: NSAttributedString, size: CGSize)?
+    private static let badgeAttributes: [NSAttributedString.Key: Any] = [
+        .font: Theme.Font.ns.dataStrong,
+        .foregroundColor: Theme.Palette.ink.dark.nsColor,
+    ]
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -303,12 +309,11 @@ final class SelectionView: NSView {
     }
 
     private func drawBadge(_ text: String, near rect: CGRect) {
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: Theme.Font.ns.dataStrong,
-            .foregroundColor: Theme.Palette.ink.dark.nsColor,
-        ]
-        let attributed = NSAttributedString(string: text, attributes: attributes)
-        let textSize = attributed.size()
+        if badgeLayout?.text != text {
+            let line = NSAttributedString(string: text, attributes: Self.badgeAttributes)
+            badgeLayout = (text, line, line.size())
+        }
+        guard let (_, attributed, textSize) = badgeLayout else { return }
         let horizontalPadding: CGFloat = 6
         let verticalPadding: CGFloat = 3
 
