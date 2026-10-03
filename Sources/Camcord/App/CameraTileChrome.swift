@@ -71,13 +71,14 @@ import QuartzCore
     }
 }
 
-/// The live video blurring behind the tile's buttons, heavier toward the edge they sit on — the
-/// screenshot card's band, on a moving image. One variable blur in the render server, so the
-/// blur keeps the video's own quality and never re-renders anything on the main thread.
-@MainActor final class CameraVeilView: NSView {
+/// Live content blurring toward one edge or corner, heavier at the edge — the screenshot
+/// card's band, on a moving image (the camera behind its buttons, a scroll capture's older
+/// rows). One variable blur in the render server, so the blur keeps the content's own quality
+/// and never re-renders anything on the main thread.
+@MainActor final class ProgressiveBlurView: NSView {
     enum Edge: Equatable { case top, corner(CameraCorner) }
     var edge: Edge = .top { didSet { if edge != oldValue { refreshMask() } } }
-    /// The tile's own outline in this view's coordinates, so the blur never spills past it.
+    /// The surface's own outline in this view's coordinates, so the blur never spills past it.
     var outline: CGPath? { didSet { clipper.path = outline } }
     private let backdrop: CALayer?
     private let scrim = CAGradientLayer()

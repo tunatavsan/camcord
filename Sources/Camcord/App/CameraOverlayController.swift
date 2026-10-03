@@ -624,8 +624,8 @@ final class FloatingCameraView: NSView {
     private var chromeCorner: CameraCorner = .bottomRight
     // The buttons are the app's glass chips over a progressive blur of the video, like the
     // screenshot card's: the side they sit on blurs when the pointer comes to it.
-    private let topVeil = CameraVeilView()
-    private let cornerVeil = CameraVeilView()
+    private let topVeil = ProgressiveBlurView()
+    private let cornerVeil = ProgressiveBlurView()
     private let closeChip = CameraGlassChip(symbol: "xmark", pointSize: 10, weight: .bold)
     /// One per diagonal, so the arrows always point along the corner's own resize.
     private let resizeChipDown = CameraGlassChip(symbol: "arrow.up.left.and.arrow.down.right", pointSize: 10, weight: .semibold)
