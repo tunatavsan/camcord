@@ -68,12 +68,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             eventTapEngine: eventTapEngine
         )
         self.statusItemController = statusItemController
-        // A new recording hub flies out of the status item, so the owner sees where it lands.
-        RecordingHubPanel.arrivalOrigin = { [weak statusItemController] in
-            guard let button = statusItemController?.anchorButton, let window = button.window else { return nil }
-            let frame = window.convertToScreen(button.convert(button.bounds, to: nil))
-            return CGPoint(x: frame.midX, y: frame.minY - 30)
-        }
 
         let recordingStateModel = RecordingStateModel()
         self.recordingStateModel = recordingStateModel

@@ -210,7 +210,7 @@ final class RecordingHubView: NSView {
     var previewVisible = false {
         didSet {
             guard previewVisible != oldValue else { return }
-            chips[.preview]?.setSymbol(previewVisible ? "video.fill" : "video.slash.fill", color: .white)
+            chips[.preview]?.setCamera(on: previewVisible)
             rebuildAccessibility()
         }
     }
@@ -317,7 +317,7 @@ final class RecordingHubView: NSView {
         for item in items {
             switch item {
             case .elapsed:
-                let chip = HubChip(kind: .identity, symbol: nil, tint: Self.neutral)
+                let chip = HubChip(kind: .identity, symbol: nil, tint: Self.neutral, bare: true)
                 chip.setText(elapsed ?? "0:00")
                 // Paused stills and hollows the dot: the state never rests on colour alone.
                 chip.setRecording(mode == .recording)
@@ -327,13 +327,15 @@ final class RecordingHubView: NSView {
                 chip.setText(String(localized: "Start"))
                 chips[item] = chip
             case .pause:
-                chips[item] = HubChip(kind: .button, symbol: mode == .paused ? "play.fill" : "pause.fill", tint: Self.neutral)
+                chips[item] = HubChip(kind: .button, symbol: mode == .paused ? "play.fill" : "pause.fill", tint: Self.neutral, bare: true)
             case .stop:
                 chips[item] = HubChip(kind: .button, symbol: "stop.fill", tint: Self.red)
             case .preview:
-                chips[item] = HubChip(kind: .button, symbol: previewVisible ? "video.fill" : "video.slash.fill", tint: Self.neutral)
+                let chip = HubChip(kind: .button, symbol: nil, tint: Self.neutral, bare: true)
+                chip.setCamera(on: previewVisible)
+                chips[item] = chip
             case .cancel:
-                chips[item] = HubChip(kind: .button, symbol: "xmark", tint: Self.neutral)
+                chips[item] = HubChip(kind: .button, symbol: "xmark", tint: Self.neutral, bare: true)
             case .divider, .micLevel:
                 break
             }
@@ -557,11 +559,15 @@ private final class HubContent: NSView {
     private let dot = CALayer()
     private let ring = CALayer()
     private let tint: NSColor
+    /// A bare control stands on the tray itself; only stop and Start carry a glass disc.
+    private let bare: Bool
+    private let light = CALayer()
     private var focus: Bool?
 
-    init(kind: Kind, symbol: String?, tint: NSColor, symbolColor: NSColor = .white) {
+    init(kind: Kind, symbol: String?, tint: NSColor, symbolColor: NSColor = .white, bare: Bool = false) {
         self.kind = kind
         self.tint = tint
+        self.bare = bare
         super.init(frame: .zero)
         wantsLayer = true
         glass.style = .clear
@@ -573,8 +579,13 @@ private final class HubContent: NSView {
             face.layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
             face.layer?.borderWidth = 1
         }
-        glass.contentView = face
-        addSubview(glass)
+        if bare { addSubview(face) } else { glass.contentView = face; addSubview(glass) }
+        light.backgroundColor = Theme.Palette.ok.ns.cgColor
+        light.shadowColor = Theme.Palette.ok.ns.cgColor
+        light.shadowOpacity = 0.8
+        light.shadowRadius = 3
+        light.shadowOffset = .zero
+        light.opacity = 0
         let scale = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
         icon.contentsScale = scale
         icon.shadowColor = NSColor.white.cgColor
@@ -603,7 +614,17 @@ private final class HubContent: NSView {
             label.font = Theme.Font.ns.text(14, weight: .semibold)
             label.fontSize = 14
         }
+        lift.addSublayer(light)
         if let symbol { setSymbol(symbol, color: symbolColor) }
+    }
+
+    /// The camera as the panel shows it: on, solid with a small green light; off, struck
+    /// through and quiet.
+    func setCamera(on: Bool) {
+        setSymbol(on ? "video.fill" : "video.slash", color: on ? .white : NSColor.white.withAlphaComponent(0.5))
+        CATransaction.begin(); CATransaction.setAnimationDuration(0.18)
+        light.opacity = on ? 1 : 0
+        CATransaction.commit()
     }
     required init?(coder: NSCoder) { nil }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -637,6 +658,7 @@ private final class HubContent: NSView {
         super.layout()
         glass.frame = bounds
         glass.cornerRadius = min(bounds.width, bounds.height) / 2
+        if bare { face.frame = bounds }
         CATransaction.begin(); CATransaction.setDisableActions(true)
         face.layer?.cornerRadius = min(bounds.width, bounds.height) / 2
         layer?.masksToBounds = false
@@ -662,6 +684,9 @@ private final class HubContent: NSView {
         press.frame = iconBox
         lift.frame = press.bounds
         icon.frame = CGRect(x: lift.bounds.midX - 11, y: lift.bounds.midY - 11, width: 22, height: 22)
+        light.bounds = CGRect(x: 0, y: 0, width: 5, height: 5)
+        light.cornerRadius = 2.5
+        light.position = CGPoint(x: icon.frame.maxX - 1, y: icon.frame.maxY - 3)
         CATransaction.commit()
     }
 
@@ -680,11 +705,12 @@ private final class HubContent: NSView {
                                            to: NSValue(caTransform3D: lift.transform), response: 0.3, dampingRatio: lifted ? 0.55 : 0.8)
         swell.preferFullRefreshRate(on: screen)
         lift.add(swell, forKey: "hub-swell")
+        // A bare control glows through its symbol alone; a disc glows around its edge.
         layer.shadowColor = glowColor.cgColor
         layer.shadowRadius = 10
         layer.shadowOffset = .zero
         let fromGlow = layer.presentation()?.shadowOpacity ?? layer.shadowOpacity
-        layer.shadowOpacity = lifted ? 0.6 : 0
+        layer.shadowOpacity = lifted && !bare ? 0.6 : 0
         let glow = CABasicAnimation(keyPath: "shadowOpacity")
         glow.fromValue = fromGlow; glow.toValue = layer.shadowOpacity; glow.duration = lifted ? 0.16 : 0.22
         glow.preferFullRefreshRate(on: screen)

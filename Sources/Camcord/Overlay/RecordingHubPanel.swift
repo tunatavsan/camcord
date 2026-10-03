@@ -222,8 +222,6 @@ final class RecordingHubPanel {
     /// Fires as the pointer arrives on and leaves the hub — the recording frame rides on
     /// this, so hovering the hub is what reveals it.
     var onHoverChange: ((Bool) -> Void)?
-    /// Where a newly shown hub flies in from — the status item — so the owner sees where it lands.
-    static var arrivalOrigin: (@MainActor () -> CGPoint?)?
 
     private let panel: NSPanel
     private let view: RecordingHubView
@@ -352,24 +350,13 @@ final class RecordingHubPanel {
         arrive()
     }
 
-    /// The first appearance: out of the status item and onto the dock on the released
-    /// spring, fading in, at the display's rate — so the owner sees where the hub lives.
+    /// The hub is a helper: it simply fades in where it lives.
     private func arrive() {
         guard !Self.reducesMotion, let layer = view.layer else { return }
-        let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0; fade.toValue = 1; fade.duration = 0.22
+        let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0; fade.toValue = 1; fade.duration = 0.24
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
         fade.preferFullRefreshRate(on: panel.screen)
         layer.add(fade, forKey: "hub-arrive-fade")
-        guard let origin = Self.arrivalOrigin?(), NSScreen.screens.contains(where: { $0.frame.contains(origin) }) else {
-            let drop = CASpringAnimation.card(keyPath: "transform.translation.y", from: 10, to: 0, response: 0.4, dampingRatio: 0.78)
-            drop.preferFullRefreshRate(on: panel.screen)
-            layer.add(drop, forKey: "hub-arrive-drop")
-            return
-        }
-        let target = dock.anchor(of: capsule)
-        capsule = dock.rect(size: capsule.size, anchoredAt: origin)
-        placeWindow()
-        settle = (target, .zero, hypot(target.x - origin.x, target.y - origin.y))
-        startMotion()
     }
 
     /// Becomes another mode in place — armed into recording at Başlat — with a soft crossfade
