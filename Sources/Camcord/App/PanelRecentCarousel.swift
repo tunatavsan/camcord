@@ -445,6 +445,9 @@ final class PanelCarouselTile: CALayer {
     }
     private let panel: InfoPanel
     private let content = InfoContent()
+    /// Holds the glass at the size it has now; the menu scales it rather than resizing it, so
+    /// the glass keeps the note's own look as it grows.
+    private let holder = NSView()
     private let glass = NSGlassEffectView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
@@ -482,7 +485,9 @@ final class PanelCarouselTile: CALayer {
         detailLabel.font = Theme.Font.ns.mono(10.5, weight: .medium)
         detailLabel.textColor = .secondaryLabelColor
         for label in [titleLabel, detailLabel] { label.isSelectable = false }
-        content.addSubview(glass)
+        holder.wantsLayer = true
+        holder.addSubview(glass)
+        content.addSubview(holder)
         content.addSubview(titleLabel)
         content.addSubview(detailLabel)
         panel.contentView = content
@@ -526,7 +531,48 @@ final class PanelCarouselTile: CALayer {
         itemID = nil
         closeMenuState()
         stopFollowing()
+        resetMotion()
         panel.orderOut(nil)
+    }
+
+    /// The menu folds back the way it opened: the rows go, the glass shrinks to the note and
+    /// fades with it.
+    func closeMenu() {
+        guard isMenuOpen, let holderLayer = holder.layer, let contentLayer = content.layer,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { hide(); return }
+        removeMenuMonitors()
+        panel.ignoresMouseEvents = true
+        let folded = foldedTransform
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        CATransaction.setCompletionBlock { [weak self] in
+            MainActor.assumeIsolated { if self?.isMenuOpen == true { self?.hide() } }
+        }
+        for row in rows {
+            row.layer?.opacity = 0
+            let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 1; fade.toValue = 0; fade.duration = 0.1
+            row.layer?.add(fade, forKey: "row-out")
+        }
+        let from = holderLayer.presentation()?.transform ?? holderLayer.transform
+        holderLayer.transform = folded
+        let fold = CASpringAnimation.card(keyPath: "transform", from: NSValue(caTransform3D: from), to: NSValue(caTransform3D: folded),
+                                          response: 0.28, dampingRatio: 1)
+        fold.duration = 0.22
+        fold.preferFullRefreshRate(on: panel.screen)
+        holderLayer.add(fold, forKey: "menu-fold")
+        contentLayer.opacity = 0
+        let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 1; fade.toValue = 0
+        fade.beginTime = CACurrentMediaTime() + 0.08; fade.duration = 0.14; fade.fillMode = .backwards
+        contentLayer.add(fade, forKey: "menu-fade")
+        CATransaction.commit()
+    }
+
+    /// The note's rectangle inside the menu, as a transform of the menu-sized glass.
+    private var foldedTransform: CATransform3D = CATransform3DIdentity
+    private func resetMotion() {
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        holder.layer?.removeAllAnimations(); holder.layer?.transform = CATransform3DIdentity
+        content.layer?.removeAllAnimations(); content.layer?.opacity = 1
+        CATransaction.commit()
     }
 
     /// The note grows into the capture's menu where it stands: the glass springs from the
@@ -534,6 +580,7 @@ final class PanelCarouselTile: CALayer {
     func expandMenu(for item: CaptureItem, actions: [MenuAction], from host: NSView) {
         if itemID != item.id || !panel.isVisible { show(item, from: host) }
         stopFollowing()
+        resetMotion()
         isMenuOpen = true
         let note = panel.frame
         let size = CGSize(width: max(Self.menuWidth, noteSize.width), height: Self.header + CGFloat(actions.count) * Self.rowHeight + 8)
@@ -559,17 +606,18 @@ final class PanelCarouselTile: CALayer {
         let start = CGRect(x: note.minX - frame.minX, y: frame.maxY - note.maxY, width: note.width, height: note.height)
         let full = CGRect(origin: .zero, size: size)
         layoutNote(in: full)
+        // The glass is menu-sized at once and grows out of the note's rectangle by a transform.
+        foldedTransform = CATransform3DConcat(CATransform3DMakeScale(start.width / full.width, start.height / full.height, 1),
+                                              CATransform3DMakeTranslation(start.minX, start.minY, 0))
         let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        if reduce {
-            glass.frame = full
-        } else {
-            glass.frame = start
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.32
-                context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1)
-                context.allowsImplicitAnimation = true
-                glass.animator().frame = full
-            }
+        if !reduce, let holderLayer = holder.layer {
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            holderLayer.transform = CATransform3DIdentity
+            let grow = CASpringAnimation.card(keyPath: "transform", from: NSValue(caTransform3D: foldedTransform),
+                                              to: NSValue(caTransform3D: CATransform3DIdentity), response: 0.36, dampingRatio: 0.82)
+            grow.preferFullRefreshRate(on: panel.screen)
+            holderLayer.add(grow, forKey: "menu-grow")
+            CATransaction.commit()
         }
         for (index, row) in rows.enumerated() {
             row.arrive(delay: reduce ? 0 : 0.06 + Double(index) * 0.03, reduceMotion: reduce, screen: panel.screen)
@@ -578,7 +626,8 @@ final class PanelCarouselTile: CALayer {
     }
 
     private func layoutNote(in bounds: CGRect) {
-        glass.frame = bounds
+        holder.frame = bounds
+        glass.frame = holder.bounds
         titleLabel.frame = CGRect(x: 12, y: 6, width: bounds.width - 20, height: 16)
         detailLabel.frame = CGRect(x: 12, y: 23, width: bounds.width - 20, height: 14)
     }
@@ -589,14 +638,16 @@ final class PanelCarouselTile: CALayer {
         if let local = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown], handler: { [weak self] event in
             guard let self else { return event }
             if event.type == .keyDown {
-                if event.keyCode == 53 { self.hide(); return nil }
+                if event.keyCode == 53 { self.closeMenu(); return nil }
                 return event
             }
-            if event.window !== self.panel { self.hide() }
-            return event
+            guard event.window !== self.panel else { return event }
+            self.closeMenu()
+            // A second right click closes the menu; it never opens it again at once.
+            return event.type == .rightMouseDown ? nil : event
         }) { monitors.append(local) }
         if let global = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] _ in
-            MainActor.assumeIsolated { self?.hide() }
+            MainActor.assumeIsolated { self?.closeMenu() }
         }) { monitors.append(global) }
         watch = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {

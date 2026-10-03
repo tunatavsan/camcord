@@ -252,6 +252,7 @@ private struct PanelRecordCell: View {
     /// One control in focus at a time across the row, like the capture tools.
     @State private var focus: String?
     @Namespace private var sourceMark
+    @State private var previewVisible = CameraOverlayController.shared.previewVisible
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if model.state == .idle && !model.isArmed && !model.isStarting {
@@ -271,6 +272,10 @@ private struct PanelRecordCell: View {
                     PanelDeviceToggle(title: "Microphone", symbol: "mic", on: context.settings?.microphone == true,
                                       available: canConfigure && context.settings != nil, focus: focusState("mic"),
                                       action: { context.toggleMicrophone(canConfigure: canConfigure) }, hover: hover("mic"))
+                    // Only the owner's view of the camera; the recording keeps it either way.
+                    PanelDeviceToggle(title: "Camera preview", symbol: "eye", on: previewVisible, available: true,
+                                      focus: focusState("preview"), slash: "eye.slash",
+                                      action: { CameraOverlayController.shared.togglePreview() }, hover: hover("preview"))
                 }
                 .frame(height: 32)
             } else {
@@ -280,6 +285,9 @@ private struct PanelRecordCell: View {
         }
         .padding(CapturePanelView.Layout.padding)
         .panelCell()
+        .onReceive(NotificationCenter.default.publisher(for: CameraOverlayController.previewVisibilityDidChange)) { _ in
+            previewVisible = CameraOverlayController.shared.previewVisible
+        }
     }
     private func focusState(_ id: String) -> Bool? { focus.map { $0 == id } }
     private func hover(_ id: String) -> (Bool) -> Void {
@@ -366,13 +374,15 @@ private struct PanelDeviceToggle: View {
     let on: Bool
     let available: Bool
     let focus: Bool?
+    /// The off symbol; by default the on symbol struck through.
+    var slash: String? = nil
     let action: () -> Void
     let hover: (Bool) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         let lifted = focus == true && available
         Button(action: action) {
-            InkSymbol(name: on ? symbol + ".fill" : symbol + ".slash", pointSize: 13, weight: .semibold, canvas: 20)
+            InkSymbol(name: on ? symbol + ".fill" : (slash ?? symbol + ".slash"), pointSize: 13, weight: .semibold, canvas: 20)
                 .foregroundStyle(on ? Theme.Palette.ink.color : Theme.Palette.ink3.color)
                 .overlay(alignment: .topTrailing) {
                     Circle().fill(Theme.Palette.ok.color)
