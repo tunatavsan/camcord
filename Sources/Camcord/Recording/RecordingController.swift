@@ -128,9 +128,6 @@ final class RecordingController: NSObject {
         let lowDiskThresholdBytes: Int64
     }
     private var activeLimits: ActiveLimits?
-    /// Whether the live recording has a microphone track: a cue played through the speakers
-    /// could reach it, so resuming stays silent then.
-    private var recordsMicrophone = false
     /// Whether the live recording was started with the camera: only then can the hub take it
     /// out of the file and put it back, live.
     private var recordsCamera = false
@@ -576,11 +573,11 @@ final class RecordingController: NSObject {
             pushUI()
             FeedbackSound.recordPause.play(in: defaults)
         case .paused:
-            // Resuming is as immediate as pausing. Camcord's own audio is never in the system
-            // track, so the cue only waits out a recorded microphone — and then it is skipped.
+            // Resuming is as immediate as pausing; its cue follows on the next turn, never waited on.
             guard !isTerminating, engine.isRecording else { return }
             resume()
-            if !recordsMicrophone { FeedbackSound.recordResume.play(in: defaults) }
+            let defaults = defaults
+            Task { @MainActor in FeedbackSound.recordResume.play(in: defaults) }
         }
     }
 
@@ -771,7 +768,6 @@ final class RecordingController: NSObject {
             // Auto-stop guards + best-effort Do Not Disturb, captured for this recording.
             let codec = settings.resolvedCodec
             let limitBytes: Int64 = codec.isProRes ? 3000 * 1024 * 1024 : 500 * 1024 * 1024
-            recordsMicrophone = settings.microphone
             recordsCamera = settings.camera.enabled
             activeLimits = ActiveLimits(
                 maxSeconds: settings.maxDurationMinutes > 0 ? Double(settings.maxDurationMinutes) * 60 : 0,
