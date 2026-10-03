@@ -294,34 +294,66 @@ import Testing
         #expect(await copy.value)
         #expect(!oldest.model.isBusy)
     }
-    @Test("chrome fling uses real rightward distance or velocity, with horizontal dominance")
+    @Test("a swipe dismisses on real rightward distance or velocity, with horizontal dominance")
     func flingCriteria() {
-        #expect(ScreenshotCardChrome.commits(translation: CGPoint(x: 60, y: 0), velocity: .zero))
-        #expect(ScreenshotCardChrome.commits(translation: CGPoint(x: 12, y: 2), velocity: CGPoint(x: 600, y: 0)))
-        #expect(!ScreenshotCardChrome.commits(translation: CGPoint(x: 11, y: 0), velocity: CGPoint(x: 900, y: 0)))
-        #expect(!ScreenshotCardChrome.commits(translation: CGPoint(x: 90, y: 70), velocity: CGPoint(x: 900, y: 0)))
-        #expect(!ScreenshotCardChrome.commits(translation: CGPoint(x: -100, y: 0), velocity: CGPoint(x: -900, y: 0)))
+        #expect(ScreenshotCardSwipe.commits(translation: CGPoint(x: 60, y: 0), velocity: .zero))
+        #expect(ScreenshotCardSwipe.commits(translation: CGPoint(x: 12, y: 2), velocity: CGPoint(x: 600, y: 0)))
+        #expect(!ScreenshotCardSwipe.commits(translation: CGPoint(x: 11, y: 0), velocity: CGPoint(x: 900, y: 0)))
+        #expect(!ScreenshotCardSwipe.commits(translation: CGPoint(x: 90, y: 70), velocity: CGPoint(x: 900, y: 0)))
+        #expect(!ScreenshotCardSwipe.commits(translation: CGPoint(x: -100, y: 0), velocity: CGPoint(x: -900, y: 0)))
     }
-    @Test("native image short-click opens Edit without starting a file drag")
+    @Test("native image short-click opens the preview without starting a file drag")
     func nativeImageClick() throws {
         let view = ScreenshotCardImageView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
-        var edits = 0, pauses = 0
-        view.edit = { edits += 1 }; view.pause = { _ in pauses += 1 }
+        var opens = 0, pauses = 0
+        view.open = { opens += 1 }; view.pause = { _ in pauses += 1 }
         let down = try #require(NSEvent.mouseEvent(with: .leftMouseDown, location: CGPoint(x: 20, y: 20), modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
         let up = try #require(NSEvent.mouseEvent(with: .leftMouseUp, location: CGPoint(x: 20, y: 20), modifierFlags: [], timestamp: 0.1, windowNumber: 0, context: nil, eventNumber: 1, clickCount: 1, pressure: 0))
         view.mouseDown(with: down); view.mouseUp(with: up)
-        #expect(edits == 1)
+        #expect(opens == 1)
         #expect(pauses == 0)
         #expect(view.accessibilityPerformPress())
         let key = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0.2,
             windowNumber: 0, context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
         view.keyDown(with: key)
-        #expect(edits == 3)
+        #expect(opens == 3)
         view.canInteract = { false }
         view.mouseDown(with: down); view.mouseUp(with: up); view.keyDown(with: key)
         #expect(!view.accessibilityPerformPress())
-        #expect(edits == 3)
+        #expect(opens == 3)
         #expect(pauses == 0)
+    }
+    @Test("a rightward drag on the capture swipes the card; other directions never swipe")
+    func captureSwipe() throws {
+        let view = ScreenshotCardImageView(frame: CGRect(x: 0, y: 0, width: 200, height: 120))
+        var swipes: [(translation: CGPoint, ended: Bool)] = [], opens = 0
+        view.open = { opens += 1 }
+        view.swipe = { translation, _, ended, _ in swipes.append((translation, ended)) }
+        func event(_ type: NSEvent.EventType, _ x: CGFloat, _ y: CGFloat, _ time: TimeInterval) throws -> NSEvent {
+            try #require(NSEvent.mouseEvent(with: type, location: CGPoint(x: x, y: y), modifierFlags: [], timestamp: time,
+                                            windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        }
+        view.mouseDown(with: try event(.leftMouseDown, 50, 50, 0))
+        view.mouseDragged(with: try event(.leftMouseDragged, 70, 52, 0.02))
+        view.mouseDragged(with: try event(.leftMouseDragged, 120, 54, 0.04))
+        view.mouseUp(with: try event(.leftMouseUp, 120, 54, 0.05))
+        #expect(swipes.count == 3 && swipes.last?.ended == true && swipes.last?.translation.x == 70)
+        #expect(opens == 0)
+        swipes.removeAll()
+        // Leftward is the file drag (no export here, so no session starts) and never a swipe.
+        view.mouseDown(with: try event(.leftMouseDown, 120, 50, 1))
+        view.mouseDragged(with: try event(.leftMouseDragged, 90, 50, 1.02))
+        view.mouseUp(with: try event(.leftMouseUp, 90, 50, 1.03))
+        #expect(swipes.isEmpty && opens == 0)
+    }
+    @Test("the card offers Copy and Add to Library only for what the capture did not do", arguments: [true, false], [true, false])
+    func destinationActions(copied: Bool, kept: Bool) throws {
+        let host = ScreenshotCardPresentation(model: ScreenshotCardModel(capture: try capture()), copied: copied, kept: kept, canEdit: true)
+        defer { host.invalidate() }
+        let titles = host.well.band.actions.map(\.title)
+        #expect(titles.contains(String(localized: "Copy")) == !copied)
+        #expect(titles.contains(String(localized: "Add to Library")) == !kept)
+        #expect(Array(titles.suffix(3)) == [String(localized: "Edit"), String(localized: "Preview"), String(localized: "Share")])
     }
     @Test("real picker cancellation and service success/failure release only their own sharing pause")
     func sharingLifecycle() throws {

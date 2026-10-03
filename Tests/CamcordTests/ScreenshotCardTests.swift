@@ -22,6 +22,14 @@ import UniformTypeIdentifiers
         #expect(fills || rect.size == size)
     }
 
+    @Test("one destination choice maps onto the clipboard and Library settings and back")
+    func destinationMapping() {
+        for choice in ScreenshotDestination.allCases {
+            #expect(ScreenshotDestination(copies: choice.copies, keeps: choice.keeps) == choice)
+            #expect(choice.copies || choice.keeps)
+        }
+    }
+
     @Test("invalid preview bounds remain finite and never divide by zero")
     func invalidPreviewGeometry() {
         for size in [CGSize.zero, CGSize(width: CGFloat.infinity, height: 1), CGSize(width: 1, height: -2)] {

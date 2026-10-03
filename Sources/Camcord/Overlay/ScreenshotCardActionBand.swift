@@ -2,26 +2,31 @@ import AppKit
 import CoreImage
 import QuartzCore
 
-/// The well's backdrop and the action band's blur levels, rendered once per capture off the main actor.
+/// The well's backdrop, the action band's blur levels and the chips' frost, rendered once
+/// per capture off the main actor.
 enum ScreenshotCardBlur {
     struct Rendered: Sendable {
         let fill: CGImage?
         let levels: [CGImage]
+        /// The whole well, heavily blurred: the badge and the close button stand on it.
+        let heavy: CGImage?
     }
     /// Gaussian sigmas, in points, of the band's stacked levels, lightest first.
     static let levelSigmas: [CGFloat] = [3, 8, 18]
     private static let context = CIContext(options: [.cacheIntermediates: false])
 
-    static func render(_ image: CGImage, imageRect: CGRect, scale: CGFloat) async -> Rendered {
-        await Task.detached(priority: .userInitiated) { renderNow(image, imageRect: imageRect, scale: scale) }.value
+    static func render(_ image: CGImage, imageRect: CGRect, wellSize: CGSize, scale: CGFloat) async -> Rendered {
+        await Task.detached(priority: .userInitiated) {
+            renderNow(image, imageRect: imageRect, wellSize: wellSize, scale: scale)
+        }.value
     }
 
-    static func renderNow(_ image: CGImage, imageRect: CGRect, scale: CGFloat) -> Rendered {
+    static func renderNow(_ image: CGImage, imageRect: CGRect, wellSize: CGSize, scale: CGFloat) -> Rendered {
         let source = CIImage(cgImage: image)
-        let well = CGRect(x: 0, y: 0, width: ScreenshotCardGeometry.well.width * scale,
-                          height: ScreenshotCardGeometry.well.height * scale)
-        guard source.extent.width > 0, source.extent.height > 0, imageRect.width > 0, imageRect.height > 0 else {
-            return Rendered(fill: nil, levels: [])
+        let well = CGRect(x: 0, y: 0, width: (wellSize.width * scale).rounded(), height: (wellSize.height * scale).rounded())
+        guard source.extent.width > 0, source.extent.height > 0, imageRect.width > 0, imageRect.height > 0,
+              well.width > 0, well.height > 0 else {
+            return Rendered(fill: nil, levels: [], heavy: nil)
         }
         // Aspect-fill the well and blur it heavily: the letterbox reads as the capture's own colour.
         let fillScale = max(well.width / source.extent.width, well.height / source.extent.height)
@@ -33,7 +38,7 @@ enum ScreenshotCardBlur {
             .applyingGaussianBlur(sigma: 14 * scale)
             .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0.75])
             .cropped(to: well)
-        // The band blurs exactly what the well shows: the sharp capture over its fill.
+        // What the well shows: the sharp capture over its fill.
         let sharp = source
             .transformed(by: CGAffineTransform(scaleX: imageRect.width * scale / source.extent.width,
                                                y: imageRect.height * scale / source.extent.height))
@@ -43,7 +48,8 @@ enum ScreenshotCardBlur {
         let levels = levelSigmas.compactMap { sigma in
             context.createCGImage(composite.applyingGaussianBlur(sigma: sigma * scale).cropped(to: band), from: band)
         }
-        return Rendered(fill: context.createCGImage(fill, from: well), levels: levels)
+        let heavy = context.createCGImage(composite.applyingGaussianBlur(sigma: 18 * scale).cropped(to: well), from: well)
+        return Rendered(fill: context.createCGImage(fill, from: well), levels: levels, heavy: heavy)
     }
 }
 
@@ -59,6 +65,7 @@ enum ScreenshotCardBlur {
     var actions: [Action] = [] { didSet { rebuild() } }
     var isEnabled = true { didSet { for button in buttons { button.isEnabled = isEnabled && button.action.enabled } } }
     private(set) var revealed = false
+    private var reduceMotion = false
     private let veil = ScreenshotCardVeil()
     private(set) var buttons: [ScreenshotCardActionButton] = []
 
@@ -72,10 +79,12 @@ enum ScreenshotCardBlur {
     func setBlurLevels(_ images: [CGImage]) { veil.setLevels(images) }
 
     func setRevealed(_ revealed: Bool, reduceMotion: Bool) {
+        self.reduceMotion = reduceMotion
         guard revealed != self.revealed else { return }
         self.revealed = revealed
         let screen = window?.screen
         veil.reveal(revealed, reduceMotion: reduceMotion, screen: screen)
+        if !revealed { for button in buttons { button.setHovered(false) } }
         for (index, button) in buttons.enumerated() {
             let delay = revealed && !reduceMotion ? 0.05 + Double(index) * 0.028 : 0
             button.reveal(revealed, delay: delay, reduceMotion: reduceMotion, screen: screen)
@@ -84,17 +93,20 @@ enum ScreenshotCardBlur {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard revealed else { return nil }
-        // The band swallows clicks between its buttons: they never open the editor by accident.
+        // The band swallows clicks between its buttons: they never open the preview by accident.
         return super.hitTest(point)
     }
 
     override func layout() {
         super.layout()
         veil.frame = bounds
-        let slot = bounds.width / CGFloat(max(1, buttons.count))
+        // A centred group: buttons spread across a card but stay together on a wide preview.
+        let count = CGFloat(max(1, buttons.count))
+        let slot = min(64, bounds.width / count)
+        let start = (bounds.width - slot * count) / 2
         let side: CGFloat = 38
         for (index, button) in buttons.enumerated() {
-            button.frame = CGRect(x: (CGFloat(index) * slot + (slot - side) / 2).rounded(), y: 7, width: side, height: side)
+            button.frame = CGRect(x: (start + CGFloat(index) * slot + (slot - side) / 2).rounded(), y: 7, width: side, height: side)
         }
     }
 
@@ -103,7 +115,13 @@ enum ScreenshotCardBlur {
         buttons = actions.map { ScreenshotCardActionButton(action: $0) }
         for button in buttons {
             button.isEnabled = isEnabled && button.action.enabled
+            // One button in focus: the others step back.
+            button.onHover = { [weak self, weak button] hovered in
+                guard let self else { return }
+                for other in self.buttons { other.setDimmed(hovered && other !== button) }
+            }
             addSubview(button)
+            if revealed { button.reveal(true, delay: 0, reduceMotion: reduceMotion, screen: window?.screen) }
         }
         needsLayout = true
     }
@@ -200,24 +218,31 @@ private final class ScreenshotCardVeil: NSView {
     }
 }
 
-/// One round action: a white symbol over the blur, a soft disc on hover, a press that gives.
+/// One action: a white symbol over the blur. Hovered, the symbol rises, grows and glows and
+/// its name appears above it while the others step back; pressed, it gives.
 @MainActor final class ScreenshotCardActionButton: NSView {
     let action: ScreenshotCardActionBand.Action
     var isEnabled = true {
         didSet {
-            icon.opacity = isEnabled ? 1 : 0.35
-            if !isEnabled { setHighlighted(false) }
+            if !isEnabled { setHovered(false) }
+            settleOpacity(animated: false)
         }
     }
-    /// Reveal motion; `press` inside it owns the press, so the two never fight.
+    var onHover: ((Bool) -> Void)?
+    /// Reveal motion; `press` inside it owns the press and `lift` the hover, so they never fight.
     private let stage = CALayer()
     private let press = CALayer()
-    private let disc = CALayer()
+    private let lift = CALayer()
     private let icon = CALayer()
+    private let caption = CATextLayer()
     private var tracking: NSTrackingArea?
     private var pressed = false
+    private var hovered = false
+    private var dimmed = false
+    private static let canvas: CGFloat = 24
     private static let hidden = CATransform3DConcat(CATransform3DMakeScale(0.8, 0.8, 1), CATransform3DMakeTranslation(0, -10, 0))
     private static let leaving = CATransform3DConcat(CATransform3DMakeScale(0.92, 0.92, 1), CATransform3DMakeTranslation(0, -6, 0))
+    private static let raised = CATransform3DConcat(CATransform3DMakeScale(1.16, 1.16, 1), CATransform3DMakeTranslation(0, 3, 0))
 
     init(action: ScreenshotCardActionBand.Action) {
         self.action = action
@@ -225,21 +250,29 @@ private final class ScreenshotCardVeil: NSView {
         wantsLayer = true
         stage.opacity = 0
         stage.transform = Self.hidden
-        disc.backgroundColor = NSColor.white.withAlphaComponent(0.24).cgColor
-        disc.opacity = 0
         let scale = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
-        if let symbol = Self.symbol(action.symbol, scale: scale) {
-            icon.contents = symbol.image
-            icon.contentsScale = scale
-            icon.bounds = CGRect(origin: .zero, size: symbol.size)
-        }
-        icon.shadowColor = NSColor.black.cgColor
-        icon.shadowOpacity = 0.35
-        icon.shadowRadius = 2
-        icon.shadowOffset = CGSize(width: 0, height: -0.5)
-        press.addSublayer(disc)
-        press.addSublayer(icon)
+        icon.contents = Self.symbol(action.symbol, scale: scale)
+        icon.contentsScale = scale
+        icon.bounds = CGRect(x: 0, y: 0, width: Self.canvas, height: Self.canvas)
+        icon.shadowColor = NSColor.white.cgColor
+        icon.shadowOpacity = 0
+        icon.shadowRadius = 7
+        icon.shadowOffset = .zero
+        caption.string = action.title
+        caption.font = Theme.Font.ns.text(11, weight: .semibold)
+        caption.fontSize = 11
+        caption.foregroundColor = NSColor.white.cgColor
+        caption.alignmentMode = .center
+        caption.contentsScale = scale
+        caption.opacity = 0
+        caption.shadowColor = NSColor.black.cgColor
+        caption.shadowOpacity = 0.6
+        caption.shadowRadius = 2
+        caption.shadowOffset = .zero
+        lift.addSublayer(icon)
+        press.addSublayer(lift)
         stage.addSublayer(press)
+        stage.addSublayer(caption)
         layer?.addSublayer(stage)
         toolTip = action.title
     }
@@ -285,16 +318,67 @@ private final class ScreenshotCardVeil: NSView {
         CATransaction.commit()
     }
 
+    /// Hover: the symbol rises, grows and glows; its name fades in above it.
+    func setHovered(_ hovered: Bool) {
+        guard hovered != self.hovered else { return }
+        self.hovered = hovered
+        let screen = window?.screen
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        let fromLift = lift.presentation()?.transform ?? lift.transform
+        lift.transform = hovered ? Self.raised : CATransform3DIdentity
+        let rise = CASpringAnimation.card(keyPath: "transform", from: NSValue(caTransform3D: fromLift),
+                                          to: NSValue(caTransform3D: lift.transform), response: 0.34, dampingRatio: hovered ? 0.6 : 0.85)
+        rise.preferFullRefreshRate(on: screen)
+        lift.add(rise, forKey: "button-lift")
+        let fromGlow = icon.presentation()?.shadowOpacity ?? icon.shadowOpacity
+        icon.shadowOpacity = hovered ? 0.8 : 0
+        let glow = CABasicAnimation(keyPath: "shadowOpacity")
+        glow.fromValue = fromGlow; glow.toValue = icon.shadowOpacity; glow.duration = 0.2
+        glow.preferFullRefreshRate(on: screen)
+        icon.add(glow, forKey: "button-glow")
+        let fromCaption = caption.presentation()?.opacity ?? caption.opacity
+        caption.opacity = hovered ? 1 : 0
+        let label = CABasicAnimation(keyPath: "opacity")
+        label.fromValue = fromCaption; label.toValue = caption.opacity; label.duration = hovered ? 0.16 : 0.1
+        label.preferFullRefreshRate(on: screen)
+        caption.add(label, forKey: "caption-fade")
+        if hovered {
+            let drift = CASpringAnimation.card(keyPath: "transform.translation.y", from: -4, to: 0, response: 0.3, dampingRatio: 0.8)
+            drift.preferFullRefreshRate(on: screen)
+            caption.add(drift, forKey: "caption-drift")
+        }
+        CATransaction.commit()
+        onHover?(hovered)
+    }
+
+    /// Another button is in focus: this one steps back.
+    func setDimmed(_ dimmed: Bool) {
+        guard dimmed != self.dimmed else { return }
+        self.dimmed = dimmed
+        settleOpacity(animated: true)
+    }
+
+    private func settleOpacity(animated: Bool) {
+        let target: Float = !isEnabled ? 0.35 : (dimmed ? 0.5 : 1)
+        let from = lift.presentation()?.opacity ?? lift.opacity
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        lift.opacity = target
+        if animated {
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = from; fade.toValue = target; fade.duration = 0.18
+            fade.preferFullRefreshRate(on: window?.screen)
+            lift.add(fade, forKey: "button-dim")
+        }
+        CATransaction.commit()
+    }
+
     override func layout() {
         super.layout()
         CATransaction.begin(); CATransaction.setDisableActions(true)
-        stage.bounds = bounds; stage.position = CGPoint(x: bounds.midX, y: bounds.midY)
-        press.bounds = bounds; press.position = CGPoint(x: bounds.midX, y: bounds.midY)
-        let side = min(bounds.width, bounds.height) - 4
-        disc.bounds = CGRect(x: 0, y: 0, width: side, height: side)
-        disc.cornerRadius = side / 2
-        disc.position = CGPoint(x: bounds.midX, y: bounds.midY)
-        icon.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        for layer in [stage, press, lift] { layer.bounds = bounds; layer.position = center }
+        icon.position = center
+        caption.frame = CGRect(x: bounds.midX - 50, y: bounds.maxY + 1, width: 100, height: 15)
         CATransaction.commit()
     }
 
@@ -305,9 +389,9 @@ private final class ScreenshotCardVeil: NSView {
         tracking = area; addTrackingArea(area)
     }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func mouseEntered(with event: NSEvent) { if isEnabled { setHighlighted(true) } }
+    override func mouseEntered(with event: NSEvent) { if isEnabled { setHovered(true) } }
     override func mouseExited(with event: NSEvent) {
-        setHighlighted(false)
+        setHovered(false)
         if pressed { pressed = false; setPressed(false) }
     }
     override func mouseDown(with event: NSEvent) {
@@ -329,22 +413,9 @@ private final class ScreenshotCardVeil: NSView {
         action.perform(self); return true
     }
 
-    private func setHighlighted(_ highlighted: Bool) {
-        let from = disc.presentation()?.opacity ?? disc.opacity
-        CATransaction.begin(); CATransaction.setDisableActions(true)
-        disc.opacity = highlighted ? 1 : 0
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = from; fade.toValue = disc.opacity
-        fade.duration = highlighted ? 0.12 : 0.18
-        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        fade.preferFullRefreshRate(on: window?.screen)
-        disc.add(fade, forKey: "disc-fade")
-        CATransaction.commit()
-    }
-
     private func setPressed(_ down: Bool) {
         let from = press.presentation()?.transform ?? press.transform
-        let to = down ? CATransform3DMakeScale(0.88, 0.88, 1) : CATransform3DIdentity
+        let to = down ? CATransform3DMakeScale(0.86, 0.86, 1) : CATransform3DIdentity
         CATransaction.begin(); CATransaction.setDisableActions(true)
         press.transform = to
         let motion = CASpringAnimation.card(keyPath: "transform", from: NSValue(caTransform3D: from), to: NSValue(caTransform3D: to),
@@ -354,22 +425,223 @@ private final class ScreenshotCardVeil: NSView {
         CATransaction.commit()
     }
 
-    private static func symbol(_ name: String, scale: CGFloat) -> (image: CGImage, size: CGSize)? {
-        let configuration = NSImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
+    /// The symbol drawn white on a fixed square, centred on its ink rather than its
+    /// typographic box, so every glyph sits on the same optical centre.
+    static func symbol(_ name: String, scale: CGFloat, pointSize: CGFloat = 16, weight: NSFont.Weight = .medium) -> CGImage? {
+        let configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
             .applying(.init(paletteColors: [.white]))
         guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(configuration)
         else { return nil }
-        let size = image.size
-        guard let context = CGContext(data: nil, width: Int((size.width * scale).rounded(.up)), height: Int((size.height * scale).rounded(.up)),
-                                      bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        context.scaleBy(x: scale, y: scale)
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
-        image.draw(in: CGRect(origin: .zero, size: size))
-        NSGraphicsContext.restoreGraphicsState()
-        return context.makeImage().map { ($0, size) }
+        let side = Int((canvas * scale).rounded())
+        func draw(offset: CGPoint) -> CGContext? {
+            guard let context = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
+                                          space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+            context.scaleBy(x: scale, y: scale)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+            let size = image.size
+            image.draw(in: CGRect(x: (canvas - size.width) / 2 + offset.x, y: (canvas - size.height) / 2 + offset.y,
+                                  width: size.width, height: size.height))
+            NSGraphicsContext.restoreGraphicsState()
+            return context
+        }
+        guard let first = draw(offset: .zero), let data = first.data else { return nil }
+        // Ink bounds in pixels; bitmap rows run top to bottom.
+        let pixels = data.bindMemory(to: UInt8.self, capacity: side * side * 4)
+        var minX = side, maxX = -1, minRow = side, maxRow = -1
+        for row in 0..<side {
+            for column in 0..<side where pixels[(row * side + column) * 4 + 3] > 24 {
+                minX = min(minX, column); maxX = max(maxX, column)
+                minRow = min(minRow, row); maxRow = max(maxRow, row)
+            }
+        }
+        guard maxX >= minX, maxRow >= minRow else { return first.makeImage() }
+        let inkX = CGFloat(minX + maxX + 1) / 2 / scale
+        let inkY = (CGFloat(side) - CGFloat(minRow + maxRow + 1) / 2) / scale
+        let offset = CGPoint(x: canvas / 2 - inkX, y: canvas / 2 - inkY)
+        return draw(offset: offset)?.makeImage()
     }
+}
+
+/// A small chip over the capture, frosted with the well's own heavy blur and a dark veil.
+@MainActor class ScreenshotCardChip: NSView {
+    let clip = CALayer()
+    private let frost = CALayer()
+    private let veil = CALayer()
+    private var wellSize: CGSize = .zero
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        clip.masksToBounds = true
+        clip.cornerCurve = .continuous
+        veil.backgroundColor = NSColor.black.withAlphaComponent(0.34).cgColor
+        clip.addSublayer(frost)
+        clip.addSublayer(veil)
+        layer?.addSublayer(clip)
+    }
+    required init?(coder: NSCoder) { nil }
+    func setBackdrop(_ image: CGImage?, wellSize: CGSize) {
+        frost.contents = image
+        self.wellSize = wellSize
+        needsLayout = true
+    }
+    func setVeil(_ alpha: CGFloat) {
+        CATransaction.begin(); CATransaction.setAnimationDuration(0.15)
+        veil.backgroundColor = NSColor.black.withAlphaComponent(alpha).cgColor
+        CATransaction.commit()
+    }
+    override func setFrameOrigin(_ newOrigin: NSPoint) { super.setFrameOrigin(newOrigin); needsLayout = true }
+    override func layout() {
+        super.layout()
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        clip.frame = bounds
+        clip.cornerRadius = min(bounds.width, bounds.height) / 2
+        veil.frame = bounds
+        // The frost is the whole well's blur, placed so it lines up with the capture beneath.
+        frost.frame = CGRect(x: -frame.minX, y: -frame.minY, width: wellSize.width, height: wellSize.height)
+        CATransaction.commit()
+    }
+    /// Fades in and settles from just above; hidden chips ignore the mouse.
+    func setShown(_ shown: Bool, delay: CFTimeInterval = 0, reduceMotion: Bool) {
+        guard let layer else { return }
+        let from = layer.presentation()?.opacity ?? layer.opacity
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        layer.opacity = shown ? 1 : 0
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = from; fade.toValue = layer.opacity
+        fade.duration = reduceMotion ? Theme.Motion.Duration.reduced : (shown ? 0.2 : 0.14)
+        fade.beginTime = CACurrentMediaTime() + delay; fade.fillMode = .backwards
+        fade.preferFullRefreshRate(on: window?.screen)
+        layer.add(fade, forKey: "chip-fade")
+        if shown, !reduceMotion {
+            let settle = CASpringAnimation.card(keyPath: "transform.translation.y", from: 5, to: 0, response: 0.38, dampingRatio: 0.7)
+            settle.beginTime = CACurrentMediaTime() + delay; settle.fillMode = .backwards
+            settle.preferFullRefreshRate(on: window?.screen)
+            layer.add(settle, forKey: "chip-settle")
+        }
+        CATransaction.commit()
+    }
+    var isShown: Bool { (layer?.opacity ?? 0) > 0 }
+    override func hitTest(_ point: NSPoint) -> NSView? { isShown ? super.hitTest(point) : nil }
+}
+
+/// What the capture already did ("Copied", "In Library"), or what went wrong, over its top-left corner.
+@MainActor final class ScreenshotCardBadge: ScreenshotCardChip {
+    private let icon = CALayer()
+    private let label = CATextLayer()
+    private var popped = false
+    private var content: (text: String, symbol: String, spinning: Bool)?
+    private static let font = Theme.Font.ns.text(12, weight: .semibold)
+    private static let height: CGFloat = 22
+    private static let maximumWidth: CGFloat = 220
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        layer?.opacity = 0
+        let scale = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
+        icon.contentsScale = scale
+        label.font = Self.font
+        label.fontSize = 12
+        label.foregroundColor = NSColor.white.cgColor
+        label.contentsScale = scale
+        label.truncationMode = .end
+        clip.addSublayer(icon)
+        clip.addSublayer(label)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+    }
+    required init?(coder: NSCoder) { nil }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    var preferredSize: CGSize {
+        guard let content else { return CGSize(width: 0, height: Self.height) }
+        let text = ceil(NSAttributedString(string: content.text, attributes: [.font: Self.font]).size().width)
+        return CGSize(width: min(Self.maximumWidth, 8 + 13 + 5 + text + 10), height: Self.height)
+    }
+    func show(status: String?, busy: Bool, error: String?) {
+        let next: (text: String, symbol: String, spinning: Bool)?
+        if let error { next = (error, "exclamationmark.triangle.fill", false) }
+        else if busy { next = (status ?? "", "arrow.trianglehead.2.clockwise", true) }
+        else if let status { next = (status, status == String(localized: "Copied") ? "checkmark" : "tray.fill", false) }
+        else { next = nil }
+        let changed = next?.text != content?.text || next?.symbol != content?.symbol
+        content = next
+        guard changed else { return }
+        let scale = icon.contentsScale
+        icon.contents = next.flatMap { ScreenshotCardActionButton.symbol($0.symbol, scale: scale, pointSize: 11, weight: .bold) }
+        label.string = next?.text
+        setAccessibilityLabel(next?.text)
+        toolTip = error
+        icon.removeAnimation(forKey: "badge-spin")
+        if next?.spinning == true {
+            let spin = CABasicAnimation(keyPath: "transform.rotation.z")
+            spin.fromValue = 0; spin.toValue = -2 * Double.pi; spin.duration = 0.9; spin.repeatCount = .infinity
+            icon.add(spin, forKey: "badge-spin")
+        }
+        superview?.needsLayout = true
+        needsLayout = true
+        if popped { setShown(next != nil, reduceMotion: false) }
+    }
+    /// The badge arrives just after the card does.
+    func pop(after delay: CFTimeInterval, reduceMotion: Bool) {
+        popped = true
+        if content != nil { setShown(true, delay: delay, reduceMotion: reduceMotion) }
+    }
+    override func layout() {
+        super.layout()
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        icon.bounds = CGRect(x: 0, y: 0, width: 24, height: 24)
+        icon.transform = CATransform3DMakeScale(13.0 / 24, 13.0 / 24, 1)
+        icon.position = CGPoint(x: 8 + 6.5, y: bounds.midY)
+        let textHeight = ceil(Self.font.ascender - Self.font.descender)
+        label.frame = CGRect(x: 8 + 13 + 5, y: (bounds.height - textHeight) / 2, width: max(0, bounds.width - 26 - 10), height: textHeight)
+        CATransaction.commit()
+    }
+}
+
+/// Closes the card from its top-right corner; it appears with the hover actions.
+@MainActor final class ScreenshotCardCloseButton: ScreenshotCardChip {
+    static let side: CGFloat = 24
+    var action: (() -> Void)?
+    private let icon = CALayer()
+    private var tracking: NSTrackingArea?
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        layer?.opacity = 0
+        let scale = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
+        icon.contents = ScreenshotCardActionButton.symbol("xmark", scale: scale, pointSize: 10, weight: .bold)
+        icon.contentsScale = scale
+        clip.addSublayer(icon)
+        toolTip = String(localized: "Dismiss screenshot")
+    }
+    required init?(coder: NSCoder) { nil }
+    func setRevealed(_ revealed: Bool, reduceMotion: Bool) {
+        guard revealed != isShown else { return }
+        setShown(revealed, reduceMotion: reduceMotion)
+    }
+    override func layout() {
+        super.layout()
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        icon.bounds = CGRect(x: 0, y: 0, width: 24, height: 24)
+        icon.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        CATransaction.commit()
+    }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        tracking = area; addTrackingArea(area)
+    }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseEntered(with event: NSEvent) { setVeil(0.55) }
+    override func mouseExited(with event: NSEvent) { setVeil(0.34) }
+    override func mouseDown(with event: NSEvent) {}
+    override func mouseUp(with event: NSEvent) {
+        if bounds.contains(convert(event.locationInWindow, from: nil)) { action?() }
+    }
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .button }
+    override func accessibilityLabel() -> String? { String(localized: "Dismiss screenshot") }
+    override func accessibilityPerformPress() -> Bool { action?(); return action != nil }
 }
 
 extension CASpringAnimation {

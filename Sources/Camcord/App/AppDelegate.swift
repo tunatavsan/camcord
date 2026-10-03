@@ -161,9 +161,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeyCenter.onToast = showToast
 
         // Screenshots land as a framed preview at the bottom-right (their own "copied"
-        // confirmation), instead of the center toast — clickable to edit, draggable to lift.
-        let screenshotPreviewCard = ScreenshotPreviewCard()
+        // confirmation), instead of the center toast — clickable to preview, draggable to lift.
+        let screenshotPreviewCard = ScreenshotPreviewCard(keepsInLibrary: { [weak services] in
+            services.map { LibrarySettings.load(from: $0.defaults).keepCopied } ?? true
+        })
         self.screenshotPreviewCard = screenshotPreviewCard
+        screenshotPreviewCard.onKeep = { [weak services] capture in services?.library.keep(capture) }
         screenshotPreviewCard.claimClipboardPublication = { [weak coordinator] in
             coordinator?.claimClipboardPublication() ?? { false }
         }

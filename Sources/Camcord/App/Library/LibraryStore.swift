@@ -196,10 +196,19 @@ final class LibraryStore: CaptureLibraryStore {
     func waitForPendingCacheWrites() async {
         while !cacheTasks.isEmpty { for task in Array(cacheTasks.values) { await task.value } }
     }
-    private func scheduleCache(_ capture: CapturedScreenshot, state: inout DeliveryState) {
+    /// The screenshot card's Add to Library: keeps this one capture even when copied
+    /// captures are not kept by themselves.
+    func keep(_ capture: CapturedScreenshot) {
+        if delivery[capture.id] == nil { delivery[capture.id] = DeliveryState(); deliveryOrder.append(capture.id) }
+        var state = delivery[capture.id]!
+        scheduleCache(capture, state: &state, force: true)
+        delivery[capture.id] = state
+        pruneDeliveryState()
+    }
+    private func scheduleCache(_ capture: CapturedScreenshot, state: inout DeliveryState, force: Bool = false) {
         guard !state.saved, !state.scheduled else { return }
         let settings = LibrarySettings.load(from: defaults)
-        guard settings.keepCopied else { return }
+        guard force || settings.keepCopied else { return }
         guard capture.image.width > 0, capture.image.height > 0,
               capture.image.width <= LibraryFiles.maxFullImagePixels / capture.image.height else {
             issue = LibraryFiles.Failure.unsupportedImage.localizedDescription; return

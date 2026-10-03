@@ -22,7 +22,6 @@ import UniformTypeIdentifiers
         let visibleFrame: CGRect
         var dwell = ScreenshotCardDwell()
         var task: Task<Void, Never>?
-        var savePanel: NSSavePanel?
         var shownAt: TimeInterval
         var enteredAt: TimeInterval?
         var exitAt: TimeInterval?
@@ -35,7 +34,10 @@ import UniformTypeIdentifiers
         }
     }
     var onEdit: (@MainActor (CapturedScreenshot) -> Void)?
+    /// Pins a capture from the screenshot preview.
     var onPin: (@MainActor (CapturedScreenshot) -> Void)?
+    /// Keeps a capture in the Library when screenshots are not kept by themselves.
+    var onKeep: (@MainActor (CapturedScreenshot) -> Void)?
     var claimClipboardPublication: (@MainActor () -> (@MainActor () -> Bool))?
     private(set) var entries: [Entry] = []
     var model: ScreenshotCardModel? { entries.last?.model }
@@ -50,7 +52,8 @@ import UniformTypeIdentifiers
     private let reduceMotion: @MainActor () -> Bool
     private let timing: Timing
     private let operations: ScreenshotCardModel.Operations
-    private let quickLook = EditorQuickLook()
+    private let keepsInLibrary: @MainActor () -> Bool
+    let preview = ScreenshotPreviewWindow()
     private static var hasCleanedExports = false
     /// Visible space between stacked cards; their shadow margins overlap.
     static let stackGap: CGFloat = 10
@@ -62,7 +65,9 @@ import UniformTypeIdentifiers
          operations: ScreenshotCardModel.Operations = .init(), hostFactory: HostFactory? = nil,
          animator: Animator? = nil, timing: Timing = .init(), displayFrames: DisplayFrames? = nil,
          enabled: @escaping @MainActor () -> Bool = { HUDToast.isEnabled() },
-         reduceMotion: @escaping @MainActor () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }) {
+         reduceMotion: @escaping @MainActor () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion },
+         keepsInLibrary: @escaping @MainActor () -> Bool = { LibrarySettings.load(from: .standard).keepCopied }) {
+        self.keepsInLibrary = keepsInLibrary
         self.presenter = presenter ?? { $0.orderFrontRegardless() }
         self.hostFactory = hostFactory ?? { frame in
             let panel = ScreenshotCardPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -107,7 +112,9 @@ import UniformTypeIdentifiers
         let window = hostFactory(frame)
         window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = false
         window.animationBehavior = .none; window.isReleasedWhenClosed = false
-        let host = ScreenshotCardPresentation(model: model, canEdit: onEdit != nil, canPin: onPin != nil)
+        // A capture saved to disk is in the Library through its folder, whatever the Library keeps.
+        let host = ScreenshotCardPresentation(model: model, copied: capture.copiedToClipboard,
+                                              kept: capture.saveToDiskRequested || keepsInLibrary(), canEdit: onEdit != nil)
         let entry = Entry(model: model, generation: generation, window: window, host: host, visibleFrame: visible, now: timing.now())
         let current: @MainActor () -> Bool = { [weak self, weak entry] in
             guard let self, let entry else { return false }
@@ -132,12 +139,12 @@ import UniformTypeIdentifiers
             guard current(), let self, let entry, let edit = self.onEdit else { return }
             edit(capture); self.dismiss(entry, reason: "edit")
         }
-        host.onSave = { [weak self, weak entry] in
+        host.onKeep = { [weak self] in if current() { self?.onKeep?(capture) } }
+        host.onOpen = { [weak self, weak entry] in
             guard current(), let self, let entry else { return }
-            self.chooseSave(entry)
+            self.openPreview(capture, on: entry.visibleFrame)
+            self.dismiss(entry, reason: "preview")
         }
-        host.onPin = { [weak self] in if current() { self?.onPin?(capture) } }
-        host.onQuickLook = { [weak self] url in if current() { self?.quickLook.show(url) } }
         window.contentView = host
         entries.append(entry)
         reflow()
@@ -184,8 +191,6 @@ import UniformTypeIdentifiers
         entry.task?.cancel(); entry.task = nil
         entry.dwell.leave(at: timing.now()); entry.exitAt = timing.now(); entry.dismissReason = reason
         entry.model.invalidate(); entry.host.invalidate()
-        let savePanel = entry.savePanel; entry.savePanel = nil
-        savePanel?.cancel(nil); savePanel?.orderOut(nil)
         entries.removeAll { $0 === entry }
         reflow()
         let finish: @MainActor () -> Void = { [entry, timing] in
@@ -207,24 +212,10 @@ import UniformTypeIdentifiers
             }
         }
     }
-    private func chooseSave(_ entry: Entry) {
-        guard isCurrent(entry, generation: entry.generation), !entry.model.isBusy, entry.savePanel == nil else { return }
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.png]
-        panel.nameFieldStringValue = entry.model.savedURL?.lastPathComponent ?? String(localized: "Screenshot.png")
-        if let saved = entry.model.savedURL { panel.directoryURL = saved.deletingLastPathComponent() }
-        entry.savePanel = panel
-        pause(entry, reason: .saving, active: true)
-        panel.begin { [weak self, weak entry, weak panel] response in
-            Task { @MainActor in
-                guard let self, let entry, let panel, entry.savePanel === panel,
-                      self.isCurrent(entry, generation: entry.generation) else { return }
-                entry.savePanel = nil
-                self.pause(entry, reason: .saving, active: false)
-                guard response == .OK, let url = panel.url else { return }
-                _ = await entry.model.save(to: url)
-            }
-        }
+    func openPreview(_ capture: CapturedScreenshot, on visible: CGRect) {
+        preview.onEdit = onEdit
+        preview.onPin = onPin
+        preview.show(capture, operations: operations, on: visible, claim: claimClipboardPublication)
     }
 }
 

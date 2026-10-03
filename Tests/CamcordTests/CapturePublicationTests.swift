@@ -274,6 +274,30 @@ struct CapturePublicationTests {
         #expect(next.originDisplayID == selectedDisplayID)
     }
 
+    @Test("a Library-only screenshot is delivered without publishing to the clipboard")
+    func libraryOnlyDelivery() async throws {
+        let pending = PendingCapture()
+        var published: [Bool] = []
+        var events: [ScreenshotDeliveryEvent] = []
+        var operations = CaptureCoordinator.Operations()
+        operations.feedback = false
+        operations.screenCaptureAuthorized = { true }
+        operations.screenshotSettings = { ScreenshotSettings(copyToClipboard: false) }
+        operations.fullScreenDisplayID = { 17 }
+        operations.fullScreen = { await pending.capture() }
+        operations.copyPNG = { _, _, _, publish, _ in let allowed = publish(); published.append(allowed); return allowed }
+        let coordinator = CaptureCoordinator(operations: operations)
+        coordinator.onScreenshotDelivery = { events.append($0) }
+        let capture = Task { await coordinator.captureFullScreen() }
+        await waitUntil { pending.continuation != nil }
+        pending.continuation?.resume(returning: (image(), CGSize(width: 4, height: 3)))
+        pending.continuation = nil
+        await capture.value
+        #expect(published == [false])
+        guard case .ready(let ready) = events.first else { Issue.record("A Library-only capture must still be delivered"); return }
+        #expect(!ready.copiedToClipboard && events.count == 1)
+    }
+
     @Test("source rectangles choose the largest CG intersection including displays left of or above the primary screen")
     func originBySourceIntersection() {
         let displays: [(id: CGDirectDisplayID, frame: CGRect)] = [

@@ -883,13 +883,14 @@ final class CaptureCoordinator {
                                 originDisplayID: CGDirectDisplayID? = nil) async -> Bool? {
         let token = acceptedToken
         let settings = operations.screenshotSettings()
+        let copies = settings.copyToClipboard
         let delivery = CapturedScreenshot(id: UUID(), image: image, pointSize: pointSize,
                                            kind: kind, saveToDiskRequested: settings.saveToDisk,
-                                           originDisplayID: originDisplayID)
+                                           originDisplayID: originDisplayID, copiedToClipboard: copies)
         let tagScrollCapture = operations.tagScrollCapture
         let copied = await operations.copyPNG(
             image, pointSize, settings,
-            { !Task.isCancelled && self.clipboardRequests.isCurrent(token) }
+            { copies && !Task.isCancelled && self.clipboardRequests.isCurrent(token) }
         ) { [weak self] result in
             switch result {
             case .success(let url):
@@ -913,8 +914,10 @@ final class CaptureCoordinator {
             }
         }
         guard !Task.isCancelled, clipboardRequests.isCurrent(token) else { return nil }
-        if copied { onScreenshotDelivery?(.ready(delivery)) }
-        return copied
+        // A Library-only capture is delivered without touching the clipboard.
+        let delivered = copies ? copied : true
+        if delivered { onScreenshotDelivery?(.ready(delivery)) }
+        return delivered
     }
 
     /// Plans 1× output dimensions before raster allocation. The physical point size

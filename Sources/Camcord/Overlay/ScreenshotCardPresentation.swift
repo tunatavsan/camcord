@@ -8,20 +8,17 @@ struct ScreenshotCardGeometry {
     static let card = CGSize(width: 320, height: 232)
     /// The tray around the well; the well's radius stays concentric with the card's.
     static let ring: CGFloat = 8
-    static let header: CGFloat = 20
-    static let headerGap: CGFloat = 6
+    static let well = CGSize(width: card.width - 2 * ring, height: card.height - 2 * ring)
     /// The hover band over the well's lower edge.
     static let band: CGFloat = 72
-    static let well = CGSize(width: card.width - 2 * ring, height: card.height - 2 * ring - header - headerGap)
     /// Room around the card for its shadow.
     static let shadowInset: CGFloat = 12
     static let window = CGSize(width: card.width + 2 * shadowInset, height: card.height + 2 * shadowInset)
-    /// The capture's frame inside the well: aspect-fit, centred, never magnified past its own size.
+    /// The capture's frame inside a well: aspect-fit, centred, never magnified past its own size.
     let imageRect: CGRect
-    init(sourceSize: CGSize) {
+    init(sourceSize: CGSize, in well: CGSize = Self.well) {
         guard sourceSize.width.isFinite, sourceSize.height.isFinite,
               sourceSize.width > 0, sourceSize.height > 0 else { imageRect = .zero; return }
-        let well = Self.well
         let scale = min(1, well.width / sourceSize.width, well.height / sourceSize.height)
         let size = CGSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
         imageRect = CGRect(x: (well.width - size.width) / 2, y: (well.height - size.height) / 2,
@@ -34,16 +31,17 @@ struct ScreenshotCardGeometry {
     var onPause: (@MainActor (ScreenshotCardDwell.Pause, Bool) -> Void)?
     var onDismiss: (@MainActor (String) -> Void)?
     var onEdit: (@MainActor () -> Void)?
-    var onSave: (@MainActor () -> Void)?
-    var onPin: (@MainActor () -> Void)?
-    var onQuickLook: (@MainActor (URL) -> Void)?
+    /// Opens the screenshot preview: a click on the capture or its Preview action.
+    var onOpen: (@MainActor () -> Void)?
+    /// Keeps this capture in the Library when screenshots are not kept by themselves.
+    var onKeep: (@MainActor () -> Void)?
     private let model: ScreenshotCardModel
     private let canEdit: Bool
-    private let canPin: Bool
+    private var copied: Bool
+    private var kept: Bool
     /// Shadow, frost, content and rim move as one surface: entrance, reflow and the dismissal swipe.
-    private let surface = NSView()
+    private let surface: TraySurface
     let well: ScreenshotCardWell
-    private let chrome = ScreenshotCardChrome(frame: .zero)
     private let share: ScreenshotCardShare
     private var observers: Set<AnyCancellable> = []
     private var alive = true
@@ -53,19 +51,14 @@ struct ScreenshotCardGeometry {
     private(set) var animationDuration: TimeInterval = 0
     var measuredHeight: CGFloat { ScreenshotCardGeometry.card.height }
     private var cardRect: CGRect { bounds.insetBy(dx: ScreenshotCardGeometry.shadowInset, dy: ScreenshotCardGeometry.shadowInset) }
-    init(model: ScreenshotCardModel, canEdit: Bool, canPin: Bool) {
-        self.model = model; self.canEdit = canEdit; self.canPin = canPin
-        well = ScreenshotCardWell(capture: model.capture)
+    /// - Parameters: copied and kept say what the capture already did by itself; the card offers the rest.
+    init(model: ScreenshotCardModel, copied: Bool = true, kept: Bool = true, canEdit: Bool) {
+        self.model = model; self.copied = copied; self.kept = kept; self.canEdit = canEdit
+        well = ScreenshotCardWell(capture: model.capture, size: ScreenshotCardGeometry.well)
+        surface = TraySurface(content: ScreenshotCardContent(well: well))
         share = ScreenshotCardShare(model: model, pause: { _, _ in })
         super.init(frame: CGRect(origin: .zero, size: ScreenshotCardGeometry.window))
         wantsLayer = true
-        surface.wantsLayer = true
-        // The card is the main window's tray: its light frost, a window rim and a soft shadow.
-        surface.addSubview(ScreenshotCardShadow())
-        surface.addSubview(NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
-            ? ScreenshotCardSolid() : TrayBlurView(cornerRadius: Theme.Radius.floating))
-        surface.addSubview(ScreenshotCardContent(well: well, chrome: chrome))
-        surface.addSubview(ScreenshotCardRim())
         addSubview(surface)
         wire()
     }
@@ -74,47 +67,59 @@ struct ScreenshotCardGeometry {
         share.pause = { [weak self] reason, active in self?.onPause?(reason, active) }
         let image = well.imageView
         image.export = model.export
-        image.edit = canEdit ? { [weak self] in self?.onEdit?() } : nil
-        image.pause = { [weak self] in self?.onPause?(.dragging, $0) }
-        image.canInteract = { [weak model] in model?.isAlive == true }
-        well.band.actions = [
-            .init(title: String(localized: "Copy"), symbol: "doc.on.doc") { [weak model] _ in Task { _ = await model?.copy() } },
-            .init(title: String(localized: "Save…"), symbol: "square.and.arrow.down") { [weak self] _ in self?.onSave?() },
-            .init(title: String(localized: "Edit"), symbol: "pencil", enabled: canEdit) { [weak self] _ in self?.onEdit?() },
-            .init(title: String(localized: "Pin"), symbol: "pin", enabled: canPin) { [weak self] _ in self?.onPin?() },
-            .init(title: String(localized: "Quick Look"), symbol: "eye") { [weak self] _ in self?.quickLook() },
-            .init(title: String(localized: "Share"), symbol: "square.and.arrow.up") { [weak self] anchor in self?.share.share(anchor) },
-        ]
-        chrome.dismiss = { [weak self] in self?.onDismiss?("close") }
-        chrome.pan = { [weak self] translation, velocity, ended, cancelled in
+        image.open = { [weak self] in self?.onOpen?() }
+        image.swipe = { [weak self] translation, velocity, ended, cancelled in
             self?.pan(translation, velocity: velocity, ended: ended, cancelled: cancelled)
         }
-        chrome.setDimensions("\(model.capture.image.width) × \(model.capture.image.height)")
+        image.pause = { [weak self] in self?.onPause?(.dragging, $0) }
+        image.canInteract = { [weak model] in model?.isAlive == true }
+        well.closeButton.action = { [weak self] in self?.onDismiss?("close") }
+        refreshActions()
         model.$isBusy.sink { [weak self] busy in self?.update(busy: busy, error: self?.model.error) }.store(in: &observers)
         model.$error.sink { [weak self] error in self?.update(busy: self?.model.isBusy ?? false, error: error) }.store(in: &observers)
         model.$preparedExportURL.sink { image.preparedURL = $0 }.store(in: &observers)
         model.$preparedExportPNG.sink { image.preparedPNG = $0 }.store(in: &observers)
     }
+    /// Copy and Add to Library appear only for what the capture did not already do.
+    private func refreshActions() {
+        var actions: [ScreenshotCardActionBand.Action] = []
+        if !copied {
+            actions.append(.init(title: String(localized: "Copy"), symbol: "doc.on.doc") { [weak self] _ in self?.copy() })
+        }
+        if !kept {
+            actions.append(.init(title: String(localized: "Add to Library"), symbol: "tray.and.arrow.down") { [weak self] _ in self?.keep() })
+        }
+        actions += [
+            .init(title: String(localized: "Edit"), symbol: "pencil", enabled: canEdit) { [weak self] _ in self?.onEdit?() },
+            .init(title: String(localized: "Preview"), symbol: "eye") { [weak self] _ in self?.onOpen?() },
+            .init(title: String(localized: "Share"), symbol: "square.and.arrow.up") { [weak self] anchor in self?.share.share(anchor) },
+        ]
+        well.band.actions = actions
+        updateBadge()
+    }
+    private func updateBadge() {
+        let status = copied ? String(localized: "Copied") : kept ? String(localized: "In Library") : nil
+        well.badge.show(status: status, busy: model.isBusy, error: model.error)
+    }
+    private func copy() {
+        Task { [weak self, model] in
+            guard await model.copy(), let self, self.alive else { return }
+            self.copied = true; self.refreshActions()
+        }
+    }
+    private func keep() {
+        guard alive else { return }
+        onKeep?(); kept = true; refreshActions()
+    }
     private func update(busy: Bool, error: String?) {
         guard alive else { return }
-        chrome.setState(busy: busy, error: error)
+        updateBadge()
         well.band.isEnabled = !busy
-        well.band.setRevealed(hovering || busy, reduceMotion: reducedMotion)
-    }
-    private func quickLook() {
-        Task { [weak self, model] in
-            do {
-                let url = try await model.exportedFileURL()
-                if model.isAlive { self?.onQuickLook?(url) }
-            } catch {
-                if model.isAlive, !(error is CancellationError) { model.error = error.localizedDescription }
-            }
-        }
+        well.setHovering(hovering, busy: busy, reduceMotion: reducedMotion)
     }
     override func layout() {
         super.layout()
         if surface.frame != cardRect { surface.frame = cardRect }
-        for view in surface.subviews where view.frame != surface.bounds { view.frame = surface.bounds }
     }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -132,12 +137,12 @@ struct ScreenshotCardGeometry {
         guard alive else { return }
         hovering = active
         onPause?(.hover, active)
-        well.band.setRevealed(active || model.isBusy, reduceMotion: reducedMotion)
+        well.setHovering(active, busy: model.isBusy, reduceMotion: reducedMotion)
     }
     override func cancelOperation(_ sender: Any?) { if alive { onDismiss?("escape") } }
     func invalidate() {
         alive = false; observers.removeAll(); share.close()
-        onPause = nil; onDismiss = nil; onEdit = nil; onSave = nil; onPin = nil; onQuickLook = nil
+        onPause = nil; onDismiss = nil; onEdit = nil; onOpen = nil; onKeep = nil
     }
     func animate(entering: Bool, reduceMotion: Bool, completion: @escaping @MainActor () -> Void) {
         reducedMotion = reduceMotion
@@ -164,6 +169,7 @@ struct ScreenshotCardGeometry {
         layer.setValue(end, forKeyPath: keyPath)
         layer.add(animation, forKey: "card-presentation")
         CATransaction.commit()
+        if entering { well.badge.pop(after: reduceMotion ? 0 : 0.18, reduceMotion: reduceMotion) }
     }
     func reposition(from oldFrame: CGRect, to newFrame: CGRect, reduceMotion: Bool) {
         reducedMotion = reduceMotion
@@ -182,7 +188,7 @@ struct ScreenshotCardGeometry {
         guard alive, let layer = surface.layer else { return }
         onPause?(.gesture, !ended)
         if ended {
-            if !cancelled, ScreenshotCardChrome.commits(translation: translation, velocity: velocity) { onDismiss?("fling"); return }
+            if !cancelled, ScreenshotCardSwipe.commits(translation: translation, velocity: velocity) { onDismiss?("fling"); return }
             let position = (layer.presentation()?.value(forKeyPath: "transform.translation.x") as? CGFloat) ?? max(0, translation.x)
             CATransaction.begin(); CATransaction.setDisableActions(true)
             layer.setValue(0, forKeyPath: "transform.translation.x")
@@ -201,6 +207,14 @@ struct ScreenshotCardGeometry {
     }
 }
 
+/// A rightward swipe on the capture dismisses the card once it travels far or fast enough.
+enum ScreenshotCardSwipe {
+    static func commits(translation: CGPoint, velocity: CGPoint) -> Bool {
+        translation.x > 0 && abs(translation.x) >= 1.5 * abs(translation.y)
+            && (translation.x >= 60 || (translation.x >= 12 && velocity.x >= 600))
+    }
+}
+
 extension CAAnimation {
     /// Card motion asks for the display's full rate (120 Hz on ProMotion).
     func preferFullRefreshRate(on screen: NSScreen?) {
@@ -209,106 +223,33 @@ extension CAAnimation {
     }
 }
 
-/// The card's content: a one-line header above the preview well.
+/// The card's content: the preview well inside the tray's ring.
 private final class ScreenshotCardContent: NSView {
     private let well: NSView
-    private let chrome: NSView
-    init(well: NSView, chrome: NSView) {
-        self.well = well; self.chrome = chrome
+    init(well: NSView) {
+        self.well = well
         super.init(frame: .zero)
-        addSubview(well); addSubview(chrome)
+        addSubview(well)
     }
     required init?(coder: NSCoder) { nil }
     override func layout() {
         super.layout()
-        typealias G = ScreenshotCardGeometry
-        chrome.frame = CGRect(x: G.ring + 4, y: bounds.height - G.ring - G.header,
-                              width: max(0, bounds.width - 2 * G.ring - 6), height: G.header)
-        well.frame = CGRect(x: G.ring, y: G.ring, width: G.well.width, height: G.well.height)
+        well.frame = bounds.insetBy(dx: ScreenshotCardGeometry.ring, dy: ScreenshotCardGeometry.ring)
     }
 }
 
-/// The window's rim: a light inner line and a dark outer hairline, the same in light and dark.
-private final class ScreenshotCardRim: NSView {
-    private let inner = CALayer()
-    private let outer = CALayer()
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        for (line, colour, width) in [(inner, NSColor.white.withAlphaComponent(0.16), 1.0),
-                                      (outer, NSColor.black.withAlphaComponent(0.28), 0.5)] {
-            line.borderColor = colour.cgColor
-            line.borderWidth = width
-            line.cornerCurve = .continuous
-            layer?.addSublayer(line)
-        }
-    }
-    required init?(coder: NSCoder) { nil }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-    override func layout() {
-        super.layout()
-        CATransaction.begin(); CATransaction.setDisableActions(true)
-        inner.frame = bounds; inner.cornerRadius = Theme.Radius.floating
-        outer.frame = bounds.insetBy(dx: -0.5, dy: -0.5); outer.cornerRadius = Theme.Radius.floating + 0.5
-        CATransaction.commit()
-    }
-}
-
-/// A shadow cast only outside the card, so the frost never samples its own shadow.
-private final class ScreenshotCardShadow: NSView {
-    private let caster = CALayer()
-    private let cutout = CAShapeLayer()
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        caster.shadowColor = NSColor.black.cgColor
-        caster.shadowOpacity = 0.32
-        caster.shadowRadius = 6
-        caster.shadowOffset = CGSize(width: 0, height: -2)
-        cutout.fillRule = .evenOdd
-        caster.mask = cutout
-        layer?.addSublayer(caster)
-    }
-    required init?(coder: NSCoder) { nil }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-    override func layout() {
-        super.layout()
-        let card = CGPath(roundedRect: bounds, cornerWidth: Theme.Radius.floating, cornerHeight: Theme.Radius.floating, transform: nil)
-        let margin = ScreenshotCardGeometry.shadowInset
-        CATransaction.begin(); CATransaction.setDisableActions(true)
-        caster.frame = bounds
-        caster.shadowPath = card
-        cutout.frame = bounds.insetBy(dx: -margin, dy: -margin)
-        let path = CGMutablePath()
-        path.addRect(cutout.bounds)
-        path.addPath(card, transform: CGAffineTransform(translationX: margin, y: margin))
-        cutout.path = path
-        CATransaction.commit()
-    }
-}
-
-/// Reduce Transparency: the tray becomes the app's opaque panel colour.
-private final class ScreenshotCardSolid: NSView {
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.backgroundColor = Theme.Palette.glassSolidSidebar.ns.cgColor
-        layer?.cornerRadius = Theme.Radius.floating
-        layer?.cornerCurve = .continuous
-    }
-    required init?(coder: NSCoder) { nil }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-}
-
-/// The whole capture over a dimmed blur of itself; the action band rises over its lower edge.
+/// The whole capture over a dimmed blur of itself. Over it: the status badge, the close
+/// button, and the action band that rises over its lower edge.
 @MainActor final class ScreenshotCardWell: NSView {
     let imageView = ScreenshotCardImageView(frame: .zero)
     let band = ScreenshotCardActionBand(frame: .zero)
+    let badge = ScreenshotCardBadge(frame: .zero)
+    let closeButton = ScreenshotCardCloseButton(frame: .zero)
     private let backdrop = NSView()
     private let fill = CALayer()
     private let dim = CALayer()
-    init(capture: CapturedScreenshot) {
-        super.init(frame: CGRect(origin: .zero, size: ScreenshotCardGeometry.well))
+    init(capture: CapturedScreenshot, size: CGSize) {
+        super.init(frame: CGRect(origin: .zero, size: size))
         wantsLayer = true
         layer?.cornerRadius = Theme.Radius.well
         layer?.cornerCurve = .continuous
@@ -322,20 +263,23 @@ private final class ScreenshotCardSolid: NSView {
         backdrop.layer?.addSublayer(dim)
         imageView.image = NSImage(cgImage: capture.image, size: capture.pointSize)
         imageView.imageScaling = .scaleProportionallyDown
-        imageView.setAccessibilityHelp(String(localized: "Drag the screenshot to another app"))
-        imageView.toolTip = String(localized: "Drag the screenshot to another app")
+        imageView.setAccessibilityHelp(String(localized: "Click to preview; drag to use the file; swipe right to dismiss"))
         let lift = NSShadow()
         lift.shadowColor = NSColor.black.withAlphaComponent(0.35); lift.shadowBlurRadius = 6; lift.shadowOffset = CGSize(width: 0, height: -1)
         imageView.shadow = lift
-        for view in [backdrop, imageView, band] { addSubview(view) }
-        let geometry = ScreenshotCardGeometry(sourceSize: capture.pointSize)
+        for view in [backdrop, imageView, band, badge, closeButton] { addSubview(view) }
+        let geometry = ScreenshotCardGeometry(sourceSize: capture.pointSize, in: size)
         let scale = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
         Task { [weak self] in
-            let rendered = await ScreenshotCardBlur.render(capture.image, imageRect: geometry.imageRect, scale: scale)
+            let rendered = await ScreenshotCardBlur.render(capture.image, imageRect: geometry.imageRect, wellSize: size, scale: scale)
             self?.apply(rendered)
         }
     }
     required init?(coder: NSCoder) { nil }
+    func setHovering(_ hovering: Bool, busy: Bool, reduceMotion: Bool) {
+        band.setRevealed(hovering || busy, reduceMotion: reduceMotion)
+        closeButton.setRevealed(hovering, reduceMotion: reduceMotion)
+    }
     private func apply(_ rendered: ScreenshotCardBlur.Rendered) {
         CATransaction.begin()
         CATransaction.setAnimationDuration(0.18)
@@ -343,6 +287,8 @@ private final class ScreenshotCardSolid: NSView {
         fill.opacity = rendered.fill == nil ? 0 : 1
         CATransaction.commit()
         band.setBlurLevels(rendered.levels)
+        badge.setBackdrop(rendered.heavy, wellSize: bounds.size)
+        closeButton.setBackdrop(rendered.heavy, wellSize: bounds.size)
     }
     override func layout() {
         super.layout()
@@ -352,78 +298,11 @@ private final class ScreenshotCardSolid: NSView {
         CATransaction.commit()
         imageView.frame = bounds
         band.frame = CGRect(x: 0, y: 0, width: bounds.width, height: ScreenshotCardGeometry.band)
-    }
-}
-
-/// Only this header owns the dismissal gesture; image file drags and action controls are excluded.
-@MainActor final class ScreenshotCardChrome: NSView, NSGestureRecognizerDelegate {
-    var dismiss: (() -> Void)?
-    var pan: ((CGPoint, CGPoint, Bool, Bool) -> Void)?
-    private let status = NSTextField(labelWithString: String(localized: "Copied"))
-    private let dimensions = NSTextField(labelWithString: "")
-    private let spinner = NSProgressIndicator()
-    private let close = NSButton()
-    private var busy = false
-    private var error: String?
-    static func commits(translation: CGPoint, velocity: CGPoint) -> Bool {
-        translation.x > 0 && abs(translation.x) >= 1.5 * abs(translation.y)
-            && (translation.x >= 60 || (translation.x >= 12 && velocity.x >= 600))
-    }
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        status.font = Theme.Font.ns.text(12, weight: .medium); status.textColor = Theme.Palette.ink.ns
-        status.lineBreakMode = .byTruncatingTail
-        dimensions.font = Theme.Font.ns.mono(11); dimensions.textColor = Theme.Palette.ink2.ns
-        status.isSelectable = false; dimensions.isSelectable = false
-        spinner.style = .spinning; spinner.controlSize = .small; spinner.isDisplayedWhenStopped = false
-        spinner.setAccessibilityLabel(String(localized: "Preparing screenshot"))
-        close.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: String(localized: "Dismiss screenshot"))?
-            .withSymbolConfiguration(.init(pointSize: 11, weight: .semibold))
-        close.contentTintColor = Theme.Palette.ink2.ns
-        close.isBordered = false; close.target = self; close.action = #selector(closeCard)
-        close.setAccessibilityLabel(String(localized: "Dismiss screenshot"))
-        // Over the bare tray, a soft halo keeps the header legible on any desktop.
-        let halo = NSShadow()
-        halo.shadowColor = NSColor(name: nil) { appearance in
-            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-                ? NSColor.black.withAlphaComponent(0.6) : NSColor.white.withAlphaComponent(0.85)
-        }
-        halo.shadowBlurRadius = 3; halo.shadowOffset = .zero
-        for view in [spinner, status, dimensions, close] { view.shadow = halo; addSubview(view) }
-        let recognizer = NSPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
-        recognizer.delegate = self; addGestureRecognizer(recognizer)
-        toolTip = String(localized: "Swipe right to dismiss")
-    }
-    required init?(coder: NSCoder) { nil }
-    func setDimensions(_ text: String) { dimensions.stringValue = text; needsLayout = true }
-    func setState(busy: Bool, error: String?) {
-        self.busy = busy; self.error = error
-        if busy { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
-        status.stringValue = error ?? String(localized: "Copied")
-        status.textColor = error == nil ? Theme.Palette.ink.ns : Theme.Palette.record.ns
-        status.toolTip = error
-        dimensions.isHidden = error != nil
-        needsLayout = true
-    }
-    override func layout() {
-        super.layout()
-        var x: CGFloat = 0
-        if busy { spinner.frame = CGRect(x: 0, y: 2, width: 16, height: 16); x = 22 }
-        let closeX = bounds.maxX - 20
-        let statusWidth = min(ceil(status.attributedStringValue.size().width) + 4, max(0, closeX - 8 - x))
-        status.frame = CGRect(x: x, y: 1, width: statusWidth, height: 18)
-        x += statusWidth + 8
-        dimensions.frame = CGRect(x: x, y: 1, width: max(0, closeX - 8 - x), height: 18)
-        close.frame = CGRect(x: closeX, y: 0, width: 20, height: 20)
-    }
-    func gestureRecognizer(_ gestureRecognizer: NSGestureRecognizer, shouldAttemptToRecognizeWith event: NSEvent) -> Bool {
-        !close.frame.contains(convert(event.locationInWindow, from: nil))
-    }
-    @objc private func closeCard() { dismiss?() }
-    @objc private func handlePan(_ recognizer: NSPanGestureRecognizer) {
-        let translation = recognizer.translation(in: self), velocity = recognizer.velocity(in: self)
-        let ended = recognizer.state == .ended || recognizer.state == .cancelled || recognizer.state == .failed
-        pan?(translation, velocity, ended, recognizer.state != .ended && ended)
+        let inset: CGFloat = 8
+        let badgeSize = badge.preferredSize
+        badge.frame = CGRect(x: inset, y: bounds.maxY - inset - badgeSize.height, width: badgeSize.width, height: badgeSize.height)
+        let close = ScreenshotCardCloseButton.side
+        closeButton.frame = CGRect(x: bounds.maxX - inset - close, y: bounds.maxY - inset - close, width: close, height: close)
     }
 }
 
@@ -431,11 +310,18 @@ private final class ScreenshotCardSolid: NSView {
     var export: ScreenshotCardExport?
     var preparedURL: URL?
     var preparedPNG: Data?
-    var edit: (() -> Void)?
+    /// A short click: opens the screenshot preview.
+    var open: (() -> Void)?
+    /// When set, a rightward drag dismisses instead of dragging the file out:
+    /// (translation, velocity, ended, cancelled). Every other direction drags the file.
+    var swipe: ((CGPoint, CGPoint, Bool, Bool) -> Void)?
     var pause: ((Bool) -> Void)?
     var canInteract: @MainActor () -> Bool = { true }
+    private enum Gesture { case undecided, swipe, file }
     private var downPoint: CGPoint?
-    private var moved = false
+    private var gesture = Gesture.undecided
+    private var velocity = CGPoint.zero
+    private var lastSample: (point: CGPoint, time: TimeInterval)?
     private var dragging = false
     private var promiseDelegate: ScreenshotCardPromiseDelegate?
     override init(frame frameRect: NSRect) { super.init(frame: frameRect); imageScaling = .scaleProportionallyUpOrDown; setAccessibilityLabel(String(localized: "Screenshot preview")) }
@@ -444,8 +330,8 @@ private final class ScreenshotCardSolid: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func accessibilityRole() -> NSAccessibility.Role? { .button }
     override func accessibilityPerformPress() -> Bool {
-        guard canInteract(), let edit else { return false }
-        edit(); return true
+        guard canInteract(), let open else { return false }
+        open(); return true
     }
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 36 || event.keyCode == 49 { _ = accessibilityPerformPress() }
@@ -453,13 +339,44 @@ private final class ScreenshotCardSolid: NSView {
     }
     override func mouseDown(with event: NSEvent) {
         guard canInteract() else { downPoint = nil; return }
-        downPoint = convert(event.locationInWindow, from: nil); moved = false
+        let location = convert(event.locationInWindow, from: nil)
+        downPoint = location; gesture = .undecided; velocity = .zero
+        lastSample = (location, event.timestamp)
     }
     override func mouseDragged(with event: NSEvent) {
         guard canInteract(), let origin = downPoint, !dragging else { return }
         let location = convert(event.locationInWindow, from: nil)
-        guard hypot(location.x - origin.x, location.y - origin.y) >= 4 else { return }
-        moved = true
+        if let last = lastSample, event.timestamp > last.time {
+            let dt = event.timestamp - last.time
+            let sample = CGPoint(x: (location.x - last.point.x) / dt, y: (location.y - last.point.y) / dt)
+            velocity = CGPoint(x: velocity.x * 0.4 + sample.x * 0.6, y: velocity.y * 0.4 + sample.y * 0.6)
+        }
+        lastSample = (location, event.timestamp)
+        let translation = CGPoint(x: location.x - origin.x, y: location.y - origin.y)
+        switch gesture {
+        case .swipe: swipe?(translation, velocity, false, false)
+        case .file: return
+        case .undecided:
+            guard hypot(translation.x, translation.y) >= 4 else { return }
+            if let swipe, translation.x > 0, abs(translation.x) >= 1.5 * abs(translation.y) {
+                gesture = .swipe; swipe(translation, velocity, false, false)
+            } else {
+                gesture = .file; beginFileDrag(with: event)
+            }
+        }
+    }
+    override func mouseUp(with event: NSEvent) {
+        defer { downPoint = nil; gesture = .undecided; lastSample = nil }
+        guard let origin = downPoint else { return }
+        let location = convert(event.locationInWindow, from: nil)
+        if gesture == .swipe {
+            swipe?(CGPoint(x: location.x - origin.x, y: location.y - origin.y), velocity, true, false)
+            return
+        }
+        guard canInteract(), gesture == .undecided, !dragging, bounds.contains(location) else { return }
+        open?()
+    }
+    private func beginFileDrag(with event: NSEvent) {
         guard let export else { return }
         let delegate = ScreenshotCardPromiseDelegate(export: export)
         let writer = ScreenshotCardPromiseWriter(fileType: UTType.png.identifier, delegate: delegate,
@@ -471,15 +388,10 @@ private final class ScreenshotCardSolid: NSView {
         dragging = true
         beginDraggingSession(with: [item], event: event, source: self)
     }
-    override func mouseUp(with event: NSEvent) {
-        defer { downPoint = nil }
-        guard canInteract(), downPoint != nil, !moved, !dragging, bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
-        edit?()
-    }
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
     func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) { pause?(true) }
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
-        dragging = false; downPoint = nil; promiseDelegate = nil
+        dragging = false; downPoint = nil; gesture = .undecided; promiseDelegate = nil
         (window?.contentView as? ScreenshotCardPresentation)?.reconcileHover(at: screenPoint)
         pause?(false)
     }

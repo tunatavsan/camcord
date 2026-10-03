@@ -10803,6 +10803,150 @@
           }
         }
       }
+    },
+    "Add to Library": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add to Library"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kütüphaneye ekle"
+          }
+        }
+      }
+    },
+    "In Library": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In Library"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kütüphanede"
+          }
+        }
+      }
+    },
+    "Click to preview; drag to use the file; swipe right to dismiss": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Click to preview; drag to use the file; swipe right to dismiss"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önizlemek için tıklayın; dosyayı kullanmak için sürükleyin; kapatmak için sağa kaydırın"
+          }
+        }
+      }
+    },
+    "After capture": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "After capture"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çekimden sonra"
+          }
+        }
+      }
+    },
+    "The screenshot card offers whatever a capture didn't do by itself.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The screenshot card offers whatever a capture didn't do by itself."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çekim kartı, çekimin kendiliğinden yapmadığını önerir."
+          }
+        }
+      }
+    },
+    "Each screenshot goes to": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Each screenshot goes to"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Her ekran görüntüsü"
+          }
+        }
+      }
+    },
+    "Library and clipboard": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Library and clipboard"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kütüphaneye ve panoya"
+          }
+        }
+      }
+    },
+    "Clipboard only": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clipboard only"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yalnız panoya"
+          }
+        }
+      }
+    },
+    "Library only": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Library only"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yalnız Kütüphaneye"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

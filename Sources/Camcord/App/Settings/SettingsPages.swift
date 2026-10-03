@@ -180,9 +180,26 @@ struct ScreenshotSettingsPage: View {
     @Bindable var store: SettingsStore
 
     private var folder: String { store.screenshot.saveDirectoryPath ?? ScreenshotSettings.defaultDirectoryPath() }
+    /// One choice over two stored settings: the clipboard copy and the Library's own copy.
+    private var destination: Binding<ScreenshotDestination> {
+        Binding(get: { ScreenshotDestination(copies: store.screenshot.copyToClipboard, keeps: store.library.keepCopied) },
+                set: { store.screenshot.copyToClipboard = $0.copies; store.library.keepCopied = $0.keeps })
+    }
 
     var body: some View {
         FormPage(title: SettingsGroup.screenshot.title) {
+            FormCard(title: LocalizedStringResource("After capture", comment: "Settings card"),
+                     footnote: LocalizedStringResource("The screenshot card offers whatever a capture didn't do by itself.",
+                                                       comment: "Setting footnote")) {
+                FormRow(label: LocalizedStringResource("Each screenshot goes to", comment: "Setting"), isFirst: true) {
+                    Picker(selection: destination) {
+                        ForEach(ScreenshotDestination.allCases) { choice in Text(choice.title).tag(choice) }
+                    } label: { Text("Each screenshot goes to", comment: "Setting") }
+                    .labelsHidden()
+                    .fixedSize()
+                }
+                .settingsKey("screenshotSettings.copyToClipboard")
+            }
             FormCard(footnote: LocalizedStringResource("Screenshots are copied as lossless PNG; Retina is the sharpest.",
                                                        comment: "Setting footnote")) {
                 FormRow(label: LocalizedStringResource("Resolution", comment: "Setting: capture resolution"), isFirst: true) {
@@ -204,6 +221,16 @@ struct ScreenshotSettingsPage: View {
                 }
                 .settingsKey("screenshotSettings.saveDirectoryPath")
             }
+        }
+    }
+}
+
+extension ScreenshotDestination {
+    var title: LocalizedStringResource {
+        switch self {
+        case .libraryAndClipboard: LocalizedStringResource("Library and clipboard", comment: "Setting: where screenshots go")
+        case .clipboard: LocalizedStringResource("Clipboard only", comment: "Setting: where screenshots go")
+        case .library: LocalizedStringResource("Library only", comment: "Setting: where screenshots go")
         }
     }
 }

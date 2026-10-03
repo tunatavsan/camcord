@@ -365,6 +365,15 @@ struct RecordingSettings: Codable, Equatable {
     }
 }
 
+/// What every screenshot does by itself; the screenshot card offers whatever is left.
+enum ScreenshotDestination: String, CaseIterable, Identifiable, Sendable {
+    case libraryAndClipboard, clipboard, library
+    var id: Self { self }
+    init(copies: Bool, keeps: Bool) { self = copies ? (keeps ? .libraryAndClipboard : .clipboard) : .library }
+    var copies: Bool { self != .library }
+    var keeps: Bool { self != .clipboard }
+}
+
 /// Screenshot preferences (separate from recording): quality, and optionally saving a
 /// copy of every screenshot to a folder (distinct from where videos go).
 struct ScreenshotSettings: Codable, Equatable, Sendable {
@@ -374,15 +383,19 @@ struct ScreenshotSettings: Codable, Equatable, Sendable {
     var saveToDisk: Bool
     /// Custom screenshot folder; nil = `~/Pictures/camcord`.
     var saveDirectoryPath: String?
+    /// False keeps screenshots in the Library only; the card then offers Copy.
+    var copyToClipboard: Bool
 
     init(
         resolutionScale: ResolutionScale = .native,
         saveToDisk: Bool = false,
-        saveDirectoryPath: String? = nil
+        saveDirectoryPath: String? = nil,
+        copyToClipboard: Bool = true
     ) {
         self.resolutionScale = resolutionScale
         self.saveToDisk = saveToDisk
         self.saveDirectoryPath = saveDirectoryPath
+        self.copyToClipboard = copyToClipboard
     }
 
     init(from decoder: Decoder) throws {
@@ -391,6 +404,7 @@ struct ScreenshotSettings: Codable, Equatable, Sendable {
         resolutionScale = try c.decodeIfPresent(ResolutionScale.self, forKey: .resolutionScale) ?? d.resolutionScale
         saveToDisk = try c.decodeIfPresent(Bool.self, forKey: .saveToDisk) ?? d.saveToDisk
         saveDirectoryPath = try c.decodeIfPresent(String.self, forKey: .saveDirectoryPath)
+        copyToClipboard = try c.decodeIfPresent(Bool.self, forKey: .copyToClipboard) ?? d.copyToClipboard
     }
 
     /// See `RecordingSettings.merging(from:into:)` — preserves fields another surface
@@ -400,6 +414,7 @@ struct ScreenshotSettings: Codable, Equatable, Sendable {
         if resolutionScale != old.resolutionScale { r.resolutionScale = resolutionScale }
         if saveToDisk != old.saveToDisk { r.saveToDisk = saveToDisk }
         if saveDirectoryPath != old.saveDirectoryPath { r.saveDirectoryPath = saveDirectoryPath }
+        if copyToClipboard != old.copyToClipboard { r.copyToClipboard = copyToClipboard }
         return r
     }
 
