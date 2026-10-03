@@ -37,7 +37,7 @@ actor ScrollStitchWorker {
         let outcome = stitcher.add(image, predictedOffset: predictedOffset)
         let preview: CGImage?
         switch outcome {
-        case .appended, .baselined, .buffered: preview = stitcher.previewImage(maxWidth: 384)
+        case .appended, .baselined, .buffered: preview = stitcher.previewImage(maxWidth: 480)
         default: preview = nil
         }
         let bands = stitcher.detectedBands
@@ -303,17 +303,17 @@ final class ScrollingCaptureSession {
         if autoScrolling { stopAutoScroll(reachedEnd: false); return }
         guard !finished, !finishing else { return }
         guard !autoEnded else {
-            flashHint("Sayfa sonu")
+            flashHint(String(localized: "End of page"), warning: false)
             return
         }
         // Synthesized events only reach other apps when we're an Accessibility-trusted
         // process (same requirement as the app's event tap).
         guard AXIsProcessTrusted() else {
-            flashHint("Otomatik için Erişilebilirlik izni gerekli")
+            flashHint(String(localized: "Needs Accessibility permission"))
             return
         }
         guard prepared, stitchState.firstFrame != nil else {
-            flashHint("Sayfa hazırlanıyor · yeniden dene")
+            flashHint(String(localized: "Not ready yet · Try again"), warning: false)
             return
         }
         autoScrolling = true
@@ -336,7 +336,7 @@ final class ScrollingCaptureSession {
         defer {
             if calibrating, autoGeneration == generation {
                 stopAutoScroll(reachedEnd: false)
-                flashHint("Sayfa kaydırılamıyor")
+                flashHint(String(localized: "This page can't be scrolled"))
             }
         }
         let ready = ContinuousClock.now.advanced(by: .milliseconds(500))
@@ -530,7 +530,7 @@ final class ScrollingCaptureSession {
         stitchState = update.state
         let outcome = update.outcome
         logCapture(String(describing: outcome), offset: stitchState.offset, score: stitchState.score)
-        if stitchState.rebaselines > rebaselines { flashHint("Kopukluk · yavaş kaydır") }
+        if stitchState.rebaselines > rebaselines { flashHint(String(localized: "Gap · Scroll more slowly")) }
         // Only recompose the (O(n)) preview when the composite actually changed —
         // .appended/.baselined grows or seeds it, .buffered shows the newest warm-up frame;
         // .ignored (a pause / over-scroll / static frame) leaves it untouched, so skip.
@@ -583,6 +583,9 @@ final class ScrollingCaptureSession {
         if let notice { completionNotice = notice }
         guard !finishing else { return }
         finishing = true
+        // The last frame and the final image take a moment; the HUD says so and takes no
+        // second Done.
+        if hooks == nil { preview.setFinishing() }
         let token = generation
         Task { @MainActor in await self.flushAndFinalize(token: token, notice: notice, flush: flush) }
     }
@@ -628,8 +631,9 @@ final class ScrollingCaptureSession {
 
     var readyForCaptureForTesting: Bool { prepared && !captureInFlight }
 
-    private func flashHint(_ message: String) {
-        if let hooks { hooks.hint(message) } else { preview.flashHint(message) }
+    /// A transient line in the HUD's status; a warning carries the warning mark.
+    private func flashHint(_ message: String, warning: Bool = true) {
+        if let hooks { hooks.hint(message) } else { preview.flashHint(message, warning: warning) }
     }
 
     /// Inert auto producer for generation tests; never creates/posts an AutoScroller.
