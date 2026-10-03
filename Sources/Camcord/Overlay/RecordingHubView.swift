@@ -229,7 +229,9 @@ final class RecordingHubView: NSView {
     private var mirrored: Bool { growth == .trailing }
 
     private let content = HubContent()
-    private lazy var surface = TraySurface(content: content, shadowRadius: 8, cornerRadius: nil)
+    /// The tray reads as the app's frame over anything: a touch of tint, the rim, a real shadow.
+    private lazy var surface = TraySurface(content: content, shadowRadius: 11, cornerRadius: nil,
+                                           tint: NSColor.black.withAlphaComponent(0.16))
     private var chips: [RecordingHubItem: HubChip] = [:]
     private var dividers: [CALayer] = []
     private let meter = HubBars()
@@ -540,8 +542,9 @@ private final class HubContent: NSView {
         /// The chip's frame inside its cell (content coordinates).
         func frame(in cell: CGRect, mirrored: Bool) -> CGRect {
             switch self {
-            case .button: CGRect(x: cell.midX - 17, y: cell.midY - 17, width: 34, height: 34)
-            case .identity, .start: cell.insetBy(dx: 4, dy: 4)
+            // A ring of tray shows around every chip, as around the panel's cells.
+            case .button: CGRect(x: cell.midX - 15, y: cell.midY - 15, width: 30, height: 30)
+            case .identity, .start: cell.insetBy(dx: 6, dy: 6)
             }
         }
     }
@@ -567,8 +570,12 @@ private final class HubContent: NSView {
         glass.style = .clear
         glass.tintColor = tint
         face.wantsLayer = true
-        // A coloured chip carries its colour inside the glass, where the clear material keeps it.
-        if tint.alphaComponent > 0.5 { face.layer?.backgroundColor = tint.withAlphaComponent(0.55).cgColor }
+        // A coloured chip is the panel's Record red, solid inside the glass, with its light rim.
+        if tint.alphaComponent > 0.5 {
+            face.layer?.backgroundColor = Theme.Palette.record.ns.withAlphaComponent(0.92).cgColor
+            face.layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
+            face.layer?.borderWidth = 1
+        }
         glass.contentView = face
         addSubview(glass)
         let scale = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2

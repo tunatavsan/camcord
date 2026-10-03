@@ -354,7 +354,8 @@ final class PanelController: NSObject, NSWindowDelegate {
     func releaseRecordingHold(closing: Bool = true) {
         behavior = .transient
         installOutsideClickMonitor()
-        if closing { close() }
+        // A recording excludes Camcord's own windows, so the panel can fold away while it starts.
+        if closing { close(animated: true) }
     }
 
     /// Capture flows close at once, so nothing of the panel reaches a frozen screen; the

@@ -347,6 +347,13 @@ final class RecordingHubPanel {
         refreshPreviewState()
         refreshElevation()
         present(panel)
+        // It arrives the way the panel leaves: a short drop and a fade, at the display's rate.
+        if let layer = view.layer, !Self.reducesMotion {
+            let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0; fade.toValue = 1; fade.duration = 0.2
+            let drop = CASpringAnimation.card(keyPath: "transform.translation.y", from: 10, to: 0, response: 0.4, dampingRatio: 0.78)
+            fade.preferFullRefreshRate(on: panel.screen); drop.preferFullRefreshRate(on: panel.screen)
+            layer.add(fade, forKey: "hub-arrive-fade"); layer.add(drop, forKey: "hub-arrive-drop")
+        }
     }
 
     func hide() {

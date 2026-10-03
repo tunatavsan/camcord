@@ -310,7 +310,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     func setPreparing(_ preparing: Bool) {
         if preparing, lastUIState == nil || lastUIState == .idle {
-            statusItem.button?.image = Self.indicatorImage(elapsed: "…", color: Theme.Palette.ink2.ns, paused: false)
+            showRecordLight(.preparing)
             statusItem.button?.toolTip = "Kayıt hazırlanıyor"
         } else if !preparing {
             let state = lastUIState ?? .idle
@@ -320,10 +320,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
     }
 
-    /// Renders the recording state on the status item: a vivid, glowing red glyph +
-    /// elapsed time while recording (hollow while paused), the template lens when idle.
-    /// The elapsed text is drawn as an attributed string in the state color so it is
-    /// clearly legible on the menu bar instead of the default (near-invisible) label.
+    /// Renders the recording state on the status item. The icon and the item's width never
+    /// change, so nothing in the menu bar shifts when a recording starts: a small record light
+    /// sits on the lens and pulses while recording, hollow and still while paused. The time
+    /// lives on the hub and in the panel.
     func setRecordingUI(_ state: RecordingController.UIState, elapsed: String?) {
         guard let button = statusItem.button else { return }
 
@@ -333,21 +333,18 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let stateChanged = (state != lastUIState)
         lastUIState = state
         lastElapsed = elapsed
+        button.image = CamcordBrandAssets.templateImage
+        button.contentTintColor = nil
         switch state {
         case .idle:
-            button.image = CamcordBrandAssets.templateImage
-            button.contentTintColor = nil
-            button.attributedTitle = NSAttributedString(string: "")
+            showRecordLight(nil)
+            button.setAccessibilityValue(nil)
         case .recording:
-            button.title = ""
-            button.contentTintColor = nil
-            button.imagePosition = .imageOnly
-            button.image = Self.indicatorImage(elapsed: elapsed ?? "—", color: Theme.Palette.record.ns, paused: false)
+            if stateChanged { showRecordLight(.recording) }
+            button.setAccessibilityValue(String(localized: "Recording") + " " + (elapsed ?? ""))
         case .paused:
-            button.title = ""
-            button.contentTintColor = nil
-            button.imagePosition = .imageOnly
-            button.image = Self.indicatorImage(elapsed: elapsed ?? "—", color: Theme.Palette.ink.ns, paused: true)
+            if stateChanged { showRecordLight(.paused) }
+            button.setAccessibilityValue(String(localized: "Paused") + " " + (elapsed ?? ""))
         }
 
         if stateChanged {
@@ -355,62 +352,67 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
     }
 
-    /// A highly visible "recording pill": solid color background, white dot, white text.
-    /// Rendered as a non-template image so it ignores macOS menu bar tinting and stays vivid.
-    static func indicatorImage(elapsed: String, color: NSColor, paused: Bool) -> NSImage {
-        let font = Theme.Menu.pillFont
-        let textColor: NSColor = paused ? Theme.Palette.ink.ns : Theme.Palette.onRecord.ns
-        let text = NSAttributedString(
-            string: elapsed,
-            attributes: [.foregroundColor: textColor, .font: font]
-        )
-        let textSize = text.size()
+    private enum RecordLight { case preparing, recording, paused }
+    private var recordLight: (dot: CALayer, ring: CALayer)?
 
-        let dot = Theme.Menu.pillDot
-        let gap = Theme.Menu.pillGap
-        let leading = Theme.Menu.pillLeading
-        let trailing = Theme.Menu.pillTrailing
-        let height = Theme.Menu.pillHeight
-        let pillHeight = height
-        let width = leading + dot + gap + ceil(textSize.width) + trailing
-
-        let image = NSImage(size: NSSize(width: width, height: height))
-        image.lockFocus()
-        NSGraphicsContext.saveGraphicsState()
-
-        // Draw the pill background
-        (paused ? NSColor.clear : color).setFill()
-        let pillRect = NSRect(x: 0, y: (height - pillHeight) / 2, width: width, height: pillHeight)
-        let pillPath = NSBezierPath(roundedRect: pillRect, xRadius: pillHeight / 2, yRadius: pillHeight / 2)
-        pillPath.fill()
-        if paused {
-            textColor.withAlphaComponent(0.18).setStroke()
-            let rim = NSBezierPath(roundedRect: pillRect.insetBy(dx: 0.5, dy: 0.5),
-                                   xRadius: pillHeight / 2, yRadius: pillHeight / 2)
-            rim.lineWidth = 0.5
-            rim.stroke()
+    /// The light on the lens, drawn by the render server: it pops in, and the ring keeps
+    /// leaving the dot while a recording runs.
+    private func showRecordLight(_ light: RecordLight?) {
+        guard let button = statusItem.button else { return }
+        button.wantsLayer = true
+        guard let light else {
+            if let recordLight {
+                CATransaction.begin(); CATransaction.setAnimationDuration(0.15)
+                recordLight.dot.opacity = 0; recordLight.ring.opacity = 0
+                CATransaction.commit()
+                recordLight.ring.removeAllAnimations()
+            }
+            return
         }
-
-        // Draw the filled recording dot or hollow paused ring
-        textColor.set()
-        let dotRect = NSRect(x: leading, y: (height - dot) / 2, width: dot, height: dot)
-        if paused {
-            let ring = NSBezierPath(ovalIn: dotRect.insetBy(dx: 1, dy: 1))
-            ring.lineWidth = 1.5
-            ring.stroke()
-        } else {
-            NSBezierPath(ovalIn: dotRect).fill()
+        let layers = recordLight ?? {
+            let dot = CALayer(), ring = CALayer()
+            for layer in [ring, dot] { layer.bounds = CGRect(x: 0, y: 0, width: 7, height: 7); layer.cornerRadius = 3.5; layer.opacity = 0 }
+            button.layer?.addSublayer(ring)
+            button.layer?.addSublayer(dot)
+            recordLight = (dot, ring)
+            return (dot, ring)
+        }()
+        // On the lens's upper-right shoulder, inside the item so its width never changes.
+        let bounds = button.bounds
+        let top = button.isFlipped ? bounds.minY + 5 : bounds.maxY - 5
+        let center = CGPoint(x: bounds.midX + 6.5, y: top)
+        let red = Theme.Palette.record.ns.cgColor
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        layers.dot.position = center; layers.ring.position = center
+        switch light {
+        case .preparing:
+            layers.dot.backgroundColor = NSColor.systemGray.cgColor; layers.dot.borderWidth = 0
+        case .recording:
+            layers.dot.backgroundColor = red; layers.dot.borderWidth = 0
+        case .paused:
+            layers.dot.backgroundColor = NSColor.clear.cgColor; layers.dot.borderColor = red; layers.dot.borderWidth = 1.5
         }
-
-        NSGraphicsContext.restoreGraphicsState()
-
-        // Draw the text
-        text.draw(at: NSPoint(x: leading + dot + gap, y: (height - textSize.height) / 2))
-
-        image.unlockFocus()
-        image.isTemplate = false
-        image.accessibilityDescription = String(localized: paused ? "Paused" : "Recording") + " " + elapsed
-        return image
+        layers.ring.backgroundColor = red
+        layers.ring.removeAllAnimations()
+        layers.ring.opacity = 0
+        let fromOpacity = layers.dot.presentation()?.opacity ?? layers.dot.opacity
+        layers.dot.opacity = 1
+        CATransaction.commit()
+        let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if fromOpacity < 0.5, !reduce {
+            let pop = CASpringAnimation.card(keyPath: "transform.scale", from: 0.2, to: 1, response: 0.34, dampingRatio: 0.6)
+            let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0; fade.toValue = 1; fade.duration = 0.12
+            layers.dot.add(pop, forKey: "light-pop"); layers.dot.add(fade, forKey: "light-fade")
+        }
+        guard light == .recording, !reduce else { return }
+        let grow = CABasicAnimation(keyPath: "transform.scale"); grow.fromValue = 1; grow.toValue = 2.3
+        let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0.5; fade.toValue = 0
+        let pulse = CAAnimationGroup()
+        pulse.animations = [grow, fade]
+        pulse.duration = 1.4
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        pulse.repeatCount = .infinity
+        layers.ring.add(pulse, forKey: "light-pulse")
     }
 
     private func refreshRecordingItems() {

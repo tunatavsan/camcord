@@ -5,7 +5,8 @@ import QuartzCore
 /// cast only outside. The screenshot card and the screenshot preview stand on it.
 @MainActor final class TraySurface: NSView {
     /// nil follows the height: a capsule with fully round ends.
-    init(content: NSView, shadowRadius: CGFloat = 6, cornerRadius: CGFloat? = Theme.Radius.floating) {
+    /// `tint` darkens the frost a little, for a tray that floats over anything (the hub).
+    init(content: NSView, shadowRadius: CGFloat = 6, cornerRadius: CGFloat? = Theme.Radius.floating, tint: NSColor? = nil) {
         self.cornerRadius = cornerRadius
         super.init(frame: .zero)
         wantsLayer = true
@@ -13,6 +14,7 @@ import QuartzCore
         // A capsule's frost starts clipped and takes its real radius from its height in layout.
         addSubview(NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
             ? TraySolid(cornerRadius: cornerRadius) : TrayBlurView(cornerRadius: cornerRadius ?? 1))
+        if let tint { addSubview(TraySolid(cornerRadius: cornerRadius, color: tint)) }
         addSubview(content)
         addSubview(TrayRim(cornerRadius: cornerRadius))
     }
@@ -24,6 +26,7 @@ import QuartzCore
         // A capsule's frost follows its height as it grows and shrinks.
         if cornerRadius == nil, let frost = subviews.first(where: { $0 is TrayBlurView }) {
             frost.layer?.cornerRadius = bounds.height / 2
+            frost.layer?.masksToBounds = true
         }
     }
 }
@@ -102,11 +105,11 @@ private final class TrayShadow: NSView {
 /// Reduce Transparency: the tray becomes the app's opaque panel colour.
 private final class TraySolid: NSView {
     private let cornerRadius: CGFloat?
-    init(cornerRadius: CGFloat?) {
+    init(cornerRadius: CGFloat?, color: NSColor = Theme.Palette.glassSolidSidebar.ns) {
         self.cornerRadius = cornerRadius
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = Theme.Palette.glassSolidSidebar.ns.cgColor
+        layer?.backgroundColor = color.cgColor
         layer?.cornerCurve = .continuous
     }
     required init?(coder: NSCoder) { nil }
