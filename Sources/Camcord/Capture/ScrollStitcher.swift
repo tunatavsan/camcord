@@ -30,7 +30,6 @@ final class ScrollStitcher {
     private let bandDetectFrames = 3    // frames needed before header/footer detection
     private let maxWarmup = 7           // stop waiting for band detection after this many
     private let bandShiftMargin = 5.0   // a row is "fixed" if staying beats moving by this
-    private let bandAbsFixed = 32.0     // ...or, when "moved" can't be tested, matches this well
     private let uniformBandRange = 24   // a strip flatter than this = blank over-scroll, skip it
     private let endStableLimit = 20.0   // a strip matching the reference's own tail = a bounce dup
     private static let tailDupLimit = 3.0  // MAD at/below which a committed tail strip is a repeat
@@ -41,6 +40,9 @@ final class ScrollStitcher {
     private static let previewMaxHeightPx = 1200  // live preview renders at most this tall (tail only)
 
     private static let staticLimit = 3.0
+    /// Two captures of a page at rest match this well where they overlap; a seeded match any
+    /// weaker is checked against the whole range before it is trusted.
+    private static let clearMatch = 1.0
 
     enum Motion: Equatable, Sendable {
         case none, up(Int), down(Int, score: Double)
@@ -117,13 +119,15 @@ final class ScrollStitcher {
     var firstFrame: Frame? { pending?.frame ?? reference ?? warmup.last }
     /// How `image` sits against the frame the next `add` compares with, changing nothing: a
     /// driver measures the real shift first and commits only a frame it knows how to place.
-    func probe(_ image: CGImage, predicted: Int) -> (still: Bool, motion: Motion)? {
+    /// `minimumShift` as in `add`.
+    func probe(_ image: CGImage, predicted: Int, minimumShift: Int? = nil) -> (still: Bool, motion: Motion)? {
         guard let f = Self.makeFrame(image), let ref = detected ? (pending?.frame ?? reference) : warmup.last,
               ref.height == f.height, ref.width == f.width else { return nil }
         let shared = Self.staticBands(ref, f)
         let header = max(headerH, shared.header), footer = max(footerH, shared.footer)
         if Self.isStill(ref, f, headerH: header, footerH: footer) { return (true, .none) }
-        return (false, Self.measureMotion(from: ref, to: f, headerH: header, footerH: footer, predicted: predicted).0)
+        return (false, Self.measureMotion(from: ref, to: f, headerH: header, footerH: footer, predicted: predicted,
+                                          minimumShift: minimumShift).0)
     }
 
     /// Sticky bands detected during warm-up (0 until then) — a caller comparing two frames
@@ -150,8 +154,11 @@ final class ScrollStitcher {
 
     /// Feeds one settled viewport frame. `predictedOffset` is the scroll delta since the
     /// last accepted frame, in the image's PIXELS (0 = unknown → full search).
+    /// `minimumShift` is set by a driver that moves the page itself, exactly and without
+    /// momentum: a short move is then real (the page end cut the step short), never jitter or
+    /// an elastic bounce.
     @discardableResult
-    func add(_ image: CGImage, predictedOffset: Int) -> Outcome {
+    func add(_ image: CGImage, predictedOffset: Int, minimumShift: Int? = nil) -> Outcome {
         // Describes THIS frame only. As a latch it would outlive the commit that set it and
         // end the next auto-scroll run on its first frame (a capture that commits nothing
         // never refreshes it), so auto would be dead for the rest of the session.
@@ -188,7 +195,8 @@ final class ScrollStitcher {
                 // exactly would otherwise drown the motion of everything below it.
                 let bands = Self.staticBands(previous, f)
                 (lastMotion, lastScore) = Self.measureMotion(from: previous, to: f, headerH: bands.header,
-                                                             footerH: bands.footer, predicted: predictedOffset)
+                                                             footerH: bands.footer, predicted: predictedOffset,
+                                                             minimumShift: minimumShift)
             }
             warmup.append(f)
             warmupPredictions.append(predictedOffset)
@@ -209,7 +217,7 @@ final class ScrollStitcher {
         }
 
         if contentPixelHeight + footerH >= outputHeightLimit { limitReached = true; return .atCap }
-        let result = appendLive(f, predicted: predictedOffset)
+        let result = appendLive(f, predicted: predictedOffset, minimumShift: minimumShift)
         if contentPixelHeight + footerH >= outputHeightLimit { limitReached = true; return .atCap }
         switch result {
         case .appended:
@@ -309,10 +317,10 @@ final class ScrollStitcher {
     /// Aligns `f` against the current reference and, on a confident downward move,
     /// appends the newly revealed content strip.
     @discardableResult
-    private func appendLive(_ f: Frame, predicted: Int) -> AlignResult {
+    private func appendLive(_ f: Frame, predicted: Int, minimumShift: Int? = nil) -> AlignResult {
         guard let ref = pending?.frame ?? reference else { return .lostAlignment }
         (lastMotion, lastScore) = Self.measureMotion(
-            from: ref, to: f, headerH: headerH, footerH: footerH, predicted: predicted
+            from: ref, to: f, headerH: headerH, footerH: footerH, predicted: predicted, minimumShift: minimumShift
         )
         let offset: Int
         switch lastMotion {
@@ -344,8 +352,11 @@ final class ScrollStitcher {
                 commitPending(); lastMotion = .none; return .noMotion
             }
             // (b) The revealed band re-shows what the reference already had at the bottom
-            //     (the bounce re-captured the tail) — a duplicate, not new content.
-            if Self.regionMAD(ref.sig, f.sig, from: stripTop, to: stripBottom) <= endStableLimit {
+            //     (the bounce re-captured the tail) — a duplicate, not new content. A driver
+            //     that moves the page exactly has no bounce, and on a light page of sparse
+            //     text a real new line passes this test too.
+            if minimumShift == nil,
+               Self.regionMAD(ref.sig, f.sig, from: stripTop, to: stripBottom) <= endStableLimit {
                 commitPending(); lastMotion = .none; return .noMotion
             }
         }
@@ -463,10 +474,17 @@ final class ScrollStitcher {
                 let isFixed: Bool
                 if r + g < H {
                     isFixed = stayed + bandShiftMargin < Self.rowMAD(new, prev, r, r + g)
+                } else if r - g >= 0 {
+                    // Bottom rows: what moved into them came from off-frame, but what they
+                    // showed before would now sit `g` rows higher. A fixed footer stayed and is
+                    // not found there. (Only "does it still look alike" is no test: on a light
+                    // page of sparse text every row looks alike, and the bottom third of the
+                    // first frame was painted over the end of the capture.)
+                    isFixed = stayed + bandShiftMargin < Self.rowMAD(new, prev, r - g, r)
                 } else {
-                    // Bottom rows: the "moved" hypothesis reads off-frame, so fall back to
-                    // "does it still match the same position well" (fixed footers do).
-                    isFixed = stayed < bandAbsFixed
+                    // A shift over half the frame leaves neither reading: only a row that
+                    // stayed exactly counts.
+                    isFixed = stayed <= Self.staticLimit
                 }
                 if isFixed { fixedVotes[r] += 1 }
             }
@@ -631,8 +649,15 @@ final class ScrollStitcher {
 
         if predicted >= minD {
             let slack = max(minD, Int(Double(predicted) * 0.6))
-            let (d, s) = search(predicted - slack, predicted + slack)
-            if s <= confidenceLimit { return (d, s) }
+            let seeded = search(predicted - slack, predicted + slack)
+            if seeded.1 <= clearMatch { return seeded }
+            // A step the page end cut short lies outside the window, whose best is then a
+            // look-alike (a form's next card, a list's next row) that still scores under the
+            // confidence limit. The whole range finds the real one; the prediction still breaks
+            // a near tie there.
+            let full = search(minD, maxD)
+            if full.1 + clearMatch < seeded.1 || seeded.1 > confidenceLimit { return full }
+            return seeded
         }
         return search(minD, maxD)
     }

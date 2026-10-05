@@ -40,9 +40,9 @@ actor ScrollStitchWorker {
     }
 
     /// How a frame sits against the stitch's own reference, changing nothing.
-    func probe(_ image: CGImage, predicted: Int) -> (still: Bool, motion: ScrollStitcher.Motion)? {
+    func probe(_ image: CGImage, predicted: Int, minimumShift: Int? = nil) -> (still: Bool, motion: ScrollStitcher.Motion)? {
         workHook?()
-        return stitcher.probe(image, predicted: predicted)
+        return stitcher.probe(image, predicted: predicted, minimumShift: minimumShift)
     }
 
     /// How `to` sits relative to `from`: the same view (still), or moved, measured the way `add`
@@ -58,9 +58,9 @@ actor ScrollStitchWorker {
                                              footerH: max(footer, bands.footer), predicted: predicted, minimumShift: 2))
     }
 
-    func add(_ image: CGImage, predictedOffset: Int) -> Update {
+    func add(_ image: CGImage, predictedOffset: Int, minimumShift: Int? = nil) -> Update {
         workHook?()
-        let outcome = stitcher.add(image, predictedOffset: predictedOffset)
+        let outcome = stitcher.add(image, predictedOffset: predictedOffset, minimumShift: minimumShift)
         let preview: CGImage?
         switch outcome {
         case .appended, .baselined, .buffered: preview = stitcher.previewImage(maxWidth: 480)
@@ -176,6 +176,9 @@ final class ScrollingCaptureSession {
     /// Auto was asked for before the first frame was in; it starts as soon as that frame is.
     private var autoRequested = false
     private static let maxClimbSteps = 120
+    /// The smallest move auto measures, in pixels; manual scrolling keeps the stitcher's own
+    /// floor against jitter and bounce.
+    private static let autoMinimumShift = 2
     private static let maxAutoSteps = 600
 
     private var continuation: CheckedContinuation<Outcome, Never>?
@@ -488,10 +491,13 @@ final class ScrollingCaptureSession {
             }
             if searching { length = scrolling * 0.25 }
             guard let frame = await step(actuator, by: length, run: run), autoAlive(run) else { return }
-            var measured = await worker.probe(frame, predicted: Int((length * scale).rounded()))
+            // Auto moves the page exactly and settles before it looks, so even a short move is
+            // real: the page end cut the step short.
+            var measured = await worker.probe(frame, predicted: Int((length * scale).rounded()),
+                                              minimumShift: Self.autoMinimumShift)
             if let first = measured, !first.still, first.motion == .none {
                 // The page moved other than asked (its end clamped the step): look without a guess.
-                measured = await worker.probe(frame, predicted: 0)
+                measured = await worker.probe(frame, predicted: 0, minimumShift: Self.autoMinimumShift)
             }
             guard autoAlive(run), let measured else { return }
             if measured.still {
@@ -503,7 +509,8 @@ final class ScrollingCaptureSession {
             }
             switch measured.motion {
             case .down(let pixels, _):
-                guard let outcome = await stitch(frame, predictedPx: pixels, sessionGeneration: generation),
+                guard let outcome = await stitch(frame, predictedPx: pixels, sessionGeneration: generation,
+                                                 minimumShift: Self.autoMinimumShift),
                       autoAlive(run) else { return }
                 if outcome == .atCap { return }
                 stalls = 0
@@ -709,9 +716,10 @@ final class ScrollingCaptureSession {
     }
 
     /// Feeds one settled frame to the stitcher and shows what changed.
-    private func stitch(_ image: CGImage, predictedPx: Int, sessionGeneration: Int) async -> ScrollStitcher.Outcome? {
+    private func stitch(_ image: CGImage, predictedPx: Int, sessionGeneration: Int,
+                        minimumShift: Int? = nil) async -> ScrollStitcher.Outcome? {
         let rebaselines = stitchState.rebaselines
-        let update = await worker.add(image, predictedOffset: predictedPx)
+        let update = await worker.add(image, predictedOffset: predictedPx, minimumShift: minimumShift)
         guard !finished, generation == sessionGeneration else { return nil }
         stitchState = update.state
         let outcome = update.outcome

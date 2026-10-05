@@ -221,6 +221,96 @@ struct ScrollStitcherTests {
         #expect(topDownRows(final!).last ?? 0 >= 235)
     }
 
+    /// A wide grayscale image, so the 20-column row signature averages many pixels per column
+    /// the way it does on a real capture.
+    private func wideImage(width: Int, height: Int, _ value: (Int, Int) -> UInt8) -> CGImage {
+        var bytes = [UInt8](repeating: 0, count: width * height)
+        for y in 0..<height { for x in 0..<width { bytes[y * width + x] = value(x, y) } }
+        return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 8,
+                       bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(),
+                       bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
+                       provider: CGDataProvider(data: Data(bytes) as CFData)!, decode: nil,
+                       shouldInterpolate: false, intent: .defaultIntent)!
+    }
+
+    /// Rows of `image` that differ from the page they were stitched from.
+    private func rowsDifferingFromPage(_ image: CGImage, _ page: (Int, Int) -> UInt8) -> Int {
+        let width = image.width
+        guard let context = CGContext(data: nil, width: width, height: image.height, bitsPerComponent: 8,
+                                      bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(),
+                                      bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return image.height }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: image.height))
+        guard let data = context.data else { return image.height }
+        let pixels = data.bindMemory(to: UInt8.self, capacity: width * image.height)
+        // A bitmap context is bottom-left: buffer row 0 holds the image's top row.
+        return (0..<image.height).filter { y in
+            (0..<width).contains { abs(Int(pixels[y * width + $0]) - Int(page($0, y))) > 3 }
+        }.count
+    }
+
+    /// A light page of sparse text, like a web form: every row's signature is close to every
+    /// other's, so "does the bottom row still look alike?" holds for content too.
+    @Test("a light page of sparse text grows no phantom footer: the bottom of each frame is content")
+    func sparseLightPageHasNoPhantomFooter() throws {
+        let pageWidth = 200
+        let pageHeight = 900
+        func page(_ x: Int, _ y: Int) -> UInt8 {
+            let card = (y / 150) % 2 == 0 ? 248 : 236
+            let line = y / 14
+            guard y % 14 < 6, x >= 16, x < 16 + 40 + Int(hash(line &* 7_919)) % 120 else { return UInt8(card) }
+            return hash(x &* 31 &+ line &* 1_009) % 3 == 0 ? 70 : UInt8(card)
+        }
+        let viewportHeight = 300
+        let step = 105
+        let stitcher = ScrollStitcher()
+        var offset = 0
+        var previous = 0
+        while offset + viewportHeight <= pageHeight {
+            let shown = offset
+            stitcher.add(wideImage(width: pageWidth, height: viewportHeight) { x, y in page(x, shown + y) },
+                         predictedOffset: offset - previous)
+            previous = offset
+            offset += step
+        }
+        #expect(stitcher.detectedBands.footer == 0)
+        let final = try #require(stitcher.finalImage())
+        #expect(final.height == previous + viewportHeight)
+        #expect(rowsDifferingFromPage(final, page) == 0)
+    }
+
+    /// Auto asks for a step, but the page end lets it move only a little. The window around the
+    /// asked step then holds the next card of a form, which looks almost the same.
+    @Test("a last step the page end cut short is stitched at its real length, not as a look-alike card")
+    func shortLastStepIsNotALookAlike() throws {
+        let pageWidth = 200
+        let pageHeight = 530
+        func page(_ x: Int, _ y: Int) -> UInt8 {
+            let card = y / 50
+            let row = y % 50
+            guard row >= 4, row < 46 else { return 230 }
+            // Each card's title and answer have their own length, as on a real form.
+            let title = 30 + Int(hash(card &* 7_919)) % 140
+            let answer = 20 + Int(hash(card &* 104_729)) % 100
+            if row >= 9, row < 17, x >= 16, x < 16 + title, hash(x &* 13 &+ card) % 3 != 0 { return 60 }
+            if row >= 26, row < 32, x >= 16, x < 16 + answer, hash(x &* 17 &+ card) % 3 != 0 { return 90 }
+            if row == 35, x >= 16, x < 170 { return 190 }
+            return 250
+        }
+        let viewportHeight = 300
+        let stitcher = ScrollStitcher()
+        var previous = 0
+        for (offset, asked) in [(0, 0), (105, 105), (210, 105), (230, 105)] {
+            stitcher.add(wideImage(width: pageWidth, height: viewportHeight) { x, y in page(x, offset + y) },
+                         predictedOffset: asked, minimumShift: 2)
+            #expect(offset == 0 || stitcher.lastOffset == offset - previous,
+                    "measured \(stitcher.lastOffset) for a move of \(offset - previous)")
+            previous = offset
+        }
+        let final = try #require(stitcher.finalImage())
+        #expect(final.height == pageHeight)
+        #expect(rowsDifferingFromPage(final, page) == 0)
+    }
+
     // MARK: - Robustness
 
     @Test("static frames (no scrolling) never grow the capture beyond one viewport")
