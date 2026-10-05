@@ -152,6 +152,7 @@ import UniformTypeIdentifiers
         entries.append(entry)
         reflow()
         presenter(window)
+        fly(capture, into: entry)
         animator(host, true, reduceMotion()) { [weak self, weak entry] in
             guard current(), let self, let entry else { return }
             entry.enteredAt = self.timing.now()
@@ -218,6 +219,15 @@ import UniformTypeIdentifiers
     func openPreview(_ capture: CapturedScreenshot, on visible: CGRect, pinned: Bool = false, from card: CGRect? = nil) {
         preview.onEdit = onEdit
         preview.show(capture, operations: operations, on: visible, claim: claimClipboardPublication, pinned: pinned, from: card)
+    }
+    /// The capture flies from where it was taken into the card sliding in to meet it. Not for a
+    /// scroll capture, whose page is far taller than the place it was taken.
+    private func fly(_ capture: CapturedScreenshot, into entry: Entry) {
+        guard !usesFixtureFrame, !reduceMotion(), capture.kind != .scrollCapture, let source = capture.sourceRect,
+              let primaryHeight = NSScreen.screens.first?.frame.height else { return }
+        let well = Self.cardRect(of: entry).insetBy(dx: ScreenshotCardGeometry.ring, dy: ScreenshotCardGeometry.ring)
+        let shown = ScreenshotCardGeometry(sourceSize: capture.pointSize).imageRect.offsetBy(dx: well.minX, dy: well.minY)
+        CaptureFlight.fly(capture.image, from: Geometry.cgToAppKit(source, primaryScreenHeight: primaryHeight), to: shown)
     }
     /// The card itself on screen, without its shadow margin.
     private static func cardRect(of entry: Entry) -> CGRect {

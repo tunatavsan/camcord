@@ -802,8 +802,11 @@ final class CaptureCoordinator {
                 display,
                 resolutionScale: settings.resolutionScale
             )
+            let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
             guard let copied = await copyScreenshot(image, pointSize: screen.frame.size, acceptedToken: acceptedToken,
-                                                   originDisplayID: displayID) else { return }
+                                                   originDisplayID: displayID,
+                                                   sourceRect: Geometry.appKitToCG(screen.frame, primaryScreenHeight: primaryHeight))
+            else { return }
             guard copied else {
                 fail("captureFullScreen: clipboard write failed")
                 return
@@ -822,7 +825,7 @@ final class CaptureCoordinator {
         do {
             let image = try await ScreenshotService.captureRegion(cgRect: cgRect)
             guard let copied = await copyScreenshot(image, pointSize: cgRect.size, acceptedToken: token,
-                                                   originDisplayID: originDisplayID) else { return }
+                                                   originDisplayID: originDisplayID, sourceRect: cgRect) else { return }
             guard copied else {
                 fail("Region capture: clipboard write failed")
                 return
@@ -846,8 +849,10 @@ final class CaptureCoordinator {
             fail("Frozen region capture: selection did not intersect a display")
             return
         }
+        // A selection across displays is larger than any screen: it has no single place to leave from.
+        let source = snapshot.displays.contains { $0.cgFrame.insetBy(dx: -1, dy: -1).contains(cgRect) } ? cgRect : nil
         guard let copied = await copyScreenshot(crop.image, pointSize: crop.pointSize, acceptedToken: acceptedToken,
-                                               originDisplayID: originDisplayID) else { return }
+                                               originDisplayID: originDisplayID, sourceRect: source) else { return }
         guard copied else {
             fail("Frozen region capture: clipboard write failed")
             return
@@ -891,7 +896,7 @@ final class CaptureCoordinator {
                 resolutionScale: settings.resolutionScale
             )
             guard let copied = await copyScreenshot(image, pointSize: window.frame.size, acceptedToken: token,
-                                                   originDisplayID: originDisplayID) else { return }
+                                                   originDisplayID: originDisplayID, sourceRect: window.frame) else { return }
             guard copied else {
                 fail("Window capture: clipboard write failed")
                 return
@@ -971,13 +976,14 @@ final class CaptureCoordinator {
     /// nil means a newer accepted result superseded this clipboard publication.
     private func copyScreenshot(_ image: CGImage, pointSize: CGSize, acceptedToken: UInt64,
                                 kind: CaptureItem.Kind = .screenshot,
-                                originDisplayID: CGDirectDisplayID? = nil) async -> Bool? {
+                                originDisplayID: CGDirectDisplayID? = nil, sourceRect: CGRect? = nil) async -> Bool? {
         let token = acceptedToken
         let settings = operations.screenshotSettings()
         let copies = settings.copyToClipboard
         let delivery = CapturedScreenshot(id: UUID(), image: image, pointSize: pointSize,
                                            kind: kind, saveToDiskRequested: settings.saveToDisk,
-                                           originDisplayID: originDisplayID, copiedToClipboard: copies)
+                                           originDisplayID: originDisplayID, copiedToClipboard: copies,
+                                           sourceRect: sourceRect)
         let tagScrollCapture = operations.tagScrollCapture
         let copied = await operations.copyPNG(
             image, pointSize, settings,

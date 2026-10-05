@@ -14,10 +14,15 @@ struct CapturedScreenshot: Sendable {
     let originDisplayID: CGDirectDisplayID?
     /// False when the owner chose to keep screenshots in the Library only.
     let copiedToClipboard: Bool
+    /// Where the capture was on screen, in global top-left points: its card is reached from
+    /// there. Nil for imports and for captures larger than any screen.
+    let sourceRect: CGRect?
 
     init(id: UUID, image: CGImage, pointSize: CGSize, kind: CaptureItem.Kind,
-         saveToDiskRequested: Bool, originDisplayID: CGDirectDisplayID? = nil, copiedToClipboard: Bool = true) {
+         saveToDiskRequested: Bool, originDisplayID: CGDirectDisplayID? = nil, copiedToClipboard: Bool = true,
+         sourceRect: CGRect? = nil) {
         self.id = id
+        self.sourceRect = sourceRect
         self.copiedToClipboard = copiedToClipboard
         self.image = image
         self.pointSize = pointSize
