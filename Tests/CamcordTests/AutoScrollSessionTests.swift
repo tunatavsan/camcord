@@ -105,6 +105,19 @@ struct AutoScrollSessionTests {
         #expect(abs(image.height - (640 + page.viewport)) <= 2, "captured \(image.height) rows")
     }
 
+    @Test("auto asked for before the first frame (a double press) starts as soon as that frame is in")
+    func requestedBeforeTheFirstFrame() async throws {
+        let page = Page(height: 900, startingAt: 0)
+        let (session, _) = session(on: page)
+        session.requestAuto()
+        #expect(!session.autoScrollingForTesting)
+        guard case .completed(let image, _) = await session.run() else {
+            Issue.record("the requested auto must run and finish the capture"); return
+        }
+        #expect(page.offset == page.maxOffset)
+        #expect(abs(image.height - page.height) <= 2, "captured \(image.height) of \(page.height) rows")
+    }
+
     @Test("with a scroll bar it jumps to the top in one step and still stops where the owner started")
     func jumpsToTheTop() async throws {
         let page = Page(height: 1_400, startingAt: 500, jumps: true)

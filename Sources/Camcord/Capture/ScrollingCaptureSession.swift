@@ -173,6 +173,8 @@ final class ScrollingCaptureSession {
     private var autoGeneration = 0
     /// The newest settled frame of the run, the reference for the next comparison.
     private var autoFrame: CGImage?
+    /// Auto was asked for before the first frame was in; it starts as soon as that frame is.
+    private var autoRequested = false
     private static let maxClimbSteps = 120
     private static let maxAutoSteps = 600
 
@@ -321,6 +323,17 @@ final class ScrollingCaptureSession {
     // to the top of the page and captures down, one settled step at a time, until it is back
     // where the owner started — or, started at the top, until the page ends. Then it
     // finishes by itself.
+
+    /// The scroll shortcut pressed again while this session runs. A double press lands before
+    /// the first frame is in, so the request waits for it instead of saying "not ready".
+    func requestAuto() {
+        guard !finished, !finishing else { return }
+        if autoScrolling || (prepared && stitchState.firstFrame != nil && !captureInFlight) {
+            toggleAuto()
+        } else {
+            autoRequested = true
+        }
+    }
 
     private func toggleAuto() {
         if autoScrolling { stopAutoScroll(reachedEnd: false); return }
@@ -620,6 +633,11 @@ final class ScrollingCaptureSession {
             // strand the HUD holding the exclusive lock — end the session.
             self.finishAfterRepeatedCaptureFailures()
             guard !self.finished, !self.finishing else { return }
+            if self.autoRequested, self.stitchState.firstFrame != nil {
+                self.autoRequested = false
+                self.toggleAuto()
+                return
+            }
             if self.pendingCapture, !self.finished, !self.finishing {
                 self.pendingCapture = false
                 self.pump()

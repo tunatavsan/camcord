@@ -76,7 +76,7 @@ final class HotkeyCenter {
         Self.onKeyDown(.captureActiveWindow, "captureActiveWindow") { [coordinator] _ in await coordinator.captureActiveWindow() }
         Self.onKeyDown(.captureFullScreen, "captureFullScreen") { [coordinator] _ in await coordinator.captureFullScreen() }
         Self.onKeyDown(.captureTextRegion, "captureTextRegion") { [coordinator] _ in await coordinator.captureTextRegionInteractive() }
-        Self.onKeyDown(.captureScrolling, "captureScrolling") { [coordinator] _ in await coordinator.captureScrollingInteractive() }
+        Self.onKeyDown(.captureScrolling, "captureScrolling") { [coordinator] _ in await coordinator.scrollShortcutPressed() }
         Self.onKeyDown(.toggleRecording, "toggleRecording") { [recordingController] context in
             switch Self.recordAction(isBusy: recordingController.isBusy, isGameLike: context.isGameLike) {
             case .gameDisplay: await recordingController.recordFullScreen(gameLike: true)

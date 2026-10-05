@@ -273,22 +273,51 @@ final class CaptureCoordinator {
     /// each settled viewport into one tall PNG, shown growing live in a side HUD. Ends on
     /// the HUD's Done (keep) or Esc / Cancel (discard, silently — not a failure).
     func captureScrollingInteractive() async {
+        await captureScrolling(focusedWindow: false)
+    }
+
+    /// The scroll shortcut. The first press goes straight to the focused window, no picker;
+    /// a press while that capture is starting or running toggles auto-scroll, so a double
+    /// press is one gesture that ends in auto.
+    func scrollShortcutPressed() async {
+        if let scrollSession {
+            scrollSession.requestAuto()
+        } else if scrollStarting {
+            scrollAutoRequested = true
+        } else {
+            await captureScrolling(focusedWindow: true)
+        }
+    }
+
+    /// The scroll session on screen, so the shortcut pressed again can reach it.
+    private var scrollSession: ScrollingCaptureSession?
+    /// A scroll capture is between its trigger and its session (picker, display lookup).
+    private var scrollStarting = false
+    /// The shortcut was pressed again before the session existed.
+    private var scrollAutoRequested = false
+
+    private func captureScrolling(focusedWindow: Bool) async {
         guard beginExclusiveCapture() else { return }
         defer { endExclusiveCapture() }
         guard preflightScreenCapture("scrollingCapture") else { return }
         let acceptedToken = clipboardRequests.begin()
-        guard let (result, _) = await overlay.selectRegion() else { return }
-        try? await Task.sleep(for: Self.postHideDelay)
+        scrollStarting = true
+        defer {
+            scrollStarting = false
+            scrollAutoRequested = false
+            scrollSession = nil
+        }
 
         let region: CGRect
-        switch result {
-        case .region(let r): region = r
-        case .window(let window):
-            // A window's rounded bottom corners would be cut into every stitched strip; the
-            // capture stops just above them (macOS 26 rounds a toolbar window by up to 26 pt).
-            let corner: CGFloat = CaptureAreaIndicator.windowCornerRadius(forSize: window.frame.size) > 0 ? 26 : 0
-            region = CGRect(x: window.frame.minX, y: window.frame.minY,
-                            width: window.frame.width, height: max(1, window.frame.height - corner))
+        if focusedWindow, let frame = Self.focusedWindowFrame() {
+            region = Self.scrollRegion(forWindow: frame)
+        } else {
+            guard let (result, _) = await overlay.selectRegion() else { return }
+            try? await Task.sleep(for: Self.postHideDelay)
+            switch result {
+            case .region(let r): region = r
+            case .window(let window): region = Self.scrollRegion(forWindow: window.frame)
+            }
         }
         guard region.width >= 1, region.height >= 1 else {
             fail("Scroll capture: empty selection")
@@ -311,7 +340,12 @@ final class CaptureCoordinator {
         // This is the display bound to the actual scroll sourceRect. Preserve its identity
         // before the session or output scaling can suspend and the cursor can move.
         let originDisplayID = display.displayID
-        let scrollResult = await ScrollingCaptureSession(region: clampedRegion, display: display).run()
+        let session = ScrollingCaptureSession(region: clampedRegion, display: display)
+        scrollSession = session
+        scrollStarting = false
+        if scrollAutoRequested { session.requestAuto() }
+        let scrollResult = await session.run()
+        scrollSession = nil
         let image: CGImage
         var notice: ScrollingCaptureSession.Notice?
         switch scrollResult {
@@ -354,6 +388,27 @@ final class CaptureCoordinator {
         }
         if let notice { showScrollNotice(notice, keptContent: true) }
         succeeded(.fullScreenShot)
+    }
+
+    /// A window's rounded bottom corners would be cut into every stitched strip; the
+    /// capture stops just above them (macOS 26 rounds a toolbar window by up to 26 pt).
+    private static func scrollRegion(forWindow frame: CGRect) -> CGRect {
+        let corner: CGFloat = CaptureAreaIndicator.windowCornerRadius(forSize: frame.size) > 0 ? 26 : 0
+        return CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: max(1, frame.height - corner))
+    }
+
+    /// The focused window's frame, chosen the way the active-window shot chooses it: the
+    /// frontmost app's front normal window, never one of ours.
+    private static func focusedWindowFrame() -> CGRect? {
+        guard let primaryHeight = NSScreen.screens.first?.frame.height else { return nil }
+        let ordered = WindowSnapper.currentCandidates()
+        let id = WindowSnapper.activeWindowID(
+            ordered: ordered,
+            frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+            ownPID: ProcessInfo.processInfo.processIdentifier,
+            displayFrames: NSScreen.screens.map { Geometry.appKitToCG($0.frame, primaryScreenHeight: primaryHeight) }
+        )
+        return ordered.first { $0.windowID == id }?.bounds
     }
 
     /// The SCDisplay whose frame contains the region's center.
