@@ -166,6 +166,10 @@ final class RecordingEngine: NSObject {
         let microphone: Bool
     }
     private var activeSession: ActiveSession?
+    /// A translucent window recorded as seen, and the timer that keeps the capture on it as it moves.
+    private var seenWindow: SeenWindow?
+    private var followTimer: Timer?
+    private var followBusy = false
     private var restartAttempts = 0
     private var lastRestartAt: Date?
 
@@ -226,6 +230,13 @@ final class RecordingEngine: NSObject {
         pendingKeepsSourceTracks = settings.keepsSeparateAudioTracks
         outputFileType = settings.effectiveContainer.fileType
 
+        // A translucent window is recorded as it looks on screen; an opaque one on its own.
+        if case .window(let window) = target {
+            seenWindow = await SeenWindow.plan(for: window)
+            diagnostics("recording window as-seen=\(seenWindow != nil)")
+            guard !startCancelled else { throw CancellationError() }
+        }
+
         // Walk the whole fallback chain (ProRes → HEVC → H.264) so a failure shared by
         // the higher-quality codecs still degrades all the way to the most compatible
         // one before giving up, instead of stopping after a single hop.
@@ -269,6 +280,7 @@ final class RecordingEngine: NSObject {
         let frameDuration = CMTime(value: 1, timescale: fps)
         let (filter, configuration, pixelWidth, pixelHeight) = makeFilterAndConfiguration(
             target: target,
+            seen: seenWindow,
             codec: codec,
             frameDuration: frameDuration,
             resolutionScale: settings.resolutionScale,
@@ -413,6 +425,7 @@ final class RecordingEngine: NSObject {
         )
         restartAttempts = 0
         lastRestartAt = nil
+        if seenWindow != nil { startFollowingWindow() }
         logger.notice("Recording started (\(pixelWidth)x\(pixelHeight), codec \(String(describing: codec), privacy: .public)) -> \(outputURL.lastPathComponent, privacy: .public)")
     }
 
@@ -431,6 +444,7 @@ final class RecordingEngine: NSObject {
 
     private func makeFilterAndConfiguration(
         target: Target,
+        seen: SeenWindow? = nil,
         codec: VideoCodecChoice,
         frameDuration: CMTime,
         resolutionScale: ResolutionScale,
@@ -475,7 +489,15 @@ final class RecordingEngine: NSObject {
             }
 
         case .window(let window):
-            filter = SCContentFilter(desktopIndependentWindow: window)
+            // The window on its own sizes the recording either way; a translucent one is drawn
+            // from its display, with only it and what lies below it.
+            let alone = SCContentFilter(desktopIndependentWindow: window)
+            if let seen {
+                filter = seen.filter
+                configuration.sourceRect = seen.sourceRect(for: window.frame)
+            } else {
+                filter = alone
+            }
             // The writer's dimensions are fixed for the whole file, but the window
             // isn't: when the user resizes it mid-recording, SCK must rescale the
             // content into the surface (aspect-preserving letterbox) instead of
@@ -495,13 +517,13 @@ final class RecordingEngine: NSObject {
             let screenLogicalWidth = screen?.frame.width ?? 0
             let screenBackingScale = screen?.backingScaleFactor ?? 1.0
 
-            let isAbnormallyWide = intersectedScreens.count <= 1 && filter.contentRect.width > screenLogicalWidth + 10
-            let isScaleMismatch = CGFloat(filter.pointPixelScale) > screenBackingScale
+            let isAbnormallyWide = intersectedScreens.count <= 1 && alone.contentRect.width > screenLogicalWidth + 10
+            let isScaleMismatch = CGFloat(alone.pointPixelScale) > screenBackingScale
             let isDoubleScaledBug = isAbnormallyWide || isScaleMismatch
 
-            let effectiveScale = isDoubleScaledBug ? 1.0 : CGFloat(filter.pointPixelScale)
-            let physicalWidth = filter.contentRect.width * effectiveScale
-            let physicalHeight = filter.contentRect.height * effectiveScale
+            let effectiveScale = isDoubleScaledBug ? 1.0 : CGFloat(alone.pointPixelScale)
+            let physicalWidth = alone.contentRect.width * effectiveScale
+            let physicalHeight = alone.contentRect.height * effectiveScale
 
             let windowPixels: CGSize
             let displayPixels: CGSize
@@ -510,7 +532,7 @@ final class RecordingEngine: NSObject {
                 displayPixels = CGSize(width: (screen?.frame.width ?? 0) * screenBackingScale,
                                        height: (screen?.frame.height ?? 0) * screenBackingScale)
             } else {
-                let logicalScale = isDoubleScaledBug ? screenBackingScale : CGFloat(filter.pointPixelScale)
+                let logicalScale = isDoubleScaledBug ? screenBackingScale : CGFloat(alone.pointPixelScale)
                 windowPixels = CGSize(width: physicalWidth / logicalScale, height: physicalHeight / logicalScale)
                 displayPixels = screen?.frame.size ?? .zero
             }
@@ -721,7 +743,14 @@ final class RecordingEngine: NSObject {
             guard let window = content.windows.first(where: { $0.windowID == old.windowID }) else {
                 throw RecordingError.writerFailed(nil)   // window closed — nothing to resume
             }
-            filter = SCContentFilter(desktopIndependentWindow: window)
+            if let seen = seenWindow?.refreshed(in: content) {
+                seenWindow = seen
+                filter = seen.filter
+                session.configuration.sourceRect = seen.sourceRect(for: window.frame)
+            } else {
+                seenWindow = nil
+                filter = SCContentFilter(desktopIndependentWindow: window)
+            }
         }
 
         let token = UUID()
@@ -852,7 +881,43 @@ final class RecordingEngine: NSObject {
         }
     }
 
+    /// Keeps a window recorded as seen on the window as it moves or resizes: its rect on the
+    /// display is read thirty times a second, and the capture follows when it changed.
+    private func startFollowingWindow() {
+        followTimer?.invalidate()
+        followBusy = false
+        followTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.followWindow() }
+        }
+    }
+
+    private func followWindow() {
+        guard !followBusy, let seen = seenWindow, let stream, let session = activeSession,
+              let frame = WindowAppearance.frame(of: seen.windowID) else { return }
+        let rect = seen.sourceRect(for: frame)
+        guard rect.width >= 1, rect.height >= 1, rect != session.configuration.sourceRect else { return }
+        session.configuration.sourceRect = rect
+        followBusy = true
+        let box = StreamBox(stream)
+        let configuration = ConfigurationBox(session.configuration)
+        Task { @MainActor [weak self] in
+            try? await box.stream.updateConfiguration(configuration.configuration)
+            self?.followBusy = false
+        }
+    }
+
+    /// SCStreamConfiguration is not Sendable in the SDK; the follow updates hand over the
+    /// engine's own configuration object, which only the main actor mutates.
+    private struct ConfigurationBox: @unchecked Sendable {
+        let configuration: SCStreamConfiguration
+        init(_ configuration: SCStreamConfiguration) { self.configuration = configuration }
+    }
+
     private func clearStreamState() {
+        followTimer?.invalidate()
+        followTimer = nil
+        followBusy = false
+        seenWindow = nil
         streamToken = nil
         writerToken = nil
         pendingStart?.abandon()

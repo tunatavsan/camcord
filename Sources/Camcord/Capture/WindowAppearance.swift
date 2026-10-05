@@ -36,6 +36,39 @@ enum WindowAppearance {
         return context.makeImage()
     }
 
+    /// Whether `image` (a window on its own) is see-through anywhere away from its edges.
+    static func isTranslucent(_ image: CGImage) -> Bool {
+        let width = image.width, height = image.height
+        guard width > 8, height > 8 else { return false }
+        var alpha = [UInt8](repeating: 0, count: width * height)
+        let drew: Bool = alpha.withUnsafeMutableBytes { bytes in
+            guard let context = CGContext(data: bytes.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                                          bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(),
+                                          bitmapInfo: CGImageAlphaInfo.alphaOnly.rawValue) else { return false }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard drew else { return false }
+        let insetX = max(2, width / 8), insetY = max(2, height / 8)
+        for y in insetY..<(height - insetY) {
+            for x in insetX..<(width - insetX) where alpha[y * width + x] < 245 { return true }
+        }
+        return false
+    }
+
+    /// The on-screen windows below `windowID`, front to back.
+    static func windowsBelow(_ windowID: CGWindowID) -> [CGWindowID] {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenBelowWindow], windowID) as? [[String: Any]] else { return [] }
+        return list.compactMap { ($0[kCGWindowNumber as String] as? NSNumber).map { CGWindowID($0.uint32Value) } }
+    }
+
+    /// Where the window is now, in global top-left points.
+    static func frame(of windowID: CGWindowID) -> CGRect? {
+        guard let info = (CGWindowListCopyWindowInfo([.optionIncludingWindow], windowID) as? [[String: Any]])?.first,
+              let bounds = info[kCGWindowBounds as String] as? NSDictionary else { return nil }
+        return CGRect(dictionaryRepresentation: bounds as CFDictionary)
+    }
+
     /// The on-screen windows above `windowID`, front to back.
     static func windowsAbove(_ windowID: CGWindowID) -> [CGWindowID] {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenAboveWindow], windowID) as? [[String: Any]] else { return [] }

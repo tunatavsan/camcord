@@ -48,6 +48,14 @@ struct WindowAppearanceTests {
         #expect(pixels[3] == 0, "the corner stays clear, as the window's own is")
     }
 
+    @Test("a window is translucent when the screen shows through it inside its edges, not at its corners")
+    func translucency() {
+        let opaque = Self.image(40, 40) { x, y in x < 3 && y < 3 ? (0, 0, 0, 0) : (80, 80, 90, 255) }
+        #expect(!WindowAppearance.isTranslucent(opaque), "rounded corners alone do not count")
+        let terminal = Self.image(40, 40) { _, _ in (30, 30, 40, 217) }
+        #expect(WindowAppearance.isTranslucent(terminal))
+    }
+
     @Test("images of different sizes are not combined")
     func mismatched() {
         let a = Self.image(4, 4) { _, _ in (0, 0, 0, 255) }, b = Self.image(5, 4) { _, _ in (0, 0, 0, 255) }
