@@ -26,6 +26,9 @@ import CoreGraphics
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
     private var loggedGesture = false
+    /// When a raw pinch was last taken: a magnify event for the same pinch is then not taken twice.
+    private var lastRawPinch: CFTimeInterval = 0
+    private var reportedKinds: Set<Int64> = []
 
     /// - Returns: the registration, to end it with `unregister`.
     func register(_ window: NSWindow, handler: @escaping Handler) -> UUID {
@@ -43,7 +46,10 @@ import CoreGraphics
 
     private func install() {
         guard tap == nil else { return }
-        let mask = CGEventMask(1) << CGEventMask(NSEvent.EventType.magnify.rawValue)
+        // A pinch reaches the session as a raw trackpad gesture; AppKit makes it a magnify event
+        // only inside the app it is sent to. Both are watched, and a smart zoom has its own type.
+        let mask = CGEventMask(1) << CGEventMask(NSEvent.EventType.gesture.rawValue)
+            | CGEventMask(1) << CGEventMask(NSEvent.EventType.magnify.rawValue)
             | CGEventMask(1) << CGEventMask(NSEvent.EventType.smartMagnify.rawValue)
         let info = Unmanaged.passUnretained(self).toOpaque()
         guard let port = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
@@ -70,7 +76,17 @@ import CoreGraphics
     }
 
     /// True when a surface under the pointer took the gesture.
-    fileprivate func handle(_ gesture: Gesture) -> Bool {
+    /// A raw trackpad gesture of `hidType` was seen; each kind is noted once, to read back.
+    fileprivate func note(hidType: Int64, value: Double, phase: Int64) {
+        guard reportedKinds.insert(hidType).inserted else { return }
+        DiagnosticsLog.append("gesture tap raw hid=\(hidType) value=\(value) phase=\(phase)")
+    }
+
+    fileprivate func handle(_ gesture: Gesture, raw: Bool = false) -> Bool {
+        let now = CACurrentMediaTime()
+        if gesture.kind == .pinch {
+            if raw { lastRawPinch = now } else if now - lastRawPinch < 0.1 { return false }
+        }
         let point = NSEvent.mouseLocation
         // Our windows front to back: the first registered one under the pointer takes it.
         // Panels are not in `orderedWindows`; window numbers are, front to back.
@@ -79,7 +95,8 @@ import CoreGraphics
             guard let entry = entries.values.first(where: { $0.window === window }) else { continue }
             if !loggedGesture || gesture.phase == .began {
                 loggedGesture = true
-                DiagnosticsLog.append("gesture tap kind=\(gesture.kind) phase=\(gesture.phase.rawValue) window=\(window.windowNumber)")
+                DiagnosticsLog.append("gesture tap kind=\(gesture.kind) raw=\(raw) magnification=\(gesture.magnification) "
+                    + "phase=\(gesture.phase.rawValue) window=\(window.windowNumber)")
             }
             return entry.handler(gesture)
         }
@@ -94,6 +111,23 @@ private func gestureTapCallback(proxy: CGEventTapProxy, type: CGEventType, event
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
         MainActor.assumeIsolated { tap.reenable() }
         return Unmanaged.passUnretained(event)
+    }
+    if type.rawValue == UInt32(NSEvent.EventType.gesture.rawValue) {
+        // Private but stable fields of a raw trackpad gesture: its HID event type, the zoom
+        // step of a pinch, and the HID phase.
+        guard let hidField = CGEventField(rawValue: 110), let zoomField = CGEventField(rawValue: 113),
+              let phaseField = CGEventField(rawValue: 132) else { return Unmanaged.passUnretained(event) }
+        let hidType = event.getIntegerValueField(hidField)
+        let value = event.getDoubleValueField(zoomField)
+        let bits = event.getIntegerValueField(phaseField)
+        MainActor.assumeIsolated { tap.note(hidType: hidType, value: value, phase: bits) }
+        // kIOHIDEventTypeZoom: a pinch.
+        guard hidType == 8 else { return Unmanaged.passUnretained(event) }
+        let phase: NSEvent.Phase = bits & 1 != 0 ? .began : bits & 4 != 0 ? .ended : bits & 8 != 0 ? .cancelled
+            : bits & 2 != 0 ? .changed : []
+        let gesture = GestureTap.Gesture(kind: .pinch, magnification: value, phase: phase)
+        let taken = MainActor.assumeIsolated { tap.handle(gesture, raw: true) }
+        return taken ? nil : Unmanaged.passUnretained(event)
     }
     guard let read = NSEvent(cgEvent: event), read.type == .magnify || read.type == .smartMagnify else {
         return Unmanaged.passUnretained(event)
