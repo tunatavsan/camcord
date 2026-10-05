@@ -182,38 +182,52 @@ struct ScreenshotCardGeometry {
         CATransaction.commit()
         if entering { well.badge.pop(after: reduceMotion ? 0 : 0.18, reduceMotion: reduceMotion) }
     }
-    /// Hidden while a capture flies into it.
-    func awaitLanding() {
+    /// While its capture flies in, the card waits unseen, its own image of the capture hidden.
+    func awaitFlight() {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         surface.layer?.opacity = 0
         CATransaction.commit()
+        well.imageView.alphaValue = 0
     }
-    /// The card's tray opens out from behind the capture that has just landed on it: it starts
-    /// small enough to hide behind the capture and grows until its frost and rim stand around it.
-    /// The landed capture stays on top until the tray is open, so nothing changes under the eye.
-    func land(completion: @escaping @MainActor () -> Void) {
+    /// The card forms on the way: from `start` (media time) its tray comes up around the place
+    /// the capture is heading for, settling from a little smaller, and is whole by `arrival`, when
+    /// the capture lands in it and the card's own image takes over. Nothing doubles: until then
+    /// the only capture on screen is the one in flight.
+    func form(from start: CFTimeInterval, arrival: CFTimeInterval, completion: @escaping @MainActor () -> Void) {
         layoutSubtreeIfNeeded()
-        guard let layer = surface.layer, cardRect.width > 0, cardRect.height > 0 else { completion(); return }
-        let shown = ScreenshotCardGeometry(sourceSize: model.capture.pointSize).imageRect
-        let behind = max(0.2, min(shown.width / cardRect.width, shown.height / cardRect.height) * 0.96)
+        guard let layer = surface.layer else { well.imageView.alphaValue = 1; completion(); return }
         let centre = CGPoint(x: layer.bounds.width * (0.5 - layer.anchorPoint.x), y: layer.bounds.height * (0.5 - layer.anchorPoint.y))
-        let small = CATransform3DConcat(CATransform3DConcat(CATransform3DMakeTranslation(-centre.x, -centre.y, 0),
-                                                            CATransform3DMakeScale(behind, behind, 1)),
-                                        CATransform3DMakeTranslation(centre.x, centre.y, 0))
+        let smaller = CATransform3DConcat(CATransform3DConcat(CATransform3DMakeTranslation(-centre.x, -centre.y, 0),
+                                                              CATransform3DMakeScale(0.9, 0.9, 1)),
+                                          CATransform3DMakeTranslation(centre.x, centre.y, 0))
+        let span = max(0.05, arrival - start)
+        let easing = CAMediaTimingFunction(controlPoints: 0.25, 0.1, 0.25, 1)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        CATransaction.setCompletionBlock { MainActor.assumeIsolated { completion() } }
         layer.opacity = 1
         let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = 0; fade.toValue = 1; fade.duration = 0.1
-        layer.add(fade, forKey: "card-land-fade")
-        let open = CASpringAnimation.card(keyPath: "transform", from: NSValue(caTransform3D: small),
-                                          to: NSValue(caTransform3D: CATransform3DIdentity), response: 0.32, dampingRatio: 0.9)
-        open.preferFullRefreshRate(on: window?.screen)
-        layer.add(open, forKey: "card-land")
-        animationDuration = open.duration
+        fade.fromValue = 0; fade.toValue = 1
+        fade.beginTime = start; fade.duration = span
+        fade.timingFunction = easing
+        fade.fillMode = .backwards
+        layer.add(fade, forKey: "card-form-fade")
+        let grow = CABasicAnimation(keyPath: "transform")
+        grow.fromValue = NSValue(caTransform3D: smaller)
+        grow.toValue = NSValue(caTransform3D: CATransform3DIdentity)
+        grow.beginTime = start; grow.duration = span
+        grow.timingFunction = easing
+        grow.fillMode = .backwards
+        grow.preferFullRefreshRate(on: window?.screen)
+        layer.add(grow, forKey: "card-form")
         CATransaction.commit()
-        well.badge.pop(after: CaptureFlight.wait + 0.1, reduceMotion: false)
+        animationDuration = max(0, arrival - CACurrentMediaTime())
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(max(0, arrival - CACurrentMediaTime())))
+            guard let self, self.alive else { return }
+            self.well.imageView.alphaValue = 1
+            self.well.badge.pop(after: 0.08, reduceMotion: false)
+            completion()
+        }
     }
     func reposition(from oldFrame: CGRect, to newFrame: CGRect, reduceMotion: Bool) {
         reducedMotion = reduceMotion

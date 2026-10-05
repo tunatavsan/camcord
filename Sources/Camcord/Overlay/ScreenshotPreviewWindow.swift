@@ -71,8 +71,7 @@ struct ScreenshotPreviewGeometry {
     private let model: ScreenshotCardModel
     private var closed = false
     /// Pinches and two-finger double taps over the pin, wherever the system sends them.
-    private var gestureMonitors: [Any] = []
-    private var lastGestureSource: String?
+    private var gestureTap: UUID?
 
     init(capture: CapturedScreenshot, operations: ScreenshotCardModel.Operations, visible: CGRect,
          claim: (@MainActor () -> (@MainActor () -> Bool))?, canEdit: Bool, pinned: Bool = false, from: CGRect? = nil) {
@@ -111,49 +110,25 @@ struct ScreenshotPreviewGeometry {
         installGestureMonitors()
     }
 
-    /// A pin floats over other apps without taking their focus, and the trackpad's pinch goes to
-    /// the app in front, not to the window under the fingers. Any pinch or smart zoom made over
-    /// the pin is the pin's: ours is taken before AppKit routes it elsewhere, another app's is
-    /// read as it passes.
+    /// A pin floats over other apps without taking their focus, so the trackpad's pinch goes to
+    /// the app in front; the gesture tap gives the pin every pinch and smart zoom made over it.
     private func installGestureMonitors() {
-        let kinds: NSEvent.EventTypeMask = [.magnify, .smartMagnify]
-        if let local = NSEvent.addLocalMonitorForEvents(matching: kinds, handler: { [weak self] event in
-            guard let self, self.isUnderPointer else { return event }
-            self.zoom(with: event, source: "local")
-            return nil
-        }) { gestureMonitors.append(local) }
-        if let global = NSEvent.addGlobalMonitorForEvents(matching: kinds, handler: { [weak self] event in
-            MainActor.assumeIsolated {
-                guard let self, self.isUnderPointer else { return }
-                self.zoom(with: event, source: "global")
+        gestureTap = GestureTap.shared.register(panel) { [weak self] event in
+            guard let self, !self.closed else { return false }
+            let location = self.host.zoom.convert(self.panel.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
+            switch event.kind {
+            case .pinch: self.host.zoom.pinch(by: event.magnification, at: location, phase: event.phase)
+            case .smartZoom: self.host.zoom.toggleCloser(at: location)
             }
-        }) { gestureMonitors.append(global) }
-    }
-
-    /// The pin is the topmost window under the pointer.
-    private var isUnderPointer: Bool {
-        guard !closed, panel.isVisible else { return false }
-        return NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0) == panel.windowNumber
-    }
-
-    private func zoom(with event: NSEvent, source: String) {
-        if lastGestureSource != source || event.phase == .began {
-            lastGestureSource = source
-            DiagnosticsLog.append("pin gesture source=\(source) type=\(event.type.rawValue) phase=\(event.phase.rawValue)")
-        }
-        let location = host.zoom.convert(panel.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
-        switch event.type {
-        case .magnify: host.zoom.pinch(by: event.magnification, at: location, phase: event.phase)
-        case .smartMagnify: host.zoom.toggleCloser(at: location)
-        default: break
+            return true
         }
     }
 
     func close(animated: Bool) {
         guard !closed else { return }
         closed = true
-        for monitor in gestureMonitors { NSEvent.removeMonitor(monitor) }
-        gestureMonitors = []
+        GestureTap.shared.unregister(gestureTap)
+        gestureTap = nil
         model.invalidate()
         host.invalidate()
         panel.delegate = nil
@@ -238,8 +213,6 @@ private final class ScreenshotPreviewPanel: NSPanel {
         // to the middle so the corners stay free to resize.
         well.closeButton.isHidden = true
         well.band.centersButtons = true
-        chrome.frame = well.bounds
-        chrome.autoresizingMask = [.width, .height]
         chrome.outlineRadius = Theme.Radius.well
         chrome.onClose = { [weak self] in self?.onClose?() }
         chrome.onResize = { [weak self] corner, phase in
@@ -250,7 +223,9 @@ private final class ScreenshotPreviewPanel: NSPanel {
             case .ended: self.endResize()
             }
         }
-        well.addSubview(chrome)
+        // Over the well but outside it: the well clips to its rounded corners, and a variable blur
+        // inside a clipped layer loses its falloff and shows as a hard square.
+        addSubview(chrome)
         refreshActions()
         model.$isBusy.sink { [weak self] busy in self?.updateBadge(busy: busy, error: self?.model.error) }.store(in: &observers)
         model.$error.sink { [weak self] error in self?.updateBadge(busy: self?.model.isBusy ?? false, error: error) }.store(in: &observers)
@@ -313,12 +288,16 @@ private final class ScreenshotPreviewPanel: NSPanel {
     override func layout() {
         super.layout()
         if surface.frame != surfaceRect { surface.frame = surfaceRect }
+        // The well sits on the tray inside its ring.
+        let over = surfaceRect.insetBy(dx: ScreenshotPreviewGeometry.ring, dy: ScreenshotPreviewGeometry.ring)
+        if chrome.frame != over { chrome.frame = over }
         let tray = surface.bounds
         guard ring.layer.frame != tray else { return }
         CATransaction.begin(); CATransaction.setDisableActions(true)
         ring.layer.frame = tray
         CATransaction.commit()
-        ring.set(ring: tray.insetBy(dx: 1, dy: 1), radius: Theme.Radius.floating - 1)
+        // On the tray's own rim, so there is one line, not two.
+        ring.set(ring: tray, radius: Theme.Radius.floating)
     }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -460,7 +439,7 @@ private final class ScreenshotPreviewPanel: NSPanel {
             ring.light(at: lit)
             let release = CABasicAnimation(keyPath: "opacity")
             release.fromValue = 1; release.toValue = 0
-            release.beginTime = lit + 1.0; release.duration = 0.5
+            release.beginTime = lit + LitRing.drawDuration + 0.2; release.duration = 0.35
             release.fillMode = .backwards
             ring.layer.add(release, forKey: "release")
             ring.layer.opacity = 0

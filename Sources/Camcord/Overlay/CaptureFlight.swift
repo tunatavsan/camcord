@@ -2,28 +2,33 @@ import AppKit
 import QuartzCore
 
 /// The moment a screenshot is taken. The capture appears over the very place it was taken and
-/// the glass light draws around it, as it does around a scroll capture: the line runs from the
-/// top centre down both sides and blinks where its ends meet; nothing crosses or whitens the
-/// capture. Then it glides on a gentle curve into the corner and waits there while
-/// its card's tray opens out from behind it, and only then hands over. It lives in its own
-/// click-through panel above the card.
+/// the glass light draws around it, as it does around a scroll capture, blinking where its ends
+/// meet. Then it glides on a gentle curve into the corner, and on the way its card forms around
+/// the place it is heading for, so it arrives as the card's own capture: nothing pops in, and
+/// nothing doubles. It lives in its own click-through panel above the card.
 @MainActor enum CaptureFlight {
     private static var panels: [NSPanel] = []
 
     /// How long the light holds the capture in place before it leaves.
-    static let hold: CFTimeInterval = 0.3
+    static let hold: CFTimeInterval = 0.36
     /// The glide into the card.
-    static let glide: CFTimeInterval = 0.42
-    /// When the card's tray starts to open behind the capture, from now: as it lands.
-    static var landing: CFTimeInterval { hold + glide - 0.06 }
-    /// How long the capture waits on the card for its tray to open before it hands over.
-    static let wait: CFTimeInterval = 0.26
+    static let glide: CFTimeInterval = 0.54
+    /// When the card starts to form, from now: a little before halfway along the glide.
+    static var forming: CFTimeInterval { hold + glide * 0.4 }
+    /// When the capture lands in the card, from now.
+    static var arrival: CFTimeInterval { hold + glide }
 
     /// - Parameters: source and target in global AppKit points; target is where the card shows
     ///   the capture.
-    static func fly(_ image: CGImage, from source: CGRect, to target: CGRect) {
+    /// - Parameters: rounded, whether the card shows the capture with its well's rounded corners
+    ///   (it fills the well) or square inside it.
+    /// - Returns: when the card starts to form and when the capture lands in it, in media time;
+    ///   nil when nothing flies.
+    @discardableResult
+    static func fly(_ image: CGImage, from source: CGRect, to target: CGRect, rounded: Bool = true)
+        -> (forming: CFTimeInterval, arrival: CFTimeInterval)? {
         guard source.width >= 8, source.height >= 8, target.width >= 1, target.height >= 1,
-              image.width > 0, image.height > 0 else { return }
+              image.width > 0, image.height > 0 else { return nil }
         // The capture's own shape inside the place it was taken.
         let start = aspectFit(CGSize(width: image.width, height: image.height), in: source)
         let area = start.union(target).insetBy(dx: -40, dy: -40)
@@ -39,13 +44,13 @@ import QuartzCore
         let view = NSView(frame: CGRect(origin: .zero, size: area.size))
         view.wantsLayer = true
         panel.contentView = view
-        guard let root = view.layer else { return }
+        guard let root = view.layer else { return nil }
 
         let leaving = start.offsetBy(dx: -area.minX, dy: -area.minY)
         let landing = target.offsetBy(dx: -area.minX, dy: -area.minY)
         // The carrier keeps the capture's own size; the glide scales it down to the card's.
         let scale = landing.width / leaving.width
-        let radius = Theme.Radius.well / scale
+        let radius = (rounded ? Theme.Radius.well : 0) / scale
         let carrier = CALayer()
         carrier.bounds = CGRect(origin: .zero, size: leaving.size)
         carrier.position = CGPoint(x: landing.midX, y: landing.midY)
@@ -108,10 +113,10 @@ import QuartzCore
         photo.add(rounding, forKey: "rounding")
         // Lifted while it travels; the tray's own shadow takes over as it opens.
         let lift = CAKeyframeAnimation(keyPath: "shadowOpacity")
-        lift.values = [0, 0.32, 0.32, 0]
+        lift.values = [0, 0.3, 0.2, 0]
         lift.keyTimes = [0, 0.3, 0.7, 1]
         lift.beginTime = leaves
-        lift.duration = glide + wait * 0.6
+        lift.duration = glide
         carrier.add(lift, forKey: "lift")
         // The light lets go as the capture leaves.
         let dim = CABasicAnimation(keyPath: "opacity")
@@ -126,8 +131,8 @@ import QuartzCore
         let handover = CABasicAnimation(keyPath: "opacity")
         handover.fromValue = 1
         handover.toValue = 0
-        handover.beginTime = leaves + glide + wait
-        handover.duration = 0.14
+        handover.beginTime = leaves + glide + 0.03
+        handover.duration = 0.1
         handover.fillMode = .forwards
         handover.isRemovedOnCompletion = false
         carrier.add(handover, forKey: "handover")
@@ -135,12 +140,13 @@ import QuartzCore
 
         panels.append(panel)
         panel.orderFrontRegardless()
-        let total = hold + glide + wait + 0.24
+        let total = hold + glide + 0.25
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(total))
             panel.orderOut(nil)
             panels.removeAll { $0 === panel }
         }
+        return (now + forming, now + arrival)
     }
 
     static func aspectFit(_ size: CGSize, in rect: CGRect) -> CGRect {

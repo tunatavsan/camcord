@@ -27,6 +27,8 @@ import UniformTypeIdentifiers
         var exitAt: TimeInterval?
         var orderedOutAt: TimeInterval?
         var dismissReason: String?
+        /// Its pinch: opening the fingers over the card pins it.
+        var gestureTap: UUID?
         init(model: ScreenshotCardModel, generation: UInt64, window: NSWindow,
              host: ScreenshotCardPresentation, visibleFrame: CGRect, now: TimeInterval) {
             self.model = model; self.generation = generation; self.window = window
@@ -154,6 +156,22 @@ import UniformTypeIdentifiers
             self.dismiss(entry, reason: "pin")
         }
         window.contentView = host
+        if !usesFixtureFrame {
+            // Opened fingers over the card pin it; the rest of the same pinch goes on in the pin.
+            var opening: CGFloat = 0
+            entry.gestureTap = GestureTap.shared.register(window) { [weak host] event in
+                guard current(), let host else { return false }
+                switch event.kind {
+                case .smartZoom:
+                    host.onPin?()
+                case .pinch:
+                    if event.phase == .began { opening = 0 }
+                    opening += event.magnification
+                    if opening > 0.08 { opening = -.infinity; host.onPin?() }
+                }
+                return true
+            }
+        }
         entries.append(entry)
         reflow()
         presenter(window)
@@ -163,14 +181,10 @@ import UniformTypeIdentifiers
             entry.dwell.enter(at: self.timing.now())
             self.arm(entry)
         }
-        if let landing = fly(capture, into: entry) {
-            // The capture flies in from where it was taken; the card forms around it as it lands.
-            host.awaitLanding()
-            Task { @MainActor [weak host] in
-                try? await Task.sleep(for: .seconds(landing))
-                guard current(), let host else { return }
-                host.land(completion: entered)
-            }
+        if let flight = fly(capture, into: entry) {
+            // The capture flies in from where it was taken; the card forms around it on the way.
+            host.awaitFlight()
+            host.form(from: flight.forming, arrival: flight.arrival, completion: entered)
         } else {
             animator(host, true, reduceMotion(), entered)
         }
@@ -210,6 +224,7 @@ import UniformTypeIdentifiers
         entry.task?.cancel(); entry.task = nil
         entry.dwell.leave(at: timing.now()); entry.exitAt = timing.now(); entry.dismissReason = reason
         entry.model.invalidate(); entry.host.invalidate()
+        GestureTap.shared.unregister(entry.gestureTap); entry.gestureTap = nil
         entries.removeAll { $0 === entry }
         reflow()
         let finish: @MainActor () -> Void = { [entry, timing] in
@@ -237,14 +252,17 @@ import UniformTypeIdentifiers
     }
     /// The capture flies from where it was taken into the card sliding in to meet it. Not for a
     /// scroll capture, whose page is far taller than the place it was taken.
-    /// - Returns: when the card should form, or nil when nothing flies.
-    private func fly(_ capture: CapturedScreenshot, into entry: Entry) -> CFTimeInterval? {
+    /// - Returns: when the card forms and when the capture lands in it, or nil when nothing flies.
+    private func fly(_ capture: CapturedScreenshot, into entry: Entry) -> (forming: CFTimeInterval, arrival: CFTimeInterval)? {
         guard !usesFixtureFrame, !reduceMotion(), capture.kind != .scrollCapture, let source = capture.sourceRect,
               let primaryHeight = NSScreen.screens.first?.frame.height else { return nil }
         let well = Self.cardRect(of: entry).insetBy(dx: ScreenshotCardGeometry.ring, dy: ScreenshotCardGeometry.ring)
-        let shown = ScreenshotCardGeometry(sourceSize: capture.pointSize).imageRect.offsetBy(dx: well.minX, dy: well.minY)
-        CaptureFlight.fly(capture.image, from: Geometry.cgToAppKit(source, primaryScreenHeight: primaryHeight), to: shown)
-        return CaptureFlight.landing
+        let fitted = ScreenshotCardGeometry(sourceSize: capture.pointSize).imageRect
+        let shown = fitted.offsetBy(dx: well.minX, dy: well.minY)
+        // A capture that fills the well takes its rounded corners; one inside it stays square.
+        let fills = fitted.width >= well.width - 1 && fitted.height >= well.height - 1
+        return CaptureFlight.fly(capture.image, from: Geometry.cgToAppKit(source, primaryScreenHeight: primaryHeight),
+                                 to: shown, rounded: fills)
     }
     /// The card itself on screen, without its shadow margin.
     private static func cardRect(of entry: Entry) -> CGRect {
