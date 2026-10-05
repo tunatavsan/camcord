@@ -55,11 +55,11 @@ struct RecordingSettings: Codable, Equatable {
     var microphone: Bool
     /// The AVCaptureDevice.uniqueID of the mic to record; nil = system default input.
     var microphoneDeviceID: String?
-    /// When both system audio AND microphone are recorded, mix them into ONE audio
-    /// track at finalize (default). A file with two separate audio tracks makes most
-    /// players/platforms play only the first (the mic is then silently inaudible);
-    /// mixing guarantees the mic is heard everywhere. Turn off to keep separate tracks
-    /// for editing.
+    /// When both system audio AND microphone are recorded, they are always mixed into
+    /// the file's first audio track at finalize: most players/platforms play only the
+    /// first track, so a file led by system audio leaves the mic silently inaudible.
+    /// On (default), the mix is the only audio track. Off also keeps the two source
+    /// tracks for editing, disabled behind the mix.
     var mixAudioTracks: Bool
     /// Software gain is independent of the current microphone hardware.
     var systemAudioGainDB: Double
@@ -180,9 +180,12 @@ struct RecordingSettings: Codable, Equatable {
         self.canvasAspect = canvasAspect
     }
 
-    /// True when a recording will produce two separate audio tracks that should be
-    /// collapsed into one at finalize.
-    var shouldMixAudioTracks: Bool { mixAudioTracks && systemAudio && microphone }
+    /// True when a recording will produce two separate audio tracks, which are always
+    /// mixed into one at finalize.
+    var shouldMixAudioTracks: Bool { systemAudio && microphone }
+
+    /// True when the mixed file also keeps the two source tracks, for editing.
+    var keepsSeparateAudioTracks: Bool { shouldMixAudioTracks && !mixAudioTracks }
 
     var resolvedSystemAudioGainDB: Double {
         systemAudioGainDB.isFinite ? min(12, max(-60, systemAudioGainDB)) : 0

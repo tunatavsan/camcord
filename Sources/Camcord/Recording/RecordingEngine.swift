@@ -67,10 +67,19 @@ final class RecordingEngine: NSObject {
         if recordingEpoch == epoch, finalHealth == nil {
             finalHealth = result
             let nominal = result.nominalFPS.map { String(format: "%.3f", $0) } ?? "unknown"
+            let health = result.health
             diagnostics("recording epoch=\(epoch.uuidString) nominal_fps=\(nominal) "
-                + "video_dropped=\(result.health.video.dropped) compositor_pool_exhaustions=\(result.health.compositorPoolExhaustions)")
+                + "video_dropped=\(health.video.dropped) compositor_pool_exhaustions=\(health.compositorPoolExhaustions)"
+                + Self.audioDiagnostics("microphone", health.microphone)
+                + Self.audioDiagnostics("system_audio", health.systemAudio))
         }
         return result
+    }
+
+    private static func audioDiagnostics(_ name: String, _ source: AudioSourceHealth) -> String {
+        guard source.enabled else { return " \(name)=off" }
+        return " \(name)_appended=\(source.samples.appended) \(name)_dropped=\(source.samples.dropped)"
+            + (source.processingFailed ? " \(name)_processing_failed=true" : "")
     }
 
     private var stream: SCStream?
@@ -88,8 +97,10 @@ final class RecordingEngine: NSObject {
     var onCameraIssue: ((String) -> Void)?
 
     /// Set at `start()`: whether to collapse the file's two audio tracks into one at
-    /// finalize, and which container that file is, so `finalize` can run the mixer.
+    /// finalize, whether the source tracks stay behind the mix, and which container
+    /// that file is, so `finalize` can run the mixer.
     private var pendingAudioMix = false
+    private var pendingKeepsSourceTracks = false
     private var outputFileType: AVFileType = .mov
 
     var isRecording: Bool { stream != nil }
@@ -212,6 +223,7 @@ final class RecordingEngine: NSObject {
         // Recorded now (independent of the codec-fallback chain below): whether the
         // finished file's two audio tracks should be mixed into one, and its container.
         pendingAudioMix = settings.shouldMixAudioTracks
+        pendingKeepsSourceTracks = settings.keepsSeparateAudioTracks
         outputFileType = settings.effectiveContainer.fileType
 
         // Walk the whole fallback chain (ProRes → HEVC → H.264) so a failure shared by
@@ -774,6 +786,7 @@ final class RecordingEngine: NSObject {
         let id = ObjectIdentifier(writer)
         if let existing = finalizations[id] { return try await existing.value }
         let shouldMix = pendingAudioMix
+        let keepsSourceTracks = pendingKeepsSourceTracks
         let fileType = outputFileType
         // Salvage has no user Stop boundary: nil ends at the last accepted media.
         let task = Task { @MainActor in
@@ -781,7 +794,9 @@ final class RecordingEngine: NSObject {
             // must never apply a future recording's settings to this file.
             await sealFinalHealth(writer, epoch: epoch, endHostTime: endHostTime)
             let url = try await writer.finishWriting()
-            if shouldMix { startBackgroundAudioMix(url: url, fileType: fileType) }
+            if shouldMix {
+                startBackgroundAudioMix(url: url, fileType: fileType, keepsSourceTracks: keepsSourceTracks)
+            }
             return url
         }
         finalizations[id] = task
@@ -803,17 +818,22 @@ final class RecordingEngine: NSObject {
     /// True while any background audio mix is still running.
     var isMixing: Bool { !pendingMixes.isEmpty }
 
-    private func startBackgroundAudioMix(url: URL, fileType: AVFileType) {
+    private func startBackgroundAudioMix(url: URL, fileType: AVFileType, keepsSourceTracks: Bool) {
         let id = nextMixID
         nextMixID += 1
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
+            // The diagnostics file is the owner-readable record of whether the mic made
+            // it into the track every player plays.
             do {
-                try await AudioTrackMixer.mixInPlace(url: url, fileType: fileType)
+                try await AudioTrackMixer.mixInPlace(url: url, fileType: fileType, keepingSourceTracks: keepsSourceTracks)
+                self.diagnostics("audio mix outcome=mixed source_tracks=\(keepsSourceTracks ? "kept" : "none")")
             } catch AudioTrackMixer.MixError.notNeeded {
                 // The file ended up with a single audio track — nothing to mix.
+                self.diagnostics("audio mix outcome=not-needed")
             } catch {
                 self.logger.error("Audio mix failed; keeping the multi-track recording: \(String(describing: error), privacy: .public)")
+                self.diagnostics("audio mix outcome=failed error=\(String(describing: error))")
                 self.onAudioMixFailure?(url)
             }
             self.pendingMixes[id] = nil

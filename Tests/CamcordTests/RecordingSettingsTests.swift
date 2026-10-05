@@ -21,6 +21,19 @@ struct RecordingSettingsTests {
         #expect(merged.microphoneGainDB == 9)
     }
 
+    @Test("system audio with the microphone is always mixed; the switch only keeps the source tracks too")
+    func microphoneAlwaysReachesTheMix() {
+        let kept = RecordingSettings(systemAudio: true, microphone: true, mixAudioTracks: false)
+        #expect(kept.shouldMixAudioTracks)
+        #expect(kept.keepsSeparateAudioTracks)
+        let mixed = RecordingSettings(systemAudio: true, microphone: true, mixAudioTracks: true)
+        #expect(mixed.shouldMixAudioTracks)
+        #expect(!mixed.keepsSeparateAudioTracks)
+        let microphoneOnly = RecordingSettings(systemAudio: false, microphone: true, mixAudioTracks: false)
+        #expect(!microphoneOnly.shouldMixAudioTracks)
+        #expect(!microphoneOnly.keepsSeparateAudioTracks)
+    }
+
     @Test("game mode halves a game display only, and defaults on for settings saved before it existed")
     func gameModeScale() throws {
         let old = try JSONDecoder().decode(RecordingSettings.self, from: Data("{\"fps\":30}".utf8))

@@ -241,6 +241,27 @@ struct AudioTrackMixerTests {
         #expect(levels.peak < 1.02)
     }
 
+    @Test("kept source tracks follow the mix disabled, so every player still plays the mix")
+    func keptSourceTracksFollowTheMix() async throws {
+        let source = tempURL(ext: "mov")
+        defer { try? FileManager.default.removeItem(at: source) }
+        try await makeMovie(audioValues: [0.20, 0.15], seconds: 0.6, to: source)
+
+        try await AudioTrackMixer.mixInPlace(url: source, fileType: .mov, keepingSourceTracks: true)
+
+        let audioTracks = try await AVURLAsset(url: source).loadTracks(withMediaType: .audio)
+        var enabled: [Bool] = []
+        for track in audioTracks { enabled.append(try await track.load(.isEnabled)) }
+        #expect(enabled == [true, false, false])
+        let mix = try await decodedAudioLevels(at: source)
+        #expect(mix.rms > 0.30)
+        #expect(mix.rms < 0.40)
+        // A file whose sources sit disabled behind their mix is never mixed again.
+        await #expect(throws: AudioTrackMixer.MixError.self) {
+            try await AudioTrackMixer.mixInPlace(url: source, fileType: .mov)
+        }
+    }
+
     @Test("a failed mix leaves the original bytes untouched")
     func failurePreservesOriginal() async throws {
         let directory = FileManager.default.temporaryDirectory

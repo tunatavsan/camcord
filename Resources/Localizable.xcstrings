@@ -8352,20 +8352,20 @@
         }
       }
     },
-    "Two tracks, ideal for editing, but most players play only the first (system audio).": {
+    "The mix plays everywhere; system audio and the microphone also stay as separate tracks for editing.": {
       "comment": "Setting note",
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Two tracks, ideal for editing, but most players play only the first (system audio)."
+            "value": "The mix plays everywhere; system audio and the microphone also stay as separate tracks for editing."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "İki ayrı parça: kurgu için ideal, ama çoğu oynatıcı yalnızca ilkini (sistem sesi) çalar."
+            "value": "Karışım her oynatıcıda çalar; sistem sesi ve mikrofon kurgu için ayrı parçalar olarak da saklanır."
           }
         }
       }

@@ -10,7 +10,8 @@ import os
 /// Slack, browsers, Finder preview), so the microphone is silently inaudible even though
 /// it was recorded perfectly. Mixing to a single track guarantees the mic is heard
 /// everywhere. A power user who wants the tracks separate (for editing) turns
-/// `RecordingSettings.mixAudioTracks` off.
+/// `RecordingSettings.mixAudioTracks` off: the mix still comes first, and the source
+/// tracks follow it disabled, so players never fall back to the system audio alone.
 ///
 /// The mixing is done by Apple's `AVAssetReaderAudioMixOutput` (sample-accurate, resamples
 /// and sums at unity gain), then the shared PCM processor peak-protects the sum. Video
@@ -21,7 +22,7 @@ enum AudioTrackMixer {
     private static let logger = Logger(subsystem: "dev.tavsan.camcord", category: "audio-mixer")
 
     enum MixError: Error {
-        /// Fewer than two audio tracks — nothing to mix (caller keeps the original file).
+        /// Fewer than two enabled audio tracks — nothing to mix (caller keeps the original file).
         case notNeeded
         case readerSetupFailed(Error?)
         case writerSetupFailed(Error?)
@@ -31,10 +32,14 @@ enum AudioTrackMixer {
     /// Mixes `url` in place: writes a mixed copy alongside it, then atomically replaces the
     /// original. On any failure the original (multi-track) file is left untouched — a
     /// recording is never lost to a mix that didn't work. Throws `MixError.notNeeded` when
-    /// the file has fewer than two audio tracks.
-    static func mixInPlace(url: URL, fileType: AVFileType) async throws {
+    /// the file has fewer than two enabled audio tracks (an already-mixed file included).
+    /// `keepingSourceTracks` copies the source tracks, disabled, after the mix.
+    static func mixInPlace(url: URL, fileType: AVFileType, keepingSourceTracks: Bool = false) async throws {
         let asset = AVURLAsset(url: url)
-        let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+        var audioTracks: [AVAssetTrack] = []
+        for track in try await asset.loadTracks(withMediaType: .audio) where try await track.load(.isEnabled) {
+            audioTracks.append(track)
+        }
         guard audioTracks.count >= 2 else { throw MixError.notNeeded }
         let videoTracks = try await asset.loadTracks(withMediaType: .video)
 
@@ -46,6 +51,7 @@ enum AudioTrackMixer {
             asset: asset,
             videoTracks: videoTracks,
             audioTracks: audioTracks,
+            keepsSourceTracks: keepingSourceTracks,
             destination: temp,
             fileType: fileType
         )
@@ -76,6 +82,7 @@ private final class MixSession: @unchecked Sendable {
     private let asset: AVURLAsset
     private let videoTracks: [AVAssetTrack]
     private let audioTracks: [AVAssetTrack]
+    private let keepsSourceTracks: Bool
     private let destination: URL
     private let fileType: AVFileType
 
@@ -112,12 +119,14 @@ private final class MixSession: @unchecked Sendable {
         asset: AVURLAsset,
         videoTracks: [AVAssetTrack],
         audioTracks: [AVAssetTrack],
+        keepsSourceTracks: Bool,
         destination: URL,
         fileType: AVFileType
     ) {
         self.asset = asset
         self.videoTracks = videoTracks
         self.audioTracks = audioTracks
+        self.keepsSourceTracks = keepsSourceTracks
         self.destination = destination
         self.fileType = fileType
     }
@@ -180,6 +189,26 @@ private final class MixSession: @unchecked Sendable {
             guard writer.canAdd(input) else { throw AudioTrackMixer.MixError.writerSetupFailed(nil) }
             writer.add(input)
             pipes.append(Pipe(input: input, output: output))
+        }
+
+        // --- Source tracks for editing: passed through after the mix, disabled so a
+        // player never adds them to the mix or plays one of them instead of it. ---
+        if keepsSourceTracks {
+            for audioTrack in audioTracks {
+                guard let audioFormat = try await audioTrack.load(.formatDescriptions).first else {
+                    throw AudioTrackMixer.MixError.readerSetupFailed(nil)
+                }
+                let output = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: nil)
+                output.alwaysCopiesSampleData = false
+                guard reader.canAdd(output) else { throw AudioTrackMixer.MixError.readerSetupFailed(nil) }
+                reader.add(output)
+                let input = AVAssetWriterInput(mediaType: .audio, outputSettings: nil, sourceFormatHint: audioFormat)
+                input.expectsMediaDataInRealTime = false
+                input.marksOutputTrackAsEnabled = false
+                guard writer.canAdd(input) else { throw AudioTrackMixer.MixError.writerSetupFailed(nil) }
+                writer.add(input)
+                pipes.append(Pipe(input: input, output: output))
+            }
         }
 
         guard reader.startReading() else { throw AudioTrackMixer.MixError.readerSetupFailed(reader.error) }

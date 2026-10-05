@@ -277,7 +277,7 @@ struct RecordingSettingsPage: View {
                 FormRow(label: LocalizedStringResource("Mix system audio and microphone into one track", comment: "Setting"),
                         note: settings.mixAudioTracks
                             ? LocalizedStringResource("One track: the microphone is heard in every player (default).", comment: "Setting note")
-                            : LocalizedStringResource("Two tracks, ideal for editing, but most players play only the first (system audio).",
+                            : LocalizedStringResource("The mix plays everywhere; system audio and the microphone also stay as separate tracks for editing.",
                                                       comment: "Setting note")) {
                     Toggle(isOn: $store.recording.mixAudioTracks) {
                         Text("Mix system audio and microphone into one track", comment: "Setting")
