@@ -7,7 +7,18 @@ import QuartzCore
 /// the area inside. The scroll capture's frame, a screenshot's moment and a pin's arrival all
 /// wear it. Its layer is placed by its owner; everything is drawn in that layer's coordinates.
 @MainActor final class LitRing {
+    /// What crosses the area while the line draws.
+    enum Sheen {
+        /// A broad wash of light: the scroll capture's frame, which stays on screen.
+        case wash
+        /// A thin streak, the way light runs across glass: over a capture, which must stay itself.
+        case glint
+        case none
+    }
     let layer = CALayer()
+    private let sheen: Sheen
+    /// The glow at the moment the ends meet.
+    private let flarePeak: Float
     private let halo = CAShapeLayer()
     private let line = CAShapeLayer()
     private let glow = CAShapeLayer()
@@ -22,7 +33,9 @@ import QuartzCore
     static let washDelay: CFTimeInterval = 0.22
     static let washDuration: CFTimeInterval = 0.6
 
-    init() {
+    init(sheen: Sheen = .wash, flarePeak: Float = 1) {
+        self.sheen = sheen
+        self.flarePeak = flarePeak
         for shape in [halo, line, glow] {
             shape.fillColor = nil
             shape.lineJoin = .round
@@ -43,12 +56,29 @@ import QuartzCore
         washClip.cornerCurve = .continuous
         wash.startPoint = CGPoint(x: 0, y: 1)
         wash.endPoint = CGPoint(x: 1, y: 0)
-        wash.colors = [NSColor.white.withAlphaComponent(0).cgColor, NSColor.white.withAlphaComponent(0.13).cgColor,
-                       NSColor.white.withAlphaComponent(0).cgColor]
-        wash.locations = [-0.4, -0.2, 0]
+        wash.colors = Self.sheenColors(sheen)
+        wash.locations = Self.sheenLocations(sheen, at: -0.2)
         wash.opacity = 0
         washClip.addSublayer(wash)
         for sublayer in [washClip, halo, glow, line] { layer.addSublayer(sublayer) }
+    }
+
+    /// A streak is a bright core between faint edges, narrow against the area it crosses.
+    private static func sheenColors(_ sheen: Sheen) -> [CGColor] {
+        let white = { (alpha: CGFloat) in NSColor.white.withAlphaComponent(alpha).cgColor }
+        switch sheen {
+        case .wash, .none: return [white(0), white(0.13), white(0)]
+        case .glint: return [white(0), white(0.05), white(0.2), white(0.05), white(0)]
+        }
+    }
+
+    private static func sheenLocations(_ sheen: Sheen, at centre: Double) -> [NSNumber] {
+        let offsets: [Double]
+        switch sheen {
+        case .wash, .none: offsets = [-0.2, 0, 0.2]
+        case .glint: offsets = [-0.05, -0.016, 0, 0.012, 0.035]
+        }
+        return offsets.map { NSNumber(value: centre + $0) }
     }
 
     /// The line along `ring` with corners of `radius`; the wash crosses `area`, rounded by `areaRadius`.
@@ -104,25 +134,26 @@ import QuartzCore
         }
         // The glow flares as the ends meet, then settles.
         let flare = CAKeyframeAnimation(keyPath: "opacity")
-        flare.values = [0, 0, 1, Self.restingGlow]
+        flare.values = [0, 0, NSNumber(value: flarePeak), NSNumber(value: min(Self.restingGlow, flarePeak))]
         flare.keyTimes = [0, 0.4, 0.6, 1]
         flare.beginTime = now
         flare.duration = 0.8
         flare.fillMode = .backwards
         glow.add(flare, forKey: "flare")
-        // One wash of light across the area.
+        // One crossing of light over the area.
+        guard sheen != .none else { return }
         let sweep = CABasicAnimation(keyPath: "locations")
-        sweep.fromValue = [-0.4, -0.2, 0]
-        sweep.toValue = [1, 1.2, 1.4]
+        sweep.fromValue = Self.sheenLocations(sheen, at: -0.2)
+        sweep.toValue = Self.sheenLocations(sheen, at: 1.2)
         sweep.beginTime = now + Self.washDelay
-        sweep.duration = Self.washDuration
+        sweep.duration = sheen == .glint ? 0.5 : Self.washDuration
         sweep.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         sweep.fillMode = .both
         wash.add(sweep, forKey: "sweep")
         let shown = CAKeyframeAnimation(keyPath: "opacity")
         shown.values = [1, 1]
         shown.beginTime = now + Self.washDelay
-        shown.duration = Self.washDuration
+        shown.duration = sweep.duration
         wash.add(shown, forKey: "shown")
     }
 }

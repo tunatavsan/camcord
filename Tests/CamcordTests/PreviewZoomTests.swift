@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Testing
 
@@ -78,5 +79,33 @@ struct PreviewZoomTests {
         #expect(pin.well.width <= ScreenshotPreviewGeometry.maximumWell.width)
         let margin = ScreenshotPreviewGeometry.shadowInset
         #expect(pin.frame.maxX <= visible.maxX + margin && pin.frame.minY >= visible.minY - margin)
+    }
+}
+
+@MainActor
+@Suite("Pin chrome")
+struct PinChromeTests {
+    @Test("the pin's corners resize and its × closes; everywhere else the capture takes the pointer")
+    func hotZones() {
+        let container = NSView(frame: CGRect(x: 0, y: 0, width: 480, height: 320))
+        let chrome = PinChrome(frame: container.bounds)
+        container.addSubview(chrome)
+        #expect(chrome.hitTest(CGPoint(x: 6, y: 6)) === chrome)
+        #expect(chrome.hitTest(CGPoint(x: 474, y: 314)) === chrome)
+        #expect(chrome.hitTest(CGPoint(x: 240, y: 160)) == nil)
+        let close = CameraResizeGeometry.closeFrame(in: chrome.bounds)!
+        #expect(chrome.hitTest(CGPoint(x: close.midX, y: close.midY)) === chrome)
+    }
+
+    @Test("a pin's actions gather in the middle, clear of the resize corners")
+    func centredBand() {
+        let band = ScreenshotCardActionBand(frame: CGRect(x: 0, y: 0, width: 480, height: 72))
+        band.centersButtons = true
+        band.actions = (0..<4).map { index in .init(title: "\(index)", symbol: "pin") { _ in } }
+        band.layoutSubtreeIfNeeded()
+        let frames = band.buttons.map(\.frame)
+        #expect(abs((frames.first!.minX + frames.last!.maxX) / 2 - 240) <= 1)
+        let corner = CameraResizeGeometry.hitRect(.bottomLeft, in: CGRect(x: 0, y: 0, width: 480, height: 320))
+        #expect(frames.first!.minX >= corner.maxX)
     }
 }

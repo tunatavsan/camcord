@@ -64,6 +64,9 @@ enum ScreenshotCardBlur {
     }
     var actions: [Action] = [] { didSet { rebuild() } }
     var isEnabled = true { didSet { for button in buttons { button.isEnabled = isEnabled && button.action.enabled } } }
+    /// The buttons gather in the middle instead of starting from the left: a pin keeps its
+    /// corners free to resize.
+    var centersButtons = false { didSet { needsLayout = true } }
     private(set) var revealed = false
     private var reduceMotion = false
     private let veil = ScreenshotCardVeil()
@@ -102,8 +105,10 @@ enum ScreenshotCardBlur {
         veil.frame = bounds
         // From the left, one even step apart, however many buttons there are.
         let side: CGFloat = 38, step: CGFloat = 46
+        let span = CGFloat(max(0, buttons.count - 1)) * step + side
+        let first = centersButtons ? ((bounds.width - span) / 2).rounded() : 8
         for (index, button) in buttons.enumerated() {
-            button.frame = CGRect(x: 8 + CGFloat(index) * step, y: 7, width: side, height: side)
+            button.frame = CGRect(x: first + CGFloat(index) * step, y: 7, width: side, height: side)
         }
     }
 
@@ -483,14 +488,25 @@ private final class ScreenshotCardVeil: NSView {
 }
 
 /// What the capture already did ("Copied", "In Library"), or what went wrong, over its top-left corner.
+/// "Copied" is celebrated once: a glass circle arrives, a check draws itself in it and nods, the
+/// circle opens into the word, and a moment later it folds back to the quiet check.
 @MainActor final class ScreenshotCardBadge: ScreenshotCardChip {
     private let icon = CALayer()
+    private let check = CAShapeLayer()
     private let label = CATextLayer()
     private var popped = false
     private var content: (text: String, symbol: String, spinning: Bool)?
+    /// Folded to the circle: the word is hidden.
+    private var folded = false
+    private var celebration = 0
     private static let font = Theme.Font.ns.text(12, weight: .semibold)
     private static let height: CGFloat = 22
     private static let maximumWidth: CGFloat = 220
+    /// The symbol's centre and the word's start, from the left edge: the circle's centre, so
+    /// folding changes only the width.
+    private static let iconCentre: CGFloat = height / 2
+    private static let textStart: CGFloat = height + 1
+    private var isCopied: Bool { content?.text == String(localized: "Copied") && content?.symbol == "checkmark" }
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         layer?.opacity = 0
@@ -501,7 +517,20 @@ private final class ScreenshotCardVeil: NSView {
         label.foregroundColor = NSColor.white.cgColor
         label.contentsScale = scale
         label.truncationMode = .end
+        check.fillColor = nil
+        check.strokeColor = NSColor.white.cgColor
+        check.lineWidth = 1.9
+        check.lineCap = .round
+        check.lineJoin = .round
+        check.bounds = CGRect(x: 0, y: 0, width: 13, height: 13)
+        let mark = CGMutablePath()
+        mark.move(to: CGPoint(x: 1.8, y: 6.6))
+        mark.addLine(to: CGPoint(x: 5.1, y: 3.2))
+        mark.addLine(to: CGPoint(x: 11.3, y: 9.9))
+        check.path = mark
+        check.opacity = 0
         clip.addSublayer(icon)
+        clip.addSublayer(check)
         clip.addSublayer(label)
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
@@ -510,8 +539,9 @@ private final class ScreenshotCardVeil: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     var preferredSize: CGSize {
         guard let content else { return CGSize(width: 0, height: Self.height) }
+        if folded { return CGSize(width: Self.height, height: Self.height) }
         let text = ceil(NSAttributedString(string: content.text, attributes: [.font: Self.font]).size().width)
-        return CGSize(width: min(Self.maximumWidth, 8 + 13 + 5 + text + 10), height: Self.height)
+        return CGSize(width: min(Self.maximumWidth, Self.textStart + text + 10), height: Self.height)
     }
     func show(status: String?, busy: Bool, error: String?) {
         let next: (text: String, symbol: String, spinning: Bool)?
@@ -523,7 +553,8 @@ private final class ScreenshotCardVeil: NSView {
         content = next
         guard changed else { return }
         let scale = icon.contentsScale
-        icon.contents = next.flatMap { ScreenshotCardActionButton.symbol($0.symbol, scale: scale, pointSize: 11, weight: .bold) }
+        // The check is drawn, not a symbol, so it can draw itself.
+        icon.contents = isCopied ? nil : next.flatMap { ScreenshotCardActionButton.symbol($0.symbol, scale: scale, pointSize: 11, weight: .bold) }
         label.string = next?.text
         setAccessibilityLabel(next?.text)
         toolTip = error
@@ -533,23 +564,98 @@ private final class ScreenshotCardVeil: NSView {
             spin.fromValue = 0; spin.toValue = -2 * Double.pi; spin.duration = 0.9; spin.repeatCount = .infinity
             icon.add(spin, forKey: "badge-spin")
         }
+        celebration += 1
+        setFolded(false, animated: false)
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        check.removeAllAnimations()
+        check.opacity = isCopied ? 1 : 0
+        check.strokeEnd = 1
+        label.opacity = 1
+        CATransaction.commit()
         superview?.needsLayout = true
         needsLayout = true
-        if popped { setShown(next != nil, reduceMotion: false) }
+        if popped {
+            if isCopied { celebrate(after: 0) } else { setShown(next != nil, reduceMotion: false) }
+        }
     }
     /// The badge arrives just after the card does.
     func pop(after delay: CFTimeInterval, reduceMotion: Bool) {
         popped = true
-        if content != nil { setShown(true, delay: delay, reduceMotion: reduceMotion) }
+        guard content != nil else { return }
+        if isCopied && !reduceMotion { celebrate(after: delay) } else { setShown(true, delay: delay, reduceMotion: reduceMotion) }
+    }
+
+    private func celebrate(after delay: CFTimeInterval) {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            setShown(true, delay: delay, reduceMotion: true); return
+        }
+        celebration += 1
+        let token = celebration
+        setFolded(true, animated: false)
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        label.opacity = 0
+        check.opacity = 1
+        check.strokeEnd = 1
+        let start = CACurrentMediaTime() + delay
+        let draw = CABasicAnimation(keyPath: "strokeEnd")
+        draw.fromValue = 0; draw.toValue = 1
+        draw.beginTime = start + 0.1; draw.duration = 0.3
+        draw.timingFunction = CAMediaTimingFunction(controlPoints: 0.3, 0, 0.2, 1)
+        draw.fillMode = .backwards
+        check.add(draw, forKey: "check-draw")
+        let nod = CAKeyframeAnimation(keyPath: "transform.scale")
+        nod.values = [1, 1.2, 1]
+        nod.keyTimes = [0, 0.4, 1]
+        nod.beginTime = start + 0.36; nod.duration = 0.32
+        nod.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        check.add(nod, forKey: "check-nod")
+        CATransaction.commit()
+        setShown(true, delay: delay, reduceMotion: false)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(delay + 0.62))
+            guard let self, self.celebration == token else { return }
+            self.setFolded(false, animated: true)
+            try? await Task.sleep(for: .seconds(2.2))
+            guard self.celebration == token else { return }
+            self.setFolded(true, animated: true)
+        }
+    }
+
+    /// Opens to the word or folds to the circle; the glass reshapes with it.
+    private func setFolded(_ folded: Bool, animated: Bool) {
+        guard folded != self.folded else { return }
+        self.folded = folded
+        guard animated, let well = superview else { superview?.needsLayout = true; return }
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = label.presentation()?.opacity ?? label.opacity
+        fade.toValue = folded ? 0 : 1
+        fade.duration = folded ? 0.16 : 0.26
+        fade.beginTime = CACurrentMediaTime() + (folded ? 0 : 0.08)
+        fade.fillMode = .backwards
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        label.opacity = folded ? 0 : 1
+        label.add(fade, forKey: "badge-word")
+        CATransaction.commit()
+        well.needsLayout = true
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = folded ? 0.34 : 0.42
+            context.timingFunction = folded ? CAMediaTimingFunction(controlPoints: 0.4, 0, 0.2, 1)
+                                            : CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1.06)
+            context.allowsImplicitAnimation = true
+            well.layoutSubtreeIfNeeded()
+        }
     }
     override func layout() {
         super.layout()
         CATransaction.begin(); CATransaction.setDisableActions(true)
         icon.bounds = CGRect(x: 0, y: 0, width: 24, height: 24)
         icon.transform = CATransform3DMakeScale(13.0 / 24, 13.0 / 24, 1)
-        icon.position = CGPoint(x: 8 + 6.5, y: bounds.midY)
+        icon.position = CGPoint(x: Self.iconCentre, y: bounds.midY)
+        check.position = icon.position
         let textHeight = ceil(Self.font.ascender - Self.font.descender)
-        label.frame = CGRect(x: 8 + 13 + 5, y: (bounds.height - textHeight) / 2, width: max(0, bounds.width - 26 - 10), height: textHeight)
+        let fullWidth = content.map { ceil(NSAttributedString(string: $0.text, attributes: [.font: Self.font]).size().width) } ?? 0
+        label.frame = CGRect(x: Self.textStart, y: (bounds.height - textHeight) / 2,
+                             width: min(fullWidth, Self.maximumWidth - Self.textStart - 10), height: textHeight)
         CATransaction.commit()
     }
 }

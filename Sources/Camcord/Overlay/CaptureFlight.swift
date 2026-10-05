@@ -3,8 +3,9 @@ import QuartzCore
 
 /// The moment a screenshot is taken. The capture appears over the very place it was taken and
 /// the glass light draws around it, as it does around a scroll capture: the line runs from the
-/// top centre down both sides, flares, and a wash of light crosses the capture. Then the capture
-/// glides on a gentle curve into the corner where its card forms around it. It lives in its own
+/// top centre down both sides and a thin streak of light runs across, as over glass; nothing
+/// whitens the capture. Then it glides on a gentle curve into the corner and waits there while
+/// its card's tray opens out from behind it, and only then hands over. It lives in its own
 /// click-through panel above the card.
 @MainActor enum CaptureFlight {
     private static var panels: [NSPanel] = []
@@ -13,8 +14,10 @@ import QuartzCore
     static let hold: CFTimeInterval = 0.42
     /// The glide into the card.
     static let glide: CFTimeInterval = 0.56
-    /// When the card should start to form, from now: just before the capture lands in it.
-    static var landing: CFTimeInterval { hold + glide - 0.1 }
+    /// When the card's tray starts to open behind the capture, from now: as it lands.
+    static var landing: CFTimeInterval { hold + glide - 0.06 }
+    /// How long the capture waits on the card for its tray to open before it hands over.
+    static let wait: CFTimeInterval = 0.34
 
     /// - Parameters: source and target in global AppKit points; target is where the card shows
     ///   the capture.
@@ -50,7 +53,7 @@ import QuartzCore
         carrier.shadowColor = NSColor.black.cgColor
         carrier.shadowOffset = CGSize(width: 0, height: -2 / scale)
         carrier.shadowRadius = 12 / scale
-        carrier.shadowOpacity = 0.4
+        carrier.shadowOpacity = 0
         carrier.shadowPath = CGPath(roundedRect: carrier.bounds, cornerWidth: radius, cornerHeight: radius, transform: nil)
         let photo = CALayer()
         photo.frame = carrier.bounds
@@ -62,7 +65,7 @@ import QuartzCore
         photo.cornerRadius = radius
         carrier.addSublayer(photo)
         // The light sits just inside the capture's edge, so a whole screen shows all of it.
-        let ring = LitRing()
+        let ring = LitRing(sheen: .glint, flarePeak: 0.7)
         ring.layer.frame = carrier.bounds
         let inset = LitRing.lineWidth
         ring.set(ring: carrier.bounds.insetBy(dx: inset, dy: inset), radius: 0, area: carrier.bounds, areaRadius: 0)
@@ -103,12 +106,12 @@ import QuartzCore
         rounding.timingFunction = glideTiming
         rounding.fillMode = .backwards
         photo.add(rounding, forKey: "rounding")
-        let lift = CABasicAnimation(keyPath: "shadowOpacity")
-        lift.fromValue = 0
-        lift.toValue = 0.4
+        // Lifted while it travels; the tray's own shadow takes over as it opens.
+        let lift = CAKeyframeAnimation(keyPath: "shadowOpacity")
+        lift.values = [0, 0.32, 0.32, 0]
+        lift.keyTimes = [0, 0.3, 0.7, 1]
         lift.beginTime = leaves
-        lift.duration = glide * 0.5
-        lift.fillMode = .backwards
+        lift.duration = glide + wait * 0.6
         carrier.add(lift, forKey: "lift")
         // The light lets go as the capture leaves.
         let dim = CABasicAnimation(keyPath: "opacity")
@@ -119,12 +122,12 @@ import QuartzCore
         dim.fillMode = .both
         dim.isRemovedOnCompletion = false
         ring.layer.add(dim, forKey: "dim")
-        // The card has formed under it, showing the same capture: it hands over and leaves.
+        // The tray has opened under it, showing the same capture: it hands over and leaves.
         let handover = CABasicAnimation(keyPath: "opacity")
         handover.fromValue = 1
         handover.toValue = 0
-        handover.beginTime = leaves + glide
-        handover.duration = 0.16
+        handover.beginTime = leaves + glide + wait
+        handover.duration = 0.14
         handover.fillMode = .forwards
         handover.isRemovedOnCompletion = false
         carrier.add(handover, forKey: "handover")
@@ -132,7 +135,7 @@ import QuartzCore
 
         panels.append(panel)
         panel.orderFrontRegardless()
-        let total = hold + glide + 0.3
+        let total = hold + glide + wait + 0.24
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(total))
             panel.orderOut(nil)

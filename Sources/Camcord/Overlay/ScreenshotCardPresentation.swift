@@ -182,31 +182,32 @@ struct ScreenshotCardGeometry {
         surface.layer?.opacity = 0
         CATransaction.commit()
     }
-    /// The card forms around the capture that has just landed in it: it settles from a little
-    /// smaller, and a glint of the glass light crosses the capture.
+    /// The card's tray opens out from behind the capture that has just landed on it: it starts
+    /// small enough to hide behind the capture and grows until its frost and rim stand around it.
+    /// The landed capture stays on top until the tray is open, so nothing changes under the eye.
     func land(completion: @escaping @MainActor () -> Void) {
         layoutSubtreeIfNeeded()
-        guard let layer = surface.layer else { completion(); return }
+        guard let layer = surface.layer, cardRect.width > 0, cardRect.height > 0 else { completion(); return }
+        let shown = ScreenshotCardGeometry(sourceSize: model.capture.pointSize).imageRect
+        let behind = max(0.2, min(shown.width / cardRect.width, shown.height / cardRect.height) * 0.96)
         let centre = CGPoint(x: layer.bounds.width * (0.5 - layer.anchorPoint.x), y: layer.bounds.height * (0.5 - layer.anchorPoint.y))
-        let smaller = CATransform3DConcat(CATransform3DConcat(CATransform3DMakeTranslation(-centre.x, -centre.y, 0),
-                                                              CATransform3DMakeScale(0.94, 0.94, 1)),
-                                          CATransform3DMakeTranslation(centre.x, centre.y, 0))
+        let small = CATransform3DConcat(CATransform3DConcat(CATransform3DMakeTranslation(-centre.x, -centre.y, 0),
+                                                            CATransform3DMakeScale(behind, behind, 1)),
+                                        CATransform3DMakeTranslation(centre.x, centre.y, 0))
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         CATransaction.setCompletionBlock { MainActor.assumeIsolated { completion() } }
         layer.opacity = 1
         let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = 0; fade.toValue = 1; fade.duration = 0.18
-        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        fade.fromValue = 0; fade.toValue = 1; fade.duration = 0.1
         layer.add(fade, forKey: "card-land-fade")
-        let settle = CASpringAnimation.card(keyPath: "transform", from: NSValue(caTransform3D: smaller),
-                                            to: NSValue(caTransform3D: CATransform3DIdentity), response: 0.42, dampingRatio: 0.78)
-        settle.preferFullRefreshRate(on: window?.screen)
-        layer.add(settle, forKey: "card-land")
-        animationDuration = settle.duration
+        let open = CASpringAnimation.card(keyPath: "transform", from: NSValue(caTransform3D: small),
+                                          to: NSValue(caTransform3D: CATransform3DIdentity), response: 0.38, dampingRatio: 0.9)
+        open.preferFullRefreshRate(on: window?.screen)
+        layer.add(open, forKey: "card-land")
+        animationDuration = open.duration
         CATransaction.commit()
-        well.glint(after: 0.06)
-        well.badge.pop(after: 0.16, reduceMotion: false)
+        well.badge.pop(after: CaptureFlight.wait + 0.1, reduceMotion: false)
     }
     func reposition(from oldFrame: CGRect, to newFrame: CGRect, reduceMotion: Bool) {
         reducedMotion = reduceMotion
@@ -327,30 +328,6 @@ private final class ScreenshotCardContent: NSView {
         }
     }
     required init?(coder: NSCoder) { nil }
-    /// One wash of the glass light across the capture, the one that crossed it as it was taken.
-    func glint(after delay: CFTimeInterval = 0) {
-        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, let layer else { return }
-        let wash = CAGradientLayer()
-        wash.frame = bounds
-        wash.startPoint = CGPoint(x: 0, y: 1)
-        wash.endPoint = CGPoint(x: 1, y: 0)
-        wash.colors = [NSColor.white.withAlphaComponent(0).cgColor, NSColor.white.withAlphaComponent(0.24).cgColor,
-                       NSColor.white.withAlphaComponent(0).cgColor]
-        wash.locations = [1, 1.2, 1.4]
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        CATransaction.setCompletionBlock { MainActor.assumeIsolated { wash.removeFromSuperlayer() } }
-        layer.addSublayer(wash)
-        let sweep = CABasicAnimation(keyPath: "locations")
-        sweep.fromValue = [-0.4, -0.2, 0]
-        sweep.toValue = [1, 1.2, 1.4]
-        sweep.beginTime = CACurrentMediaTime() + delay
-        sweep.duration = 0.62
-        sweep.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        sweep.fillMode = .backwards
-        wash.add(sweep, forKey: "glint")
-        CATransaction.commit()
-    }
     func setHovering(_ hovering: Bool, busy: Bool, reduceMotion: Bool) {
         band.setRevealed(hovering || busy, reduceMotion: reduceMotion)
         closeButton.setRevealed(hovering, reduceMotion: reduceMotion)

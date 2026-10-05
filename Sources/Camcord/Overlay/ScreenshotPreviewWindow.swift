@@ -153,7 +153,9 @@ private final class ScreenshotPreviewPanel: NSPanel {
     /// The capture, zoomable; it stands in for the well's still image.
     let zoom: ScreenshotPreviewZoom
     /// The glass light that draws around the tray as it arrives.
-    private let ring = LitRing()
+    private let ring = LitRing(sheen: .none, flarePeak: 0.8)
+    /// The camera's buttons over the capture: the × at the top, a resize chip in each corner.
+    private let chrome = PinChrome()
     private var surfaceRect: CGRect { bounds.insetBy(dx: ScreenshotPreviewGeometry.shadowInset, dy: ScreenshotPreviewGeometry.shadowInset) }
     private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 
@@ -188,7 +190,23 @@ private final class ScreenshotPreviewPanel: NSPanel {
         zoom.canInteract = { [weak model] in model?.isAlive == true }
         zoom.setAccessibilityHelp(String(localized: "Pinch or double-click to zoom; drag to move around"))
         well.addSubview(zoom, positioned: .above, relativeTo: image)
-        well.closeButton.action = { [weak self] in self?.onClose?() }
+        // The camera's × and resize corners stand in for the card's corner ×; the actions keep
+        // to the middle so the corners stay free to resize.
+        well.closeButton.isHidden = true
+        well.band.centersButtons = true
+        chrome.frame = well.bounds
+        chrome.autoresizingMask = [.width, .height]
+        chrome.outlineRadius = Theme.Radius.well
+        chrome.onClose = { [weak self] in self?.onClose?() }
+        chrome.onResize = { [weak self] corner, phase in
+            guard let self else { return }
+            switch phase {
+            case .began: self.beginResize(Self.edges(for: corner))
+            case .changed: self.continueResize()
+            case .ended: self.endResize()
+            }
+        }
+        well.addSubview(chrome)
         refreshActions()
         model.$isBusy.sink { [weak self] busy in self?.updateBadge(busy: busy, error: self?.model.error) }.store(in: &observers)
         model.$error.sink { [weak self] error in self?.updateBadge(busy: self?.model.isBusy ?? false, error: error) }.store(in: &observers)
@@ -272,6 +290,7 @@ private final class ScreenshotPreviewPanel: NSPanel {
     override func mouseExited(with event: NSEvent) {
         if !isResizing { NSCursor.arrow.set() }
         setHovering(false)
+        chrome.rest()
     }
     private func updateHover(_ event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
@@ -279,7 +298,8 @@ private final class ScreenshotPreviewPanel: NSPanel {
         guard !isResizing else { return }
         // A zoomed capture is grabbed to move around it.
         let overCapture = zoom.isZoomed && zoom.bounds.contains(zoom.convert(event.locationInWindow, from: nil))
-        (Self.cursor(for: edges(at: point)) ?? (overCapture ? .openHand : .arrow)).set()
+        (Self.cursor(for: edges(at: point)) ?? chrome.cursor(atWindowPoint: event.locationInWindow)
+            ?? (overCapture ? .openHand : .arrow)).set()
     }
     private func setHovering(_ active: Bool) {
         guard alive, active != hovering else { return }
@@ -320,12 +340,32 @@ private final class ScreenshotPreviewPanel: NSPanel {
     }
     override func mouseDown(with event: NSEvent) {
         let found = edges(at: convert(event.locationInWindow, from: nil))
-        guard !found.isEmpty, let window else { super.mouseDown(with: event); return }
-        resize = (found, window.frame, NSEvent.mouseLocation)
-        isResizing = true
+        guard !found.isEmpty, window != nil else { super.mouseDown(with: event); return }
+        beginResize(found)
     }
     override func mouseDragged(with event: NSEvent) {
-        guard let resize, let window else { super.mouseDragged(with: event); return }
+        guard resize != nil else { super.mouseDragged(with: event); return }
+        continueResize()
+    }
+    override func mouseUp(with event: NSEvent) {
+        guard resize != nil else { super.mouseUp(with: event); return }
+        endResize()
+    }
+    private static func edges(for corner: CameraCorner) -> Edges {
+        switch corner {
+        case .topLeft: [.left, .top]
+        case .topRight: [.right, .top]
+        case .bottomLeft: [.left, .bottom]
+        case .bottomRight: [.right, .bottom]
+        }
+    }
+    private func beginResize(_ edges: Edges) {
+        guard let window else { return }
+        resize = (edges, window.frame, NSEvent.mouseLocation)
+        isResizing = true
+    }
+    private func continueResize() {
+        guard let resize, let window else { return }
         let inset = ScreenshotPreviewGeometry.shadowInset
         let start = resize.frame.insetBy(dx: inset, dy: inset)
         let mouse = NSEvent.mouseLocation
@@ -347,8 +387,7 @@ private final class ScreenshotPreviewPanel: NSPanel {
         let frame = CGRect(x: x, y: y, width: width, height: height).insetBy(dx: -inset, dy: -inset).integral
         window.setFrame(frame, display: true)
     }
-    override func mouseUp(with event: NSEvent) {
-        guard resize != nil else { super.mouseUp(with: event); return }
+    private func endResize() {
         resize = nil
         isResizing = false
         layoutSubtreeIfNeeded()
