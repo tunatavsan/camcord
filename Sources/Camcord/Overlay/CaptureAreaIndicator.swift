@@ -587,7 +587,8 @@ private final class LitFrameView: NSView, CaptureFrameView {
         CATransaction.setDisableActions(true)
         ring.layer.frame = bounds
         CATransaction.commit()
-        ring.set(ring: line, radius: windowCornerRadius > 0 ? windowCornerRadius + Self.gap : 0)
+        // A display-wide area has no window corner to follow; it takes the app's soft one.
+        ring.set(ring: line, radius: windowCornerRadius > 0 ? windowCornerRadius + Self.gap : Theme.Radius.well)
     }
 
     func animateAppear() { ring.light() }

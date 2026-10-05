@@ -73,7 +73,7 @@ import QuartzCore
         let ring = LitRing(flarePeak: 0.7)
         ring.layer.frame = carrier.bounds
         let inset = LitRing.lineWidth
-        ring.set(ring: carrier.bounds.insetBy(dx: inset, dy: inset), radius: 0)
+        ring.set(ring: carrier.bounds.insetBy(dx: inset, dy: inset), radius: Theme.Radius.well)
         carrier.addSublayer(ring.layer)
         root.addSublayer(carrier)
 

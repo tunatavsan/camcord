@@ -230,7 +230,10 @@ import UniformTypeIdentifiers
         let finish: @MainActor () -> Void = { [entry, timing] in
             entry.window.orderOut(nil); entry.orderedOutAt = timing.now()
         }
-        if reason == "evicted", !usesFixtureFrame, !reduceMotion() {
+        if reason == "pin", !usesFixtureFrame {
+            // The card has become the pin, which stands where it was: it simply goes.
+            finish()
+        } else if reason == "evicted", !usesFixtureFrame, !reduceMotion() {
             // The oldest card makes room: it fades and sinks a little while the others close up.
             entry.host.fadeAway(completion: finish)
         } else if animated { animator(entry.host, false, reduceMotion(), finish) } else { finish() }

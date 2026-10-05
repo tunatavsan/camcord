@@ -156,7 +156,8 @@ final class SelectionView: NSView {
         let path = CGMutablePath()
         path.addRect(bounds)
         if let selectionRect {
-            path.addRect(selectionRect)
+            let r = selectionCornerRadius(for: selectionRect)
+            path.addRoundedRect(in: selectionRect, cornerWidth: r, cornerHeight: r)
         }
         maskLayer.path = path
         CATransaction.commit()
@@ -243,6 +244,12 @@ final class SelectionView: NSView {
         trackingArea = area
     }
 
+    /// The selection's corners on screen, the app's soft corner, smaller on a small selection. The
+    /// capture itself keeps its square corners: this only draws the area being taken.
+    private func selectionCornerRadius(for rect: CGRect) -> CGFloat {
+        selectionIsText ? 3 : min(8, min(rect.width, rect.height) / 4)
+    }
+
     private func drawSelectionChrome() {
         if let selectionRect {
             if selectionIsText {
@@ -297,11 +304,12 @@ final class SelectionView: NSView {
         glow.set()
         // A subtle dark hairline just outside keeps the accent line visible even where the
         // content behind it is the same hue.
-        let outer = NSBezierPath(rect: rect.insetBy(dx: -1, dy: -1))
+        let r = selectionCornerRadius(for: rect)
+        let outer = NSBezierPath(roundedRect: rect.insetBy(dx: -1, dy: -1), xRadius: r + 1, yRadius: r + 1)
         outer.lineWidth = 1
         NSColor.black.withAlphaComponent(0.35).setStroke()
         outer.stroke()
-        let path = NSBezierPath(rect: rect)
+        let path = NSBezierPath(roundedRect: rect, xRadius: r, yRadius: r)
         path.lineWidth = 2
         accent.setStroke()
         path.stroke()

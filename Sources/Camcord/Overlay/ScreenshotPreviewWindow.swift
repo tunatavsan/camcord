@@ -104,11 +104,30 @@ struct ScreenshotPreviewGeometry {
     }
 
     func present(from card: CGRect? = nil) {
-        panel.makeKeyAndOrderFront(nil)
-        panel.makeFirstResponder(host)
-        host.animateIn(from: card)
+        // A pin from a card is the card becoming the pin: it starts as the card's own tray, in
+        // its place and size, and the window flows to the pin's, its content laid out on the way.
+        if pinned, let card, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            let target = panel.frame
+            let inset = ScreenshotPreviewGeometry.shadowInset
+            panel.setFrame(card.insetBy(dx: -inset, dy: -inset), display: false)
+            panel.makeKeyAndOrderFront(nil)
+            panel.makeFirstResponder(host)
+            host.morphIn(settlingIn: Self.morphDuration)
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = Self.morphDuration
+                context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1)
+                context.allowsImplicitAnimation = true
+                panel.animator().setFrame(target, display: true)
+            }
+        } else {
+            panel.makeKeyAndOrderFront(nil)
+            panel.makeFirstResponder(host)
+            host.animateIn(from: card)
+        }
         installGestureMonitors()
     }
+
+    static let morphDuration: TimeInterval = 0.5
 
     /// A pin floats over other apps without taking their focus, so the trackpad's pinch goes to
     /// the app in front; the gesture tap gives the pin every pinch and smart zoom made over it.
@@ -174,7 +193,7 @@ private final class ScreenshotPreviewPanel: NSPanel {
     /// The glass light that draws around the tray as it arrives.
     private let ring = LitRing(flarePeak: 0.8)
     /// The camera's buttons over the capture: the × at the top, a resize chip in each corner.
-    private let chrome = PinChrome()
+    let chrome = PinChrome()
     private var surfaceRect: CGRect { bounds.insetBy(dx: ScreenshotPreviewGeometry.shadowInset, dy: ScreenshotPreviewGeometry.shadowInset) }
     private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 
@@ -452,6 +471,24 @@ private final class ScreenshotPreviewPanel: NSPanel {
             grow.preferFullRefreshRate(on: window?.screen)
             layer.add(grow, forKey: "preview-zoom")
         }
+        CATransaction.commit()
+    }
+
+    /// A pin morphing out of its card: on screen at once, as the card was, lit by the glass light
+    /// as it settles into its own size.
+    func morphIn(settlingIn duration: TimeInterval) {
+        layoutSubtreeIfNeeded()
+        guard !reduceMotion else { return }
+        let lit = CACurrentMediaTime() + duration * 0.7
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        ring.layer.opacity = 1
+        ring.light(at: lit)
+        let release = CABasicAnimation(keyPath: "opacity")
+        release.fromValue = 1; release.toValue = 0
+        release.beginTime = lit + LitRing.drawDuration + 0.2; release.duration = 0.35
+        release.fillMode = .backwards
+        ring.layer.add(release, forKey: "release")
+        ring.layer.opacity = 0
         CATransaction.commit()
     }
 
