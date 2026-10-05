@@ -5132,6 +5132,22 @@
         }
       }
     },
+    "Pinch or double-click to zoom; drag to move around": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pinch or double-click to zoom; drag to move around"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yakınlaştırmak için kıstırın ya da çift tıklayın; gezinmek için sürükleyin"
+          }
+        }
+      }
+    },
     "Pinned screenshot": {
       "extractionState": "manual",
       "comment": "Screenshot editor",

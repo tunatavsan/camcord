@@ -354,7 +354,8 @@ import Testing
         let titles = host.well.band.actions.map(\.title)
         #expect(titles.contains(String(localized: "Copy")) == !copied)
         #expect(titles.contains(String(localized: "Add to Library")) == !kept)
-        #expect(Array(titles.suffix(3)) == [String(localized: "Edit"), String(localized: "Preview"), String(localized: "Share")])
+        #expect(Array(titles.suffix(4)) == [String(localized: "Edit"), String(localized: "Pin"), String(localized: "Preview"),
+                                            String(localized: "Share")])
     }
     @Test("real picker cancellation and service success/failure release only their own sharing pause")
     func sharingLifecycle() throws {

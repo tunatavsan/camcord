@@ -140,8 +140,13 @@ import UniformTypeIdentifiers
         host.onKeep = { [weak self] in if current() { self?.onKeep?(capture) } }
         host.onOpen = { [weak self, weak entry] in
             guard current(), let self, let entry else { return }
-            self.openPreview(capture, on: entry.visibleFrame)
+            self.openPreview(capture, on: entry.visibleFrame, from: Self.cardRect(of: entry))
             self.dismiss(entry, reason: "preview")
+        }
+        host.onPin = { [weak self, weak entry] in
+            guard current(), let self, let entry else { return }
+            self.openPreview(capture, on: entry.visibleFrame, pinned: true, from: Self.cardRect(of: entry))
+            self.dismiss(entry, reason: "pin")
         }
         window.contentView = host
         entries.append(entry)
@@ -210,9 +215,13 @@ import UniformTypeIdentifiers
             }
         }
     }
-    func openPreview(_ capture: CapturedScreenshot, on visible: CGRect) {
+    func openPreview(_ capture: CapturedScreenshot, on visible: CGRect, pinned: Bool = false, from card: CGRect? = nil) {
         preview.onEdit = onEdit
-        preview.show(capture, operations: operations, on: visible, claim: claimClipboardPublication)
+        preview.show(capture, operations: operations, on: visible, claim: claimClipboardPublication, pinned: pinned, from: card)
+    }
+    /// The card itself on screen, without its shadow margin.
+    private static func cardRect(of entry: Entry) -> CGRect {
+        entry.window.frame.insetBy(dx: ScreenshotCardGeometry.shadowInset, dy: ScreenshotCardGeometry.shadowInset)
     }
 }
 

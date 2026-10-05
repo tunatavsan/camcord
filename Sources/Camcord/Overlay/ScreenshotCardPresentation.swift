@@ -33,6 +33,8 @@ struct ScreenshotCardGeometry {
     var onEdit: (@MainActor () -> Void)?
     /// Opens the screenshot preview: a click on the capture or its Preview action.
     var onOpen: (@MainActor () -> Void)?
+    /// Pins the capture: its preview opens pinned, in front of every window.
+    var onPin: (@MainActor () -> Void)?
     /// Keeps this capture in the Library when screenshots are not kept by themselves.
     var onKeep: (@MainActor () -> Void)?
     private let model: ScreenshotCardModel
@@ -93,6 +95,7 @@ struct ScreenshotCardGeometry {
         }
         actions += [
             .init(title: String(localized: "Edit"), symbol: "pencil", enabled: canEdit) { [weak self] _ in self?.onEdit?() },
+            .init(title: String(localized: "Pin"), symbol: "pin") { [weak self] _ in self?.onPin?() },
             .init(title: String(localized: "Preview"), symbol: "eye") { [weak self] _ in self?.onOpen?() },
             .init(title: String(localized: "Share"), symbol: "square.and.arrow.up") { [weak self] anchor in self?.share.share(anchor) },
         ]
@@ -144,7 +147,7 @@ struct ScreenshotCardGeometry {
     override func cancelOperation(_ sender: Any?) { if alive { onDismiss?("escape") } }
     func invalidate() {
         alive = false; observers.removeAll(); share.close()
-        onPause = nil; onDismiss = nil; onEdit = nil; onOpen = nil; onKeep = nil
+        onPause = nil; onDismiss = nil; onEdit = nil; onOpen = nil; onPin = nil; onKeep = nil
     }
     func animate(entering: Bool, reduceMotion: Bool, completion: @escaping @MainActor () -> Void) {
         reducedMotion = reduceMotion

@@ -3,24 +3,37 @@ import Combine
 import ImageIO
 import QuartzCore
 
-/// The preview's first size: the whole capture, modest on any screen, never magnified.
+/// The preview's first size: the whole capture, never magnified. A preview is there to look
+/// closely, so it takes most of the screen; a pin floats beside the work, so it stays modest and
+/// opens where its card was.
 struct ScreenshotPreviewGeometry {
     static let ring: CGFloat = 8
     static let shadowInset: CGFloat = 32
+    /// A pin's largest first size.
     static let maximumWell = CGSize(width: 520, height: 360)
     static let minimumWell = CGSize(width: 300, height: 190)
+    /// How much of the screen a preview may take.
+    static let previewShare: CGFloat = 0.86
     let well: CGSize
     let frame: CGRect
-    init(pointSize: CGSize, visible: CGRect) {
-        let room = CGSize(width: min(Self.maximumWell.width, visible.width * 0.6), height: min(Self.maximumWell.height, visible.height * 0.6))
+    init(pointSize: CGSize, visible: CGRect, pinned: Bool = true, anchor: CGRect? = nil) {
+        let room = pinned
+            ? CGSize(width: min(Self.maximumWell.width, visible.width * 0.6), height: min(Self.maximumWell.height, visible.height * 0.6))
+            : CGSize(width: visible.width * Self.previewShare - 2 * (Self.ring + Self.shadowInset),
+                     height: visible.height * Self.previewShare - 2 * (Self.ring + Self.shadowInset))
         let valid = pointSize.width.isFinite && pointSize.height.isFinite && pointSize.width > 0 && pointSize.height > 0
         let scale = valid ? min(1, room.width / pointSize.width, room.height / pointSize.height) : 0
         let fitted = CGSize(width: (pointSize.width * scale).rounded(), height: (pointSize.height * scale).rounded())
         well = CGSize(width: max(Self.minimumWell.width, fitted.width), height: max(Self.minimumWell.height, fitted.height))
         let outset = 2 * (Self.ring + Self.shadowInset)
         let size = CGSize(width: well.width + outset, height: well.height + outset)
-        frame = CGRect(x: (visible.midX - size.width / 2).rounded(), y: (visible.midY - size.height / 2).rounded(),
-                       width: size.width, height: size.height)
+        // A pin grows out of its card, kept on the screen; the shadow margin may leave it.
+        let centre = pinned ? anchor.map { CGPoint(x: $0.midX, y: $0.midY) } : nil
+        let wanted = centre ?? CGPoint(x: visible.midX, y: visible.midY)
+        let margin = Self.shadowInset
+        let x = min(max(wanted.x - size.width / 2, visible.minX - margin), visible.maxX + margin - size.width)
+        let y = min(max(wanted.y - size.height / 2, visible.minY - margin), visible.maxY + margin - size.height)
+        frame = CGRect(x: x.rounded(), y: y.rounded(), width: size.width, height: size.height)
     }
 }
 
@@ -32,16 +45,17 @@ struct ScreenshotPreviewGeometry {
     private(set) var sessions: [ScreenshotPreviewSession] = []
     var isVisible: Bool { !sessions.isEmpty }
 
+    /// - Parameters: pinned opens it as a pin; from is the card it grows out of, in screen points.
     func show(_ capture: CapturedScreenshot, operations: ScreenshotCardModel.Operations, on visible: CGRect,
-              claim: (@MainActor () -> (@MainActor () -> Bool))?) {
+              claim: (@MainActor () -> (@MainActor () -> Bool))?, pinned: Bool = false, from: CGRect? = nil) {
         // A new preview replaces the unpinned one; pinned previews stay.
         for session in sessions where !session.pinned { session.close(animated: false) }
         let session = ScreenshotPreviewSession(capture: capture, operations: operations, visible: visible, claim: claim,
-                                               canEdit: onEdit != nil)
+                                               canEdit: onEdit != nil, pinned: pinned, from: from)
         session.onEdit = { [weak self] in self?.onEdit?(capture) }
         session.onClosed = { [weak self, weak session] in self?.sessions.removeAll { $0 === session } }
         sessions.append(session)
-        session.present()
+        session.present(from: from)
     }
 
     func closeAll() { for session in sessions { session.close(animated: false) } }
@@ -58,10 +72,11 @@ struct ScreenshotPreviewGeometry {
     private var closed = false
 
     init(capture: CapturedScreenshot, operations: ScreenshotCardModel.Operations, visible: CGRect,
-         claim: (@MainActor () -> (@MainActor () -> Bool))?, canEdit: Bool) {
+         claim: (@MainActor () -> (@MainActor () -> Bool))?, canEdit: Bool, pinned: Bool = false, from: CGRect? = nil) {
         model = ScreenshotCardModel(capture: capture, operations: operations)
         model.claimClipboardPublication = claim
-        let geometry = ScreenshotPreviewGeometry(pointSize: capture.pointSize, visible: visible)
+        self.pinned = pinned
+        let geometry = ScreenshotPreviewGeometry(pointSize: capture.pointSize, visible: visible, pinned: pinned, anchor: from)
         host = ScreenshotPreviewHost(model: model, wellSize: geometry.well, canEdit: canEdit)
         panel = ScreenshotPreviewPanel(contentRect: geometry.frame, styleMask: [.borderless, .nonactivatingPanel],
                                        backing: .buffered, defer: false)
@@ -83,12 +98,13 @@ struct ScreenshotPreviewGeometry {
             self.pinned.toggle()
             self.host.setPinned(self.pinned)
         }
+        host.setPinned(pinned)
     }
 
-    func present() {
+    func present(from card: CGRect? = nil) {
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(host)
-        host.animateIn()
+        host.animateIn(from: card)
     }
 
     func close(animated: Bool) {
@@ -133,6 +149,8 @@ private final class ScreenshotPreviewPanel: NSPanel {
     private var copied = false
     private var pinned = false
     private var resize: (edges: Edges, frame: CGRect, mouse: CGPoint)?
+    /// The capture, zoomable; it stands in for the well's still image.
+    let zoom: ScreenshotPreviewZoom
     private var surfaceRect: CGRect { bounds.insetBy(dx: ScreenshotPreviewGeometry.shadowInset, dy: ScreenshotPreviewGeometry.shadowInset) }
     private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 
@@ -145,6 +163,7 @@ private final class ScreenshotPreviewPanel: NSPanel {
         self.model = model
         self.canEdit = canEdit
         well = ScreenshotCardWell(capture: model.capture, size: wellSize)
+        zoom = ScreenshotPreviewZoom(image: model.capture.image, pointSize: model.capture.pointSize)
         surface = TraySurface(content: ScreenshotPreviewContent(well: well), shadowRadius: 14)
         share = ScreenshotCardShare(model: model, pause: { _, _ in })
         super.init(frame: .zero)
@@ -156,6 +175,12 @@ private final class ScreenshotPreviewPanel: NSPanel {
         image.movesWindow = true
         image.canInteract = { [weak model] in model?.isAlive == true }
         image.setAccessibilityHelp(nil)
+        image.isHidden = true
+        zoom.frame = well.bounds
+        zoom.autoresizingMask = [.width, .height]
+        zoom.canInteract = { [weak model] in model?.isAlive == true }
+        zoom.setAccessibilityHelp(String(localized: "Pinch or double-click to zoom; drag to move around"))
+        well.addSubview(zoom, positioned: .above, relativeTo: image)
         well.closeButton.action = { [weak self] in self?.onClose?() }
         refreshActions()
         model.$isBusy.sink { [weak self] busy in self?.updateBadge(busy: busy, error: self?.model.error) }.store(in: &observers)
@@ -196,6 +221,19 @@ private final class ScreenshotPreviewPanel: NSPanel {
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 49 { onClose?() } else { super.keyDown(with: event) }
     }
+    /// ⌘+ and ⌘− zoom, ⌘0 shows the capture whole.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.shift, .numericPad]) == .command
+        else { return super.performKeyEquivalent(with: event) }
+        switch event.charactersIgnoringModifiers {
+        case "=", "+": zoom.zoomIn()
+        case "-": zoom.zoomOut()
+        case "0": zoom.showWhole()
+        default: return super.performKeyEquivalent(with: event)
+        }
+        return true
+    }
     override func layout() {
         super.layout()
         if surface.frame != surfaceRect { surface.frame = surfaceRect }
@@ -217,7 +255,9 @@ private final class ScreenshotPreviewPanel: NSPanel {
         let point = convert(event.locationInWindow, from: nil)
         setHovering(surfaceRect.contains(point))
         guard !isResizing else { return }
-        (Self.cursor(for: edges(at: point)) ?? .arrow).set()
+        // A zoomed capture is grabbed to move around it.
+        let overCapture = zoom.isZoomed && zoom.bounds.contains(zoom.convert(event.locationInWindow, from: nil))
+        (Self.cursor(for: edges(at: point)) ?? (overCapture ? .openHand : .arrow)).set()
     }
     private func setHovering(_ active: Bool) {
         guard alive, active != hovering else { return }
@@ -298,24 +338,37 @@ private final class ScreenshotPreviewPanel: NSPanel {
         onClose = nil; onEdit = nil; onPin = nil
     }
 
-    /// Opens from slightly smaller, the way a window zooms into place.
-    func animateIn() {
+    /// Opens from slightly smaller, the way a window zooms into place; from a card, it grows out
+    /// of the card's own place and size.
+    func animateIn(from card: CGRect? = nil) {
         layoutSubtreeIfNeeded()
         guard let layer = surface.layer else { return }
         CATransaction.begin(); CATransaction.setDisableActions(true)
         let fade = CABasicAnimation(keyPath: "opacity")
         fade.fromValue = 0; fade.toValue = 1
-        fade.duration = reduceMotion ? Theme.Motion.Duration.reduced : 0.18
+        fade.duration = reduceMotion ? Theme.Motion.Duration.reduced : card == nil ? 0.18 : 0.12
         fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
         fade.preferFullRefreshRate(on: window?.screen)
         layer.add(fade, forKey: "preview-fade")
         if !reduceMotion {
-            let zoom = CASpringAnimation.card(keyPath: "transform", from: NSValue(caTransform3D: centeredScale(0.92, for: layer)),
-                                              to: NSValue(caTransform3D: CATransform3DIdentity), response: 0.42, dampingRatio: 0.82)
-            zoom.preferFullRefreshRate(on: window?.screen)
-            layer.add(zoom, forKey: "preview-zoom")
+            let start = card.flatMap { grownFrom($0, for: layer) } ?? centeredScale(0.92, for: layer)
+            let grow = CASpringAnimation.card(keyPath: "transform", from: NSValue(caTransform3D: start),
+                                              to: NSValue(caTransform3D: CATransform3DIdentity),
+                                              response: card == nil ? 0.42 : 0.46, dampingRatio: card == nil ? 0.82 : 0.86)
+            grow.preferFullRefreshRate(on: window?.screen)
+            layer.add(grow, forKey: "preview-zoom")
         }
         CATransaction.commit()
+    }
+
+    /// The transform that lays the tray over `card` (screen points): the same centre, scaled
+    /// to the card's size.
+    private func grownFrom(_ card: CGRect, for layer: CALayer) -> CATransform3D? {
+        guard let window, surfaceRect.width > 0, surfaceRect.height > 0 else { return nil }
+        let tray = surfaceRect.offsetBy(dx: window.frame.minX, dy: window.frame.minY)
+        let scale = min(card.width / tray.width, card.height / tray.height)
+        let shift = CGPoint(x: card.midX - tray.midX, y: card.midY - tray.midY)
+        return CATransform3DConcat(centeredScale(scale, for: layer), CATransform3DMakeTranslation(shift.x, shift.y, 0))
     }
 
     func animateOut(completion: @escaping @MainActor () -> Void) {
