@@ -158,7 +158,7 @@ final class AXScrollActuator: ScrollActuator {
 
     private static func role(of element: AXUIElement) -> String? { attribute(element, kAXRoleAttribute) }
 
-    private static func attribute<T>(_ element: AXUIElement, _ name: String) -> T? {
+    static func attribute<T>(_ element: AXUIElement, _ name: String) -> T? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
         return value as? T
@@ -169,7 +169,7 @@ final class AXScrollActuator: ScrollActuator {
         return AXUIElementIsAttributeSettable(element, name as CFString, &settable) == .success && settable.boolValue
     }
 
-    private static func frame(of element: AXUIElement) -> CGRect? {
+    static func frame(of element: AXUIElement) -> CGRect? {
         guard let position: AXValue = attribute(element, kAXPositionAttribute),
               let size: AXValue = attribute(element, kAXSizeAttribute) else { return nil }
         var origin = CGPoint.zero, extent = CGSize.zero
@@ -215,6 +215,8 @@ final class WheelScrollActuator: ScrollActuator {
             guard let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 1,
                                       wheel1: sign * value, wheel2: 0, wheel3: 0) else { return false }
             event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+            // No modifier the owner may still hold rides along: ⇧ would turn it sideways.
+            event.flags = []
             event.setIntegerValueField(.eventSourceUserData, value: Self.smootherBypass)
             event.post(tap: .cghidEventTap)
             if part < parts - 1 { try? await Task.sleep(for: .milliseconds(16)) }

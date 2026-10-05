@@ -121,6 +121,39 @@ struct FrozenDesktopSnapshotTests {
         ) == 21)
     }
 
+    /// The window list a browser showed when the scroll shortcut chose its link-status bubble:
+    /// the bubble is its own normal-layer window, in front of the page.
+    private var browserWithStatusBubble: [WindowSnapper.Candidate] {
+        [WindowSnapper.Candidate(windowID: 50, layer: 0, bounds: CGRect(x: -1, y: 1046, width: 467, height: 43), ownerPID: 42),
+         WindowSnapper.Candidate(windowID: 51, layer: 0, bounds: CGRect(x: 0, y: 39, width: 1800, height: 1049), ownerPID: 42),
+         WindowSnapper.Candidate(windowID: 52, layer: 0, bounds: CGRect(x: 0, y: 39, width: 1800, height: 1047), ownerPID: 42),
+         WindowSnapper.Candidate(windowID: 60, layer: 0, bounds: CGRect(x: 100, y: 100, width: 900, height: 700), ownerPID: 99)]
+    }
+
+    @Test("the scroll shortcut never targets a browser's link-status bubble")
+    func scrollTargetSkipsStatusBubble() {
+        #expect(WindowSnapper.scrollTarget(ordered: browserWithStatusBubble, frontmostPID: 42, ownPID: 7,
+                                           focused: nil) == CGRect(x: 0, y: 39, width: 1800, height: 1049))
+    }
+
+    @Test("the scroll shortcut targets the window Accessibility names as focused")
+    func scrollTargetFollowsFocusedWindow() {
+        #expect(WindowSnapper.scrollTarget(ordered: browserWithStatusBubble, frontmostPID: 42, ownPID: 7,
+                                           focused: CGRect(x: 0, y: 39, width: 1800, height: 1047))
+                == CGRect(x: 0, y: 39, width: 1800, height: 1047))
+        // A focused frame nothing on screen matches (another Space) falls back to the front window.
+        #expect(WindowSnapper.scrollTarget(ordered: browserWithStatusBubble, frontmostPID: 42, ownPID: 7,
+                                           focused: CGRect(x: 300, y: 300, width: 500, height: 400))
+                == CGRect(x: 0, y: 39, width: 1800, height: 1049))
+    }
+
+    @Test("with Camcord frontmost the scroll shortcut targets the front window of another app")
+    func scrollTargetSkipsOwnWindows() {
+        let own = WindowSnapper.Candidate(windowID: 30, layer: 0, bounds: CGRect(x: 0, y: 0, width: 400, height: 300), ownerPID: 7)
+        #expect(WindowSnapper.scrollTarget(ordered: [own] + browserWithStatusBubble, frontmostPID: 7, ownPID: 7,
+                                           focused: nil) == CGRect(x: 0, y: 39, width: 1800, height: 1049))
+    }
+
     @Test("active-window selection excludes Camcord when Camcord is frontmost")
     func activeWindowFallsThroughOwnWindows() {
         let own = WindowSnapper.Candidate(

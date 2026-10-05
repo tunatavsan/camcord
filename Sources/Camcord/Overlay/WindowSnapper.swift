@@ -51,6 +51,50 @@ enum WindowSnapper {
         return candidates(from: infoList)
     }
 
+    /// Shorter or narrower than this is nothing to scroll: a browser's link-status bubble or a
+    /// tooltip, both separate windows of the frontmost app that sit above its real window.
+    static let scrollTargetMinimumSide: CGFloat = 120
+
+    /// The window the scroll shortcut captures. The focused window Accessibility names wins when
+    /// it is on screen; without it, the frontmost app's front normal window big enough to scroll.
+    /// Never one of ours. `ordered` MUST be front-to-back.
+    static func scrollTarget(
+        ordered: [Candidate],
+        frontmostPID: pid_t?,
+        ownPID: pid_t,
+        focused: CGRect?
+    ) -> CGRect? {
+        let targetPID = frontmostPID.flatMap { $0 == ownPID ? nil : $0 }
+        let eligible = ordered.filter { candidate in
+            candidate.ownerPID != ownPID && candidate.layer == 0
+                && (targetPID == nil || candidate.ownerPID == targetPID)
+                && candidate.bounds.width >= scrollTargetMinimumSide
+                && candidate.bounds.height >= scrollTargetMinimumSide
+        }
+        if let focused {
+            // Two windows of one app can stack within a few points of each other: the closest wins.
+            let distance: (Candidate) -> CGFloat = { candidate in
+                max(abs(candidate.bounds.minX - focused.minX), abs(candidate.bounds.minY - focused.minY),
+                    abs(candidate.bounds.width - focused.width), abs(candidate.bounds.height - focused.height))
+            }
+            if let match = eligible.filter({ distance($0) <= 4 }).min(by: { distance($0) < distance($1) }) {
+                return match.bounds
+            }
+        }
+        return eligible.first?.bounds
+    }
+
+    /// The app's focused window as Accessibility reports it, in CG (top-left) points. Nil without
+    /// the permission or when the app names none.
+    @MainActor
+    static func focusedWindowFrame(pid: pid_t) -> CGRect? {
+        guard AXIsProcessTrusted() else { return nil }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.3)
+        guard let window: AXUIElement = AXScrollActuator.attribute(app, kAXFocusedWindowAttribute) else { return nil }
+        return AXScrollActuator.frame(of: window)
+    }
+
     /// Resolves the actual active normal window from fresh WindowServer z-order. A display-sized
     /// non-normal surface is a narrow fallback for exclusive-fullscreen apps only.
     static func activeWindowID(

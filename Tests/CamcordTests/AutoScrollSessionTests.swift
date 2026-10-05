@@ -118,6 +118,28 @@ struct AutoScrollSessionTests {
         #expect(abs(image.height - page.height) <= 2, "captured \(image.height) of \(page.height) rows")
     }
 
+    @Test("auto waits for the shortcut's modifier keys to come up before its first step")
+    func waitsForModifierRelease() async throws {
+        let page = Page(height: 900, startingAt: 0)
+        var held = true
+        var updates = 0
+        let hooks = ScrollingCaptureSession.Hooks(
+            prepare: {}, capture: { _ in page.frame() }, update: { _, _ in updates += 1 }, actuator: page,
+            modifiersHeld: { held })
+        let session = ScrollingCaptureSession(region: CGRect(x: 0, y: 0, width: 40, height: 120), hooks: hooks)
+        let run = Task { await session.run() }
+        await waitUntil { updates >= 1 && session.readyForCaptureForTesting }
+        session.toggleAutoForTesting()
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(page.steps == 0, "no step while ⌘⇧ are still down")
+        held = false
+        guard case .completed(let image, _) = await run.value else {
+            Issue.record("auto must run once the keys are up"); return
+        }
+        #expect(page.offset == page.maxOffset)
+        #expect(abs(image.height - page.height) <= 2)
+    }
+
     @Test("with a scroll bar it jumps to the top in one step and still stops where the owner started")
     func jumpsToTheTop() async throws {
         let page = Page(height: 1_400, startingAt: 500, jumps: true)

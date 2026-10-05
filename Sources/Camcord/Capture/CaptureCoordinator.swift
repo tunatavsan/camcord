@@ -397,18 +397,19 @@ final class CaptureCoordinator {
         return CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: max(1, frame.height - corner))
     }
 
-    /// The focused window's frame, chosen the way the active-window shot chooses it: the
-    /// frontmost app's front normal window, never one of ours.
+    /// The focused window's frame: the one Accessibility names for the frontmost app, else its
+    /// front window big enough to scroll. Never one of ours, never a link-status bubble.
     private static func focusedWindowFrame() -> CGRect? {
-        guard let primaryHeight = NSScreen.screens.first?.frame.height else { return nil }
-        let ordered = WindowSnapper.currentCandidates()
-        let id = WindowSnapper.activeWindowID(
-            ordered: ordered,
-            frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
-            ownPID: ProcessInfo.processInfo.processIdentifier,
-            displayFrames: NSScreen.screens.map { Geometry.appKitToCG($0.frame, primaryScreenHeight: primaryHeight) }
-        )
-        return ordered.first { $0.windowID == id }?.bounds
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        let focused = frontmostPID.flatMap { $0 == ownPID ? nil : WindowSnapper.focusedWindowFrame(pid: $0) }
+        let target = WindowSnapper.scrollTarget(ordered: WindowSnapper.currentCandidates(),
+                                                frontmostPID: frontmostPID, ownPID: ownPID, focused: focused)
+        let describe: (CGRect?) -> String = { rect in
+            rect.map { "\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))x\(Int($0.height))" } ?? "none"
+        }
+        DiagnosticsLog.append("scroll target focused=\(describe(focused)) chosen=\(describe(target))")
+        return target
     }
 
     /// The SCDisplay whose frame contains the region's center.

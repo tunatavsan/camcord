@@ -125,6 +125,8 @@ final class ScrollingCaptureSession {
         var captureCompleted: () -> Void = {}
         /// Moves the scripted page for an auto scroll.
         var actuator: (any ScrollActuator)?
+        /// Whether a modifier key is down, which holds auto's first step.
+        var modifiersHeld: () -> Bool = { false }
     }
     private let region: CGRect
     private let display: SCDisplay?
@@ -364,11 +366,25 @@ final class ScrollingCaptureSession {
         autoTask = Task { @MainActor [weak self] in await self?.runAuto(run) }
     }
 
+    private func modifiersHeld() -> Bool {
+        if let hooks { return hooks.modifiersHeld() }
+        return !CGEventSource.flagsState(.hidSystemState)
+            .intersection([.maskShift, .maskCommand, .maskAlternate, .maskControl]).isEmpty
+    }
+
     private func autoAlive(_ run: Int) -> Bool {
         autoScrolling && autoGeneration == run && !finished && !finishing && !Task.isCancelled
     }
 
     private func runAuto(_ run: Int) async {
+        // Auto started from the shortcut begins while its keys may still be down, and a
+        // synthetic wheel event under ⇧ scrolls sideways (under ⌘ or ⌃ it can zoom): the page
+        // would not move and the run would end as if at the page end. Start once they are up.
+        let held = ContinuousClock.now
+        while modifiersHeld(), autoAlive(run), ContinuousClock.now - held < .seconds(3) {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        guard autoAlive(run) else { return }
         let actuator: any ScrollActuator
         if let scripted = hooks?.actuator { actuator = scripted }
         else if let bar = await AXScrollActuator.resolve(region: region) { actuator = bar }
