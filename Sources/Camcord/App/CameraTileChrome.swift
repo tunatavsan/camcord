@@ -76,12 +76,11 @@ import QuartzCore
 /// rows). One variable blur in the render server, so the blur keeps the content's own quality
 /// and never re-renders anything on the main thread.
 @MainActor final class ProgressiveBlurView: NSView {
-    /// Where the blur is heaviest: along the top edge, in a corner, or around a point (unit
-    /// coordinates, y up) out to `reach` of the veil's side. A round falloff always reaches
-    /// nothing inside the veil, so its square never shows.
-    /// `band` is the top edge's blur kept to the middle: heaviest along the edge, fading down, and
-    /// fading out toward both sides over `sideFade` of the width.
-    enum Edge: Equatable { case top, corner(CameraCorner), spot(CGPoint, reach: CGFloat), band(sideFade: CGFloat) }
+    /// Where the blur is heaviest: along the top edge, or in a corner, whose round falloff always
+    /// reaches nothing inside the veil, so its square never shows. `band` is the top edge's blur
+    /// kept to the middle: heaviest along the edge, fading down, and fading out toward both sides
+    /// over `sideFade` of the width.
+    enum Edge: Equatable { case top, corner(CameraCorner), band(sideFade: CGFloat) }
     var edge: Edge = .top { didSet { if edge != oldValue { refreshMask() } } }
     /// The surface's own outline in this view's coordinates, so the blur never spills past it.
     var outline: CGPath? { didSet { clipper.path = outline } }
@@ -161,9 +160,11 @@ import QuartzCore
         } else {
             scrim.mask = nil
         }
-        if let blur = backdrop?.filters?.first as? NSObject {
+        // A new filter each time: setting the mask on the filter already in place and handing the
+        // same filter back is not seen as a change, and the veil kept its first edge's falloff.
+        if let backdrop, let blur = Self.makeBlur() {
             blur.setValue(Self.mask(start: start, end: end, radial: radial, sideFade: sideFade), forKey: "inputMaskImage")
-            backdrop?.filters = [blur]
+            backdrop.filters = [blur]
         }
         CATransaction.commit()
     }
@@ -178,8 +179,6 @@ import QuartzCore
             let y: CGFloat = corner == .topLeft || corner == .topRight ? 1 : 0
             // Faded out by 0.8 of the side: the veil's other corners and far edges stay clear.
             return (CGPoint(x: x, y: y), CGPoint(x: x == 1 ? 0.2 : 0.8, y: y), true)
-        case .spot(let centre, let reach):
-            return (centre, CGPoint(x: centre.x, y: centre.y - reach), true)
         }
     }
 
@@ -235,16 +234,21 @@ import QuartzCore
     /// A backdrop layer with the system's variable blur, the one behind the toolbar's
     /// progressive edge. Without it the veil is the scrim alone.
     private static func makeBackdrop() -> CALayer? {
-        guard let layerClass = NSClassFromString("CABackdropLayer") as? CALayer.Type,
-              let filterClass = NSClassFromString("CAFilter") as? NSObject.Type,
+        guard let layerClass = NSClassFromString("CABackdropLayer") as? CALayer.Type, let blur = makeBlur() else { return nil }
+        let backdrop = layerClass.init()
+        backdrop.filters = [blur]
+        return backdrop
+    }
+
+    /// The system's variable blur, without its mask yet.
+    private static func makeBlur() -> NSObject? {
+        guard let filterClass = NSClassFromString("CAFilter") as? NSObject.Type,
               filterClass.responds(to: NSSelectorFromString("filterWithType:")),
               let blur = filterClass.perform(NSSelectorFromString("filterWithType:"), with: "variableBlur")?
                 .takeUnretainedValue() as? NSObject
         else { return nil }
         blur.setValue(radius, forKey: "inputRadius")
         blur.setValue(true, forKey: "inputNormalizeEdges")
-        let backdrop = layerClass.init()
-        backdrop.filters = [blur]
-        return backdrop
+        return blur
     }
 }

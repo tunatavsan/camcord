@@ -42,15 +42,15 @@ import QuartzCore
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = convert(point, from: superview)
         guard bounds.contains(local) else { return nil }
-        if CameraResizeGeometry.corner(at: local, in: bounds) != nil { return self }
-        if CameraResizeGeometry.pressClosesPreview(at: local, in: bounds) { return self }
+        if PinChromeGeometry.corner(at: local, in: bounds) != nil { return self }
+        if PinChromeGeometry.pressCloses(at: local, in: bounds) { return self }
         return nil
     }
 
     /// The resize cursor over a corner; nil elsewhere, where the capture decides.
     func cursor(atWindowPoint point: CGPoint) -> NSCursor? {
         let local = convert(point, from: nil)
-        if let corner = resizing ?? CameraResizeGeometry.corner(at: local, in: bounds) { return Self.cursor(for: corner) }
+        if let corner = resizing ?? PinChromeGeometry.corner(at: local, in: bounds) { return Self.cursor(for: corner) }
         return nil
     }
 
@@ -82,7 +82,7 @@ import QuartzCore
     private func track(_ event: NSEvent) {
         pointer = convert(event.locationInWindow, from: nil)
         guard resizing == nil, let pointer else { updateGlow(); return }
-        indicate(CameraResizeGeometry.hotspot(at: pointer, in: bounds))
+        indicate(PinChromeGeometry.hotspot(at: pointer, in: bounds))
     }
     override func mouseEntered(with event: NSEvent) { track(event) }
     override func mouseMoved(with event: NSEvent) { track(event) }
@@ -94,14 +94,14 @@ import QuartzCore
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         // The × closes on mouse-down, as the camera's does: no drag can start from under it.
-        if CameraResizeGeometry.corner(at: point, in: bounds) == nil,
-           CameraResizeGeometry.pressClosesPreview(at: point, in: bounds) {
+        if PinChromeGeometry.corner(at: point, in: bounds) == nil,
+           PinChromeGeometry.pressCloses(at: point, in: bounds) {
             closedOnDown = true
             indicate(nil)
             onClose?()
             return
         }
-        guard let corner = CameraResizeGeometry.corner(at: point, in: bounds) else { return }
+        guard let corner = PinChromeGeometry.corner(at: point, in: bounds) else { return }
         resizing = corner
         indicate(.resize(corner))
         Self.cursor(for: corner).set()
@@ -158,10 +158,10 @@ import QuartzCore
     /// or while it resizes.
     private func updateGlow() {
         let overClose = indicated == .close && pointer.map { point in
-            CameraResizeGeometry.closeButtonRect(in: bounds)?.contains(point) ?? false
+            PinChromeGeometry.closePressRect(in: bounds)?.contains(point) ?? false
         } == true
         closeChip.setGlowing(overClose, reduceMotion: reduceMotion)
-        let chip = CameraResizeGeometry.resizeChipFrame(chromeCorner, in: bounds).insetBy(dx: -4, dy: -4)
+        let chip = PinChromeGeometry.chipFrame(chromeCorner, in: bounds).insetBy(dx: -4, dy: -4)
         let active = indicated?.corner != nil && (resizing != nil || pointer.map { chip.contains($0) } == true)
         for resize in [resizeChipDown, resizeChipUp] { resize.setGlowing(active && resize.isShown, reduceMotion: reduceMotion) }
     }
@@ -173,7 +173,7 @@ import QuartzCore
             var shift = CGAffineTransform(translationX: -frame.minX, y: -frame.minY)
             return outline.copy(using: &shift)
         }
-        if let circle = CameraResizeGeometry.closeFrame(in: bounds) {
+        if let circle = PinChromeGeometry.closeFrame(in: bounds) {
             closeChip.isHidden = false
             closeChip.frame = circle
             // The × sits on the top edge's own blur: heaviest along the edge, gone a little below the
@@ -187,13 +187,93 @@ import QuartzCore
             closeChip.isHidden = true
         }
         let corner = chromeCorner
-        let chip = CameraResizeGeometry.resizeChipFrame(corner, in: bounds)
+        let chip = PinChromeGeometry.chipFrame(corner, in: bounds)
         resizeChipDown.frame = chip
         resizeChipUp.frame = chip
-        // Only around the chip: a small round blur centred on it, gone before the veil's edges.
-        let side = min(min(bounds.width, bounds.height) * 0.6, chip.width * 2.8)
-        cornerVeil.frame = CGRect(x: chip.midX - side / 2, y: chip.midY - side / 2, width: side, height: side)
-        cornerVeil.edge = .spot(CGPoint(x: 0.5, y: 0.5), reach: 0.48)
+        // The corner's own blur, as the × has the edge's: heaviest in the corner itself, still
+        // soft under the chip, gone a little past it, so it never floats as a patch of its own.
+        let side = PinChromeGeometry.cornerVeilSide(in: bounds)
+        let right = corner == .topRight || corner == .bottomRight
+        let top = corner == .topLeft || corner == .topRight
+        cornerVeil.frame = CGRect(x: right ? bounds.maxX - side : bounds.minX, y: top ? bounds.maxY - side : bounds.minY,
+                                  width: side, height: side)
+        cornerVeil.edge = .corner(corner)
         cornerVeil.outline = clipped(to: cornerVeil.frame)
+    }
+}
+
+/// Where the pin's buttons stand. Unlike the camera's, whose corner grows with its size, a pin's
+/// corner is the well's small fixed one, so its chips keep the same place in from each corner at
+/// every size, and so does the blur behind them.
+enum PinChromeGeometry {
+    /// From the pin's edges to its buttons.
+    static let inset: CGFloat = 10
+
+    static func chipDiameter(in bounds: CGRect) -> CGFloat {
+        min(26, max(20, min(bounds.width, bounds.height) * 0.12))
+    }
+
+    /// The square in a corner that reveals its chip and resizes from it.
+    static func cornerZone(_ corner: CameraCorner, in bounds: CGRect) -> CGRect {
+        let extent = min(52, bounds.width * 0.3, bounds.height * 0.4)
+        let right = corner == .topRight || corner == .bottomRight
+        let top = corner == .topLeft || corner == .topRight
+        return CGRect(x: right ? bounds.maxX - extent : bounds.minX, y: top ? bounds.maxY - extent : bounds.minY,
+                      width: extent, height: extent)
+    }
+
+    static func corner(at point: CGPoint, in bounds: CGRect) -> CameraCorner? {
+        CameraCorner.allCases.first { cornerZone($0, in: bounds).contains(point) }
+    }
+
+    static func chipFrame(_ corner: CameraCorner, in bounds: CGRect) -> CGRect {
+        let d = chipDiameter(in: bounds)
+        let right = corner == .topRight || corner == .bottomRight
+        let top = corner == .topLeft || corner == .topRight
+        return CGRect(x: right ? bounds.maxX - inset - d : bounds.minX + inset,
+                      y: top ? bounds.maxY - inset - d : bounds.minY + inset, width: d, height: d)
+    }
+
+    /// The side of the corner's blur: enough to lie soft under the chip and fade out past it.
+    static func cornerVeilSide(in bounds: CGRect) -> CGFloat {
+        min(min(bounds.width, bounds.height) * 0.45, (inset + chipDiameter(in: bounds)) * 2.6)
+    }
+
+    /// The ×, centred on the top edge; nil when the pin is too small to keep it clear of the corners.
+    static func closeFrame(in bounds: CGRect) -> CGRect? {
+        let d = chipDiameter(in: bounds)
+        let corners = cornerZone(.topLeft, in: bounds).width
+        guard bounds.width - 2 * corners >= d + 8, bounds.height >= d * 3 else { return nil }
+        return CGRect(x: bounds.midX - d / 2, y: bounds.maxY - inset - d, width: d, height: d)
+    }
+
+    /// What a press on the × counts as: the circle and a little around it.
+    static func closePressRect(in bounds: CGRect) -> CGRect? {
+        closeFrame(in: bounds).map { $0.insetBy(dx: -max(4, $0.width * 0.18), dy: -max(4, $0.width * 0.18)) }
+    }
+
+    /// What reveals the ×: the top middle, up to the edge, clear of the corners.
+    static func closeRevealRect(in bounds: CGRect) -> CGRect? {
+        guard let circle = closeFrame(in: bounds) else { return nil }
+        let pad = max(14, circle.width * 0.6)
+        let zone = CGRect(x: circle.minX - pad, y: circle.minY - pad, width: circle.width + pad * 2,
+                          height: bounds.maxY - circle.minY + pad)
+        let corners = cornerZone(.topLeft, in: bounds).width
+        let free = CGRect(x: bounds.minX + corners, y: bounds.minY, width: max(0, bounds.width - 2 * corners), height: bounds.height)
+        let clipped = zone.intersection(free)
+        return clipped.isNull ? nil : clipped
+    }
+
+    /// What the pointer is over: a corner first, then the ×.
+    static func hotspot(at point: CGPoint, in bounds: CGRect) -> CameraHotspot? {
+        if let corner = corner(at: point, in: bounds) { return .resize(corner) }
+        if let reveal = closeRevealRect(in: bounds), reveal.contains(point) { return .close }
+        return nil
+    }
+
+    /// Whether a press at `point` closes the pin: only on the × itself.
+    static func pressCloses(at point: CGPoint, in bounds: CGRect) -> Bool {
+        guard corner(at: point, in: bounds) == nil, let button = closePressRect(in: bounds) else { return false }
+        return button.contains(point)
     }
 }

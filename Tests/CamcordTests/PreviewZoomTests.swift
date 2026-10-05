@@ -93,7 +93,7 @@ struct PinChromeTests {
         #expect(chrome.hitTest(CGPoint(x: 6, y: 6)) === chrome)
         #expect(chrome.hitTest(CGPoint(x: 474, y: 314)) === chrome)
         #expect(chrome.hitTest(CGPoint(x: 240, y: 160)) == nil)
-        let close = CameraResizeGeometry.closeFrame(in: chrome.bounds)!
+        let close = PinChromeGeometry.closeFrame(in: chrome.bounds)!
         #expect(chrome.hitTest(CGPoint(x: close.midX, y: close.midY)) === chrome)
     }
 
@@ -105,7 +105,7 @@ struct PinChromeTests {
         band.layoutSubtreeIfNeeded()
         let frames = band.buttons.map(\.frame)
         #expect(abs((frames.first!.minX + frames.last!.maxX) / 2 - 240) <= 1)
-        let corner = CameraResizeGeometry.hitRect(.bottomLeft, in: CGRect(x: 0, y: 0, width: 480, height: 320))
+        let corner = PinChromeGeometry.cornerZone(.bottomLeft, in: CGRect(x: 0, y: 0, width: 480, height: 320))
         #expect(frames.first!.minX >= corner.maxX)
     }
 }
