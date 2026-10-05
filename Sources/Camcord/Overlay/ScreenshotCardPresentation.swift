@@ -182,6 +182,30 @@ struct ScreenshotCardGeometry {
         CATransaction.commit()
         if entering { well.badge.pop(after: reduceMotion ? 0 : 0.18, reduceMotion: reduceMotion) }
     }
+    /// Leaves without travelling: it fades and settles a little smaller, for a card making room.
+    func fadeAway(completion: @escaping @MainActor () -> Void) {
+        guard let layer = surface.layer else { completion(); return }
+        let centre = CGPoint(x: layer.bounds.width * (0.5 - layer.anchorPoint.x), y: layer.bounds.height * (0.5 - layer.anchorPoint.y))
+        let smaller = CATransform3DConcat(CATransform3DConcat(CATransform3DMakeTranslation(-centre.x, -centre.y, 0),
+                                                              CATransform3DMakeScale(0.94, 0.94, 1)),
+                                          CATransform3DMakeTranslation(centre.x, centre.y, 0))
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        CATransaction.setCompletionBlock { MainActor.assumeIsolated { completion() } }
+        let from = layer.presentation()?.opacity ?? layer.opacity
+        layer.opacity = 0
+        layer.transform = smaller
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = from; fade.toValue = 0; fade.duration = 0.22
+        fade.timingFunction = CAMediaTimingFunction(name: .easeIn)
+        layer.add(fade, forKey: "card-fade-away")
+        let settle = CABasicAnimation(keyPath: "transform")
+        settle.fromValue = NSValue(caTransform3D: CATransform3DIdentity); settle.toValue = NSValue(caTransform3D: smaller)
+        settle.duration = 0.22
+        settle.timingFunction = CAMediaTimingFunction(name: .easeIn)
+        layer.add(settle, forKey: "card-settle-away")
+        CATransaction.commit()
+    }
     /// While its capture flies in, the card waits unseen, its own image of the capture hidden.
     func awaitFlight() {
         CATransaction.begin(); CATransaction.setDisableActions(true)
@@ -228,19 +252,6 @@ struct ScreenshotCardGeometry {
             self.well.badge.pop(after: 0.08, reduceMotion: false)
             completion()
         }
-    }
-    func reposition(from oldFrame: CGRect, to newFrame: CGRect, reduceMotion: Bool) {
-        reducedMotion = reduceMotion
-        guard !reduceMotion, oldFrame != newFrame, let layer = surface.layer else { return }
-        // The window changes its logical anchor immediately; the persistent body preserves continuity.
-        let previous = (layer.presentation()?.value(forKeyPath: "transform.translation.y") as? CGFloat) ?? 0
-        let delta = oldFrame.minY - newFrame.minY + previous
-        CATransaction.begin(); CATransaction.setDisableActions(true)
-        layer.setValue(0, forKeyPath: "transform.translation.y")
-        let animation = Theme.Motion.interactionSpring(keyPath: "transform.translation.y", from: delta, to: 0)
-        animation.preferFullRefreshRate(on: window?.screen)
-        layer.add(animation, forKey: "card-reflow")
-        CATransaction.commit()
     }
     private func pan(_ translation: CGPoint, velocity: CGPoint, ended: Bool, cancelled: Bool) {
         guard alive, let layer = surface.layer else { return }

@@ -230,7 +230,10 @@ import UniformTypeIdentifiers
         let finish: @MainActor () -> Void = { [entry, timing] in
             entry.window.orderOut(nil); entry.orderedOutAt = timing.now()
         }
-        if animated { animator(entry.host, false, reduceMotion(), finish) } else { finish() }
+        if reason == "evicted", !usesFixtureFrame, !reduceMotion() {
+            // The oldest card makes room: it fades and sinks a little while the others close up.
+            entry.host.fadeAway(completion: finish)
+        } else if animated { animator(entry.host, false, reduceMotion(), finish) } else { finish() }
     }
     private func reflow() {
         let displays = Set(entries.map { ScreenshotCardDisplayFrame($0.visibleFrame) })
@@ -240,9 +243,20 @@ import UniformTypeIdentifiers
             var y = display.frame.minY
             for entry in entries where entry.visibleFrame == display.frame {
                 let frame = CGRect(x: display.frame.maxX - size.width, y: y, width: size.width, height: size.height)
-                entry.host.reposition(from: entry.window.frame, to: frame, reduceMotion: reduceMotion())
-                entry.window.setFrame(frame, display: true)
                 y += step
+                guard entry.window.frame != frame else { continue }
+                // A card still arriving simply takes its place. One already up moves as a whole
+                // window: moving its content inside the old window clipped it at the edge.
+                guard !usesFixtureFrame, !reduceMotion(), entry.enteredAt != nil else {
+                    entry.window.setFrame(frame, display: true)
+                    continue
+                }
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.42
+                    context.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1)
+                    context.allowsImplicitAnimation = true
+                    entry.window.animator().setFrame(frame, display: true)
+                }
             }
         }
     }
