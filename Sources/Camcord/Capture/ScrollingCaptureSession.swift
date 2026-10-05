@@ -480,11 +480,14 @@ final class ScrollingCaptureSession {
     /// what remains, and the frame it lands on is checked against the one the owner started from.
     private func descend(_ actuator: any ScrollActuator, to boundary: Boundary?, run: Int) async {
         // Steps are a share of what actually scrolls: the region less its fixed bands. Small
-        // until the stitch has found those bands, then longer.
-        let cruise: CGFloat = actuator.route == "ax" ? 0.6 : 0.5
+        // until the stitch has found those bands, then long: a quarter to a third of the view
+        // still overlaps, far more than a match needs, and every step saved is a capture saved.
+        let cruise: CGFloat = actuator.route == "ax" ? 0.75 : 0.7
         var share: CGFloat = 0.35
         var descended: CGFloat = 0
         var stalls = 0
+        /// The last move fell short of the step: the page end stopped it.
+        var cutShort = false
         var verified = false
         var searching = false
         for _ in 0..<Self.maxAutoSteps {
@@ -518,8 +521,9 @@ final class ScrollingCaptureSession {
             guard autoAlive(run), let measured else { return }
             if measured.still {
                 stalls += 1
-                if stalls >= 2 { finishAuto(reason: "page-end"); return }
-                // A page may still be loading what comes next.
+                // After a short move the end is known; otherwise a page may still be loading
+                // what comes next.
+                if cutShort || stalls >= 2 { finishAuto(reason: cutShort ? "page-end-short" : "page-end"); return }
                 try? await Task.sleep(for: .milliseconds(900))
                 continue
             }
@@ -532,6 +536,7 @@ final class ScrollingCaptureSession {
                 stalls = 0
                 verified = true
                 descended += CGFloat(pixels) / scale
+                cutShort = CGFloat(pixels) / scale < length * 0.85
                 if outcome == .appended { share = max(share, cruise) }
             case .up:
                 // Before the first measured advance this can only be a wheel running the other way.
