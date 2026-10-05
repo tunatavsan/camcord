@@ -10,7 +10,7 @@ enum ScreenshotCardBlur {
     }
     /// Gaussian sigmas, in points, of the band's stacked levels, lightest first: six small
     /// steps read as one continuous, progressive blur.
-    static let levelSigmas: [CGFloat] = [1.5, 3, 5, 8, 12, 18]
+    static let levelSigmas: [CGFloat] = [1, 2, 3.5, 5.5, 8, 11]
     private static let context = CIContext(options: [.cacheIntermediates: false])
 
     static func render(_ image: CGImage, imageRect: CGRect, wellSize: CGSize, scale: CGFloat) async -> Rendered {
@@ -80,6 +80,11 @@ enum ScreenshotCardBlur {
     required init?(coder: NSCoder) { nil }
 
     func setBlurLevels(_ images: [CGImage]) { veil.setLevels(images) }
+    /// Whether the blur behind the buttons shows; the scrim stays either way.
+    var showsBlur: Bool {
+        get { veil.showsLevels }
+        set { veil.showsLevels = newValue }
+    }
 
     func setRevealed(_ revealed: Bool, reduceMotion: Bool) {
         self.reduceMotion = reduceMotion
@@ -110,6 +115,7 @@ enum ScreenshotCardBlur {
         for (index, button) in buttons.enumerated() {
             button.frame = CGRect(x: first + CGFloat(index) * step, y: 7, width: side, height: side)
         }
+        veil.setButtonSpan(buttons.isEmpty ? nil : first...(first + span))
     }
 
     private func rebuild() {
@@ -131,6 +137,12 @@ enum ScreenshotCardBlur {
 
 /// The band's backdrop: stacked blur levels and a scrim, revealed by a mask that rises from the bottom.
 private final class ScreenshotCardVeil: NSView {
+    /// Keeps the blur to the buttons: it fades out sideways a little past them.
+    private let span = CALayer()
+    private let sideways = CAGradientLayer()
+    private var buttonSpan: ClosedRange<CGFloat>?
+    /// The levels are drawn from the capture at its first size; a zoomed capture shows only the scrim.
+    var showsLevels = true { didSet { for level in levels { level.isHidden = !showsLevels } } }
     private let veil = CALayer()
     private let rise = CAGradientLayer()
     private let scrim = CAGradientLayer()
@@ -146,11 +158,14 @@ private final class ScreenshotCardVeil: NSView {
         rise.colors = [NSColor.black.cgColor, NSColor.black.cgColor, NSColor.clear.cgColor]
         rise.locations = [0, 0.5, 1]
         scrim.startPoint = CGPoint(x: 0.5, y: 0); scrim.endPoint = CGPoint(x: 0.5, y: 1)
-        scrim.colors = [NSColor.black.withAlphaComponent(0.3).cgColor, NSColor.black.withAlphaComponent(0.12).cgColor,
+        scrim.colors = [NSColor.black.withAlphaComponent(0.22).cgColor, NSColor.black.withAlphaComponent(0.08).cgColor,
                         NSColor.clear.cgColor]
         scrim.locations = [0, 0.4, 0.9]
         veil.addSublayer(scrim)
-        layer?.addSublayer(veil)
+        sideways.startPoint = CGPoint(x: 0, y: 0.5); sideways.endPoint = CGPoint(x: 1, y: 0.5)
+        span.mask = sideways
+        span.addSublayer(veil)
+        layer?.addSublayer(span)
     }
     required init?(coder: NSCoder) { nil }
 
@@ -162,6 +177,7 @@ private final class ScreenshotCardVeil: NSView {
         let stops: [(solid: Double, clear: Double)] = [(0.7, 1), (0.58, 0.88), (0.46, 0.76), (0.34, 0.64), (0.22, 0.52), (0.1, 0.4)]
         levels = zip(images, stops).map { image, stop in
             let level = CALayer()
+            level.isHidden = !showsLevels
             level.contents = image
             level.contentsGravity = .resize
             let mask = CAGradientLayer()
@@ -207,9 +223,25 @@ private final class ScreenshotCardVeil: NSView {
         CATransaction.commit()
     }
 
+    /// Where the buttons stand, in this view's coordinates.
+    func setButtonSpan(_ span: ClosedRange<CGFloat>?) {
+        buttonSpan = span
+        needsLayout = true
+    }
+
     override func layout() {
         super.layout()
         CATransaction.begin(); CATransaction.setDisableActions(true)
+        span.frame = bounds
+        sideways.frame = bounds
+        let width = max(1, bounds.width), fade: CGFloat = 36
+        let lower = buttonSpan.map { max(0, $0.lowerBound - 10) } ?? 0
+        let upper = buttonSpan.map { min(width, $0.upperBound + 10) } ?? width
+        // Solid over the buttons, clear a fade's width beyond them; an edge the buttons reach stays solid.
+        let stops = [lower <= 1 ? 0 : max(0, lower - fade), lower, upper, upper >= width - 1 ? width : min(width, upper + fade)]
+        sideways.colors = [lower <= 1 ? NSColor.black.cgColor : NSColor.clear.cgColor, NSColor.black.cgColor,
+                           NSColor.black.cgColor, upper >= width - 1 ? NSColor.black.cgColor : NSColor.clear.cgColor]
+        sideways.locations = stops.map { NSNumber(value: Double($0 / width)) }
         veil.frame = bounds
         scrim.frame = bounds
         for level in levels { level.frame = bounds; level.mask?.frame = bounds }

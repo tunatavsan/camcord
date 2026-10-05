@@ -171,8 +171,11 @@ import QuartzCore
         if let circle = CameraResizeGeometry.closeFrame(in: bounds) {
             closeChip.isHidden = false
             closeChip.frame = circle
-            let band = min(bounds.height * 0.5, bounds.maxY - circle.minY + circle.height * 0.9)
-            topVeil.frame = CGRect(x: bounds.minX, y: bounds.maxY - band, width: bounds.width, height: band)
+            // Only around the ×: a small round blur, heaviest under it, gone a little way out.
+            let side = min(bounds.height * 0.6, circle.width * 3.4)
+            let veil = CGRect(x: circle.midX - side / 2, y: bounds.maxY - side, width: side, height: side)
+            topVeil.frame = veil
+            topVeil.edge = .spot(CGPoint(x: 0.5, y: (circle.midY - veil.minY) / side), reach: 0.5)
             topVeil.outline = clipped(to: topVeil.frame)
         } else {
             closeChip.isHidden = true
@@ -184,7 +187,7 @@ import QuartzCore
         let right = corner == .topRight || corner == .bottomRight
         let top = corner == .topLeft || corner == .topRight
         let reach = right ? bounds.maxX - chip.minX : chip.maxX - bounds.minX
-        let side = min(min(bounds.width, bounds.height) * 0.62, reach * 1.9)
+        let side = min(min(bounds.width, bounds.height) * 0.45, reach * 1.5)
         cornerVeil.frame = CGRect(x: right ? bounds.maxX - side : bounds.minX,
                                   y: top ? bounds.maxY - side : bounds.minY, width: side, height: side)
         cornerVeil.edge = .corner(corner)

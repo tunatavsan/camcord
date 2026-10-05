@@ -99,6 +99,9 @@ struct PreviewZoomGeometry: Equatable {
     /// The zoom a pinch asks for, before it gives way at the limits.
     private var pinch: CGFloat?
     var canInteract: @MainActor () -> Bool = { true }
+    /// Told when the capture goes from whole to zoomed, or back.
+    var onZoomedChange: ((Bool) -> Void)?
+    private var reportedZoomed = false
     var isZoomed: Bool { geometry.zoom > 1.001 }
     static let tile = 4_096
 
@@ -176,6 +179,7 @@ struct PreviewZoomGeometry: Equatable {
         } else {
             CATransaction.setDisableActions(true)
         }
+        if isZoomed != reportedZoomed { reportedZoomed = isZoomed; onZoomedChange?(isZoomed) }
         let scale = shown.width / size.width
         picture.position = shown.origin
         picture.transform = CATransform3DMakeScale(scale, scale, 1)

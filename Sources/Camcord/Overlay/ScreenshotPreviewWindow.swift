@@ -207,6 +207,8 @@ private final class ScreenshotPreviewPanel: NSPanel {
         zoom.frame = well.bounds
         zoom.autoresizingMask = [.width, .height]
         zoom.canInteract = { [weak model] in model?.isAlive == true }
+        // The band's blur is drawn from the capture whole; zoomed in, only its scrim stays.
+        zoom.onZoomedChange = { [weak well] zoomed in well?.band.showsBlur = !zoomed }
         zoom.setAccessibilityHelp(String(localized: "Pinch or double-click to zoom; drag to move around"))
         well.addSubview(zoom, positioned: .above, relativeTo: image)
         // The camera's × and resize corners stand in for the card's corner ×; the actions keep

@@ -76,7 +76,9 @@ import QuartzCore
 /// rows). One variable blur in the render server, so the blur keeps the content's own quality
 /// and never re-renders anything on the main thread.
 @MainActor final class ProgressiveBlurView: NSView {
-    enum Edge: Equatable { case top, corner(CameraCorner) }
+    /// Where the blur is heaviest: along the top edge, in a corner, or around a point (unit
+    /// coordinates, y up) out to `reach` of the veil's side.
+    enum Edge: Equatable { case top, corner(CameraCorner), spot(CGPoint, reach: CGFloat) }
     var edge: Edge = .top { didSet { if edge != oldValue { refreshMask() } } }
     /// The surface's own outline in this view's coordinates, so the blur never spills past it.
     var outline: CGPath? { didSet { clipper.path = outline } }
@@ -85,7 +87,7 @@ import QuartzCore
     private let clipper = CAShapeLayer()
     private(set) var shown = false
     /// The heaviest blur, at the edge; it falls to none across the veil.
-    static let radius: CGFloat = 14
+    static let radius: CGFloat = 11
 
     override init(frame frameRect: NSRect) {
         backdrop = Self.makeBackdrop()
@@ -157,6 +159,9 @@ import QuartzCore
             let y: CGFloat = corner == .topLeft || corner == .topRight ? 1 : 0
             // A radial gradient's end point sets its radius: the full side of the square veil.
             return (CGPoint(x: x, y: y), CGPoint(x: x == 1 ? 0 : 1, y: y == 1 ? 0 : 1), true)
+        case .spot(let centre, let reach):
+            // The radial mask's radius is the start-to-end distance over √2 of the veil's side.
+            return (centre, CGPoint(x: centre.x, y: centre.y - reach * 2.squareRoot()), true)
         }
     }
 
