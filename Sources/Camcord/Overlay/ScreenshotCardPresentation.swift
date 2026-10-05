@@ -48,6 +48,8 @@ struct ScreenshotCardGeometry {
     private var observers: Set<AnyCancellable> = []
     private var alive = true
     private var hovering = false
+    /// Where the pointer is over the capture, so the actions come up only near them.
+    private var pointer: CGPoint?
     private var reducedMotion = false
     private var tracking: NSTrackingArea?
     private(set) var animationDuration: TimeInterval = 0
@@ -120,7 +122,7 @@ struct ScreenshotCardGeometry {
         guard alive else { return }
         updateBadge()
         well.band.isEnabled = !busy
-        well.setHovering(hovering, busy: busy, reduceMotion: reducedMotion)
+        well.setHovering(hovering, at: pointer, busy: busy, reduceMotion: reducedMotion)
     }
     override func layout() {
         super.layout()
@@ -129,20 +131,24 @@ struct ScreenshotCardGeometry {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: cardRect, options: [.mouseEnteredAndExited, .activeAlways], owner: self, userInfo: nil)
+        let area = NSTrackingArea(rect: cardRect, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways], owner: self, userInfo: nil)
         tracking = area; addTrackingArea(area)
     }
-    override func mouseEntered(with event: NSEvent) { setHovering(true) }
+    override func mouseEntered(with event: NSEvent) { setHovering(true, at: event.locationInWindow) }
+    override func mouseMoved(with event: NSEvent) { setHovering(true, at: event.locationInWindow) }
     override func mouseExited(with event: NSEvent) { setHovering(false) }
     func reconcileHover(at screenPoint: CGPoint) {
         guard alive, let window else { return }
-        setHovering(cardRect.contains(convert(window.convertPoint(fromScreen: screenPoint), from: nil)))
+        let point = window.convertPoint(fromScreen: screenPoint)
+        setHovering(cardRect.contains(convert(point, from: nil)), at: point)
     }
-    private func setHovering(_ active: Bool) {
+    /// - Parameter windowPoint: where the pointer is, in window coordinates.
+    private func setHovering(_ active: Bool, at windowPoint: CGPoint? = nil) {
         guard alive else { return }
         hovering = active
         onPause?(.hover, active)
-        well.setHovering(active, busy: model.isBusy, reduceMotion: reducedMotion)
+        pointer = active ? windowPoint.map { well.convert($0, from: nil) } : nil
+        well.setHovering(active, at: pointer, busy: model.isBusy, reduceMotion: reducedMotion)
     }
     override func cancelOperation(_ sender: Any?) { if alive { onDismiss?("escape") } }
     func invalidate() {
@@ -202,7 +208,7 @@ struct ScreenshotCardGeometry {
         fade.fromValue = 0; fade.toValue = 1; fade.duration = 0.1
         layer.add(fade, forKey: "card-land-fade")
         let open = CASpringAnimation.card(keyPath: "transform", from: NSValue(caTransform3D: small),
-                                          to: NSValue(caTransform3D: CATransform3DIdentity), response: 0.38, dampingRatio: 0.9)
+                                          to: NSValue(caTransform3D: CATransform3DIdentity), response: 0.32, dampingRatio: 0.9)
         open.preferFullRefreshRate(on: window?.screen)
         layer.add(open, forKey: "card-land")
         animationDuration = open.duration
@@ -328,8 +334,13 @@ private final class ScreenshotCardContent: NSView {
         }
     }
     required init?(coder: NSCoder) { nil }
-    func setHovering(_ hovering: Bool, busy: Bool, reduceMotion: Bool) {
-        band.setRevealed(hovering || busy, reduceMotion: reduceMotion)
+    /// The actions come up only when the pointer reaches the lower part of the capture, where
+    /// they stand, and stay while it remains near them; the close button comes with any hover.
+    /// Without a point (an old hover replayed), any hover counts.
+    func setHovering(_ hovering: Bool, at point: CGPoint? = nil, busy: Bool, reduceMotion: Bool) {
+        let reach = ScreenshotCardGeometry.band + (band.revealed ? 56 : 20)
+        let nearActions = hovering && (point.map { $0.y <= reach } ?? true)
+        band.setRevealed(nearActions || busy, reduceMotion: reduceMotion)
         closeButton.setRevealed(hovering, reduceMotion: reduceMotion)
     }
     private func apply(_ rendered: ScreenshotCardBlur.Rendered) {

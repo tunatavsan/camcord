@@ -3,21 +3,21 @@ import QuartzCore
 
 /// The moment a screenshot is taken. The capture appears over the very place it was taken and
 /// the glass light draws around it, as it does around a scroll capture: the line runs from the
-/// top centre down both sides and a thin streak of light runs across, as over glass; nothing
-/// whitens the capture. Then it glides on a gentle curve into the corner and waits there while
+/// top centre down both sides and blinks where its ends meet; nothing crosses or whitens the
+/// capture. Then it glides on a gentle curve into the corner and waits there while
 /// its card's tray opens out from behind it, and only then hands over. It lives in its own
 /// click-through panel above the card.
 @MainActor enum CaptureFlight {
     private static var panels: [NSPanel] = []
 
     /// How long the light holds the capture in place before it leaves.
-    static let hold: CFTimeInterval = 0.42
+    static let hold: CFTimeInterval = 0.3
     /// The glide into the card.
-    static let glide: CFTimeInterval = 0.56
+    static let glide: CFTimeInterval = 0.42
     /// When the card's tray starts to open behind the capture, from now: as it lands.
     static var landing: CFTimeInterval { hold + glide - 0.06 }
     /// How long the capture waits on the card for its tray to open before it hands over.
-    static let wait: CFTimeInterval = 0.34
+    static let wait: CFTimeInterval = 0.26
 
     /// - Parameters: source and target in global AppKit points; target is where the card shows
     ///   the capture.
@@ -65,10 +65,10 @@ import QuartzCore
         photo.cornerRadius = radius
         carrier.addSublayer(photo)
         // The light sits just inside the capture's edge, so a whole screen shows all of it.
-        let ring = LitRing(sheen: .glint, flarePeak: 0.7)
+        let ring = LitRing(flarePeak: 0.7)
         ring.layer.frame = carrier.bounds
         let inset = LitRing.lineWidth
-        ring.set(ring: carrier.bounds.insetBy(dx: inset, dy: inset), radius: 0, area: carrier.bounds, areaRadius: 0)
+        ring.set(ring: carrier.bounds.insetBy(dx: inset, dy: inset), radius: 0)
         carrier.addSublayer(ring.layer)
         root.addSublayer(carrier)
 

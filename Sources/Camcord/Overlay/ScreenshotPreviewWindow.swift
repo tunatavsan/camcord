@@ -70,6 +70,9 @@ struct ScreenshotPreviewGeometry {
     let host: ScreenshotPreviewHost
     private let model: ScreenshotCardModel
     private var closed = false
+    /// Pinches and two-finger double taps over the pin, wherever the system sends them.
+    private var gestureMonitors: [Any] = []
+    private var lastGestureSource: String?
 
     init(capture: CapturedScreenshot, operations: ScreenshotCardModel.Operations, visible: CGRect,
          claim: (@MainActor () -> (@MainActor () -> Bool))?, canEdit: Bool, pinned: Bool = false, from: CGRect? = nil) {
@@ -105,11 +108,52 @@ struct ScreenshotPreviewGeometry {
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(host)
         host.animateIn(from: card)
+        installGestureMonitors()
+    }
+
+    /// A pin floats over other apps without taking their focus, and the trackpad's pinch goes to
+    /// the app in front, not to the window under the fingers. Any pinch or smart zoom made over
+    /// the pin is the pin's: ours is taken before AppKit routes it elsewhere, another app's is
+    /// read as it passes.
+    private func installGestureMonitors() {
+        let kinds: NSEvent.EventTypeMask = [.magnify, .smartMagnify]
+        if let local = NSEvent.addLocalMonitorForEvents(matching: kinds, handler: { [weak self] event in
+            guard let self, self.isUnderPointer else { return event }
+            self.zoom(with: event, source: "local")
+            return nil
+        }) { gestureMonitors.append(local) }
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: kinds, handler: { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self, self.isUnderPointer else { return }
+                self.zoom(with: event, source: "global")
+            }
+        }) { gestureMonitors.append(global) }
+    }
+
+    /// The pin is the topmost window under the pointer.
+    private var isUnderPointer: Bool {
+        guard !closed, panel.isVisible else { return false }
+        return NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0) == panel.windowNumber
+    }
+
+    private func zoom(with event: NSEvent, source: String) {
+        if lastGestureSource != source || event.phase == .began {
+            lastGestureSource = source
+            DiagnosticsLog.append("pin gesture source=\(source) type=\(event.type.rawValue) phase=\(event.phase.rawValue)")
+        }
+        let location = host.zoom.convert(panel.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
+        switch event.type {
+        case .magnify: host.zoom.pinch(by: event.magnification, at: location, phase: event.phase)
+        case .smartMagnify: host.zoom.toggleCloser(at: location)
+        default: break
+        }
     }
 
     func close(animated: Bool) {
         guard !closed else { return }
         closed = true
+        for monitor in gestureMonitors { NSEvent.removeMonitor(monitor) }
+        gestureMonitors = []
         model.invalidate()
         host.invalidate()
         panel.delegate = nil
@@ -153,7 +197,7 @@ private final class ScreenshotPreviewPanel: NSPanel {
     /// The capture, zoomable; it stands in for the well's still image.
     let zoom: ScreenshotPreviewZoom
     /// The glass light that draws around the tray as it arrives.
-    private let ring = LitRing(sheen: .none, flarePeak: 0.8)
+    private let ring = LitRing(flarePeak: 0.8)
     /// The camera's buttons over the capture: the × at the top, a resize chip in each corner.
     private let chrome = PinChrome()
     private var surfaceRect: CGRect { bounds.insetBy(dx: ScreenshotPreviewGeometry.shadowInset, dy: ScreenshotPreviewGeometry.shadowInset) }
@@ -274,9 +318,7 @@ private final class ScreenshotPreviewPanel: NSPanel {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         ring.layer.frame = tray
         CATransaction.commit()
-        let inset = ScreenshotPreviewGeometry.ring
-        ring.set(ring: tray.insetBy(dx: 1, dy: 1), radius: Theme.Radius.floating - 1,
-                 area: tray.insetBy(dx: inset, dy: inset), areaRadius: Theme.Radius.well)
+        ring.set(ring: tray.insetBy(dx: 1, dy: 1), radius: Theme.Radius.floating - 1)
     }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -294,17 +336,17 @@ private final class ScreenshotPreviewPanel: NSPanel {
     }
     private func updateHover(_ event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        setHovering(surfaceRect.contains(point))
+        setHovering(surfaceRect.contains(point), at: well.convert(event.locationInWindow, from: nil))
         guard !isResizing else { return }
         // A zoomed capture is grabbed to move around it.
         let overCapture = zoom.isZoomed && zoom.bounds.contains(zoom.convert(event.locationInWindow, from: nil))
         (Self.cursor(for: edges(at: point)) ?? chrome.cursor(atWindowPoint: event.locationInWindow)
             ?? (overCapture ? .openHand : .arrow)).set()
     }
-    private func setHovering(_ active: Bool) {
-        guard alive, active != hovering else { return }
+    private func setHovering(_ active: Bool, at wellPoint: CGPoint? = nil) {
+        guard alive else { return }
         hovering = active
-        well.setHovering(active, busy: model.isBusy, reduceMotion: reduceMotion)
+        well.setHovering(active, at: active ? wellPoint : nil, busy: model.isBusy, reduceMotion: reduceMotion)
     }
 
     // MARK: Resizing at the capture's ratio

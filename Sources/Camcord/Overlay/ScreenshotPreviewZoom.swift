@@ -255,25 +255,31 @@ struct PreviewZoomGeometry: Equatable {
         updateCursor()
     }
     override func magnify(with event: NSEvent) {
+        pinch(by: event.magnification, at: convert(event.locationInWindow, from: nil), phase: event.phase)
+    }
+    /// One step of a pinch at `point` (view coordinates). Past the limits it gives way, and let
+    /// go there it springs back.
+    func pinch(by magnification: CGFloat, at point: CGPoint, phase: NSEvent.Phase) {
         guard canInteract() else { return }
-        let point = convert(event.locationInWindow, from: nil)
-        if event.phase == .began || pinch == nil { pinch = geometry.zoom }
-        let asked = (pinch ?? 1) * (1 + event.magnification)
+        if phase == .began || pinch == nil { pinch = geometry.zoom }
+        let asked = (pinch ?? 1) * (1 + magnification)
         pinch = asked
         let before = geometry.zoom
         geometry.zoom(to: asked, keeping: point, size, in: bounds.size, elastic: true)
         place(animated: false)
         if abs(geometry.zoom - before) > 0.0001 { showReadout() }
-        if event.phase == .ended || event.phase == .cancelled {
-            // Let go past a limit, it springs back to it.
+        if phase == .ended || phase == .cancelled {
             pinch = nil
             zoom(to: geometry.zoom, around: point, animated: true)
         }
         updateCursor()
     }
     override func smartMagnify(with event: NSEvent) {
+        toggleCloser(at: convert(event.locationInWindow, from: nil))
+    }
+    /// A double click or a two-finger double tap: closer where it happened, or whole again.
+    func toggleCloser(at point: CGPoint) {
         guard canInteract() else { return }
-        let point = convert(event.locationInWindow, from: nil)
         zoom(to: isZoomed ? 1 : PreviewZoomGeometry.closer(size, in: bounds.size), around: point, animated: true)
     }
     override func scrollWheel(with event: NSEvent) {

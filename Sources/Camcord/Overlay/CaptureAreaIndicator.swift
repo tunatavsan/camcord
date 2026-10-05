@@ -587,8 +587,7 @@ private final class LitFrameView: NSView, CaptureFrameView {
         CATransaction.setDisableActions(true)
         ring.layer.frame = bounds
         CATransaction.commit()
-        ring.set(ring: line, radius: windowCornerRadius > 0 ? windowCornerRadius + Self.gap : 0,
-                 area: windowRectInView.intersection(limit ?? windowRectInView), areaRadius: windowCornerRadius)
+        ring.set(ring: line, radius: windowCornerRadius > 0 ? windowCornerRadius + Self.gap : 0)
     }
 
     func animateAppear() { ring.light() }
