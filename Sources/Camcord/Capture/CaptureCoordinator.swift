@@ -308,21 +308,22 @@ final class CaptureCoordinator {
             scrollSession = nil
         }
 
-        let region: CGRect
+        let target: ScrollTarget
         if focusedWindow, let focused = Self.focusedScrollRegion() {
-            region = focused
+            target = focused
         } else {
             guard let (result, _) = await overlay.selectRegion() else { return }
             try? await Task.sleep(for: Self.postHideDelay)
             switch result {
-            case .region(let r): region = r
+            case .region(let r): target = ScrollTarget(region: r, cornerRows: 0)
             case .window(let window):
                 let element = window.owningApplication.flatMap {
                     WindowSnapper.axWindow(pid: $0.processID, matching: window.frame)
                 }
-                region = Self.scrollRegion(forWindow: window.frame, element: element)
+                target = Self.scrollRegion(forWindow: window.frame, element: element)
             }
         }
+        let region = target.region
         guard region.width >= 1, region.height >= 1 else {
             fail("Scroll capture: empty selection")
             return
@@ -344,7 +345,9 @@ final class CaptureCoordinator {
         // This is the display bound to the actual scroll sourceRect. Preserve its identity
         // before the session or output scaling can suspend and the cursor can move.
         let originDisplayID = display.displayID
-        let session = ScrollingCaptureSession(region: clampedRegion, display: display)
+        // The window's rounded corners sit at its bottom only while the display has not cut it.
+        let cornerRows = clampedRegion.maxY >= region.maxY - 0.5 ? target.cornerRows : 0
+        let session = ScrollingCaptureSession(region: clampedRegion, display: display, cornerRows: cornerRows)
         scrollSession = session
         scrollStarting = false
         if scrollAutoRequested { session.requestAuto() }
@@ -395,25 +398,32 @@ final class CaptureCoordinator {
         succeeded(.fullScreenShot)
     }
 
+    /// What a scroll capture takes, and how tall the rounded corners at its bottom are.
+    struct ScrollTarget {
+        let region: CGRect
+        /// Points at the bottom of the region that a window's rounded corners cut into: they stay
+        /// out of every stitched strip and close the capture once.
+        let cornerRows: CGFloat
+    }
+
     /// What a scroll capture of a window takes: the part that scrolls (a browser's page, an app's
     /// scroll area) when Accessibility names it, so tab bars and toolbars stay out; else the
-    /// whole window. Either way above the rounded bottom corners, which would otherwise be cut
-    /// into every stitched strip (macOS 26 rounds a toolbar window by up to 26 pt).
-    private static func scrollRegion(forWindow window: CGRect, element: AXUIElement?) -> CGRect {
+    /// whole window, down to its bottom edge (macOS 26 rounds a toolbar window by up to 26 pt).
+    private static func scrollRegion(forWindow window: CGRect, element: AXUIElement?) -> ScrollTarget {
         let pointer = CGEvent(source: nil)?.location
         let content = element.flatMap {
             WindowSnapper.scrollContent(areas: WindowSnapper.scrollingAreas(in: $0), window: window, pointer: pointer)
         }
         let area = content ?? window
-        let corner: CGFloat = CaptureAreaIndicator.windowCornerRadius(forSize: window.size) > 0 ? 26 : 0
-        let bottom = min(area.maxY, window.maxY - corner)
-        return CGRect(x: area.minX, y: area.minY, width: area.width, height: max(1, bottom - area.minY))
+        let rounded = CaptureAreaIndicator.windowCornerRadius(forSize: window.size) > 0
+        let reachesBottom = area.maxY >= window.maxY - 1
+        return ScrollTarget(region: area, cornerRows: rounded && reachesBottom ? 26 : 0)
     }
 
     /// The scroll region in the focused window: the window Accessibility names for the frontmost
     /// app (else its front window big enough to scroll), and in it the part that scrolls. Never
     /// one of ours, never a link-status bubble.
-    private static func focusedScrollRegion() -> CGRect? {
+    private static func focusedScrollRegion() -> ScrollTarget? {
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let ownPID = ProcessInfo.processInfo.processIdentifier
         let focused = frontmostPID.flatMap { $0 == ownPID ? nil : WindowSnapper.focusedWindow(pid: $0) }
@@ -428,7 +438,7 @@ final class CaptureCoordinator {
             rect.map { "\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))x\(Int($0.height))" } ?? "none"
         }
         DiagnosticsLog.append("scroll target focused=\(describe(focused?.frame)) chosen=\(describe(target)) "
-            + "region=\(describe(region))")
+            + "region=\(describe(region?.region)) corners=\(Int(region?.cornerRows ?? 0))")
         return region
     }
 

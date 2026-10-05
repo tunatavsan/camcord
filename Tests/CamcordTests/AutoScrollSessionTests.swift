@@ -204,6 +204,48 @@ struct AutoScrollSessionTests {
         #expect(wrong == 0, "\(wrong) rows differ from the page")
     }
 
+    @Test("a window's rounded bottom corners stay out of every seam and close the capture once")
+    func roundedCornersCloseTheCapture() async throws {
+        let page = Page(height: 900, startingAt: 0)
+        let corner = 10
+        // The window's bottom corners show what is behind it: a value the page never has.
+        let cornered: () -> CGImage = {
+            let frame = page.frame()
+            var bytes = [UInt8](repeating: 0, count: 40 * page.viewport)
+            let context = CGContext(data: &bytes, width: 40, height: page.viewport, bitsPerComponent: 8, bytesPerRow: 40,
+                                    space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)!
+            context.draw(frame, in: CGRect(x: 0, y: 0, width: 40, height: page.viewport))
+            for y in (page.viewport - corner)..<page.viewport {
+                for x in [0, 1, 2, 37, 38, 39] { bytes[y * 40 + x] = 255 }
+            }
+            return Page.image(bytes, rows: page.viewport)
+        }
+        var updates = 0
+        let hooks = ScrollingCaptureSession.Hooks(
+            prepare: {}, capture: { _ in cornered() }, update: { _, _ in updates += 1 }, actuator: page)
+        let session = ScrollingCaptureSession(region: CGRect(x: 0, y: 0, width: 40, height: 120), hooks: hooks,
+                                              cornerRows: CGFloat(corner))
+        let run = Task { await session.run() }
+        await waitUntil { updates >= 1 && session.readyForCaptureForTesting }
+        session.toggleAutoForTesting()
+        guard case .completed(let image, _) = await run.value else { Issue.record("auto must finish"); return }
+        #expect(page.offset == page.maxOffset)
+        #expect(abs(image.height - page.height) <= 2, "captured \(image.height) of \(page.height) rows")
+        var rgba = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        let context = try #require(CGContext(data: &rgba, width: image.width, height: image.height, bitsPerComponent: 8,
+                                             bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        let seams = (0..<(image.height - corner)).filter { y in
+            (0..<image.width).contains { x in rgba[(y * image.width + x) * 4] > 240 }
+        }.count
+        #expect(seams == 0, "\(seams) rows above the bottom edge carry a corner")
+        let last = image.height - 1
+        #expect(rgba[(last * image.width) * 4 + 3] == 0, "the bottom-left corner is clear, like the window's")
+        #expect(rgba[(last * image.width + 39) * 4 + 3] == 0, "the bottom-right corner is clear, like the window's")
+        #expect(rgba[(last * image.width + 20) * 4 + 3] == 255, "the bottom edge between the corners is the page")
+    }
+
     @Test("with a scroll bar it jumps to the top in one step and still stops where the owner started")
     func jumpsToTheTop() async throws {
         let page = Page(height: 1_400, startingAt: 500, jumps: true)

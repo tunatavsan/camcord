@@ -137,6 +137,8 @@ final class ScrollingCaptureSession {
     private let region: CGRect
     private let display: SCDisplay?
     private let scale: CGFloat
+    /// Points at the bottom of the region a window's rounded corners cut into.
+    private let cornerRows: CGFloat
     private let hooks: Hooks?
     private let logger = Logger(subsystem: "dev.tavsan.camcord", category: "scroll-session")
 
@@ -192,6 +194,10 @@ final class ScrollingCaptureSession {
     private var columnsChecked = false
     /// The last frame given to the stitcher, as captured.
     private var lastFed: CGImage?
+    /// The corner rows cut from the newest frames, by the frame they were cut from.
+    private var tails: [(frame: ObjectIdentifier, rows: CGImage)] = []
+    /// The corner rows under the frame that ends the stitch: they close the capture.
+    private var closingTail: CGImage?
     private static let maxClimbSteps = 120
     /// The smallest move auto measures, in pixels; manual scrolling keeps the stitcher's own
     /// floor against jitter and bounce.
@@ -200,9 +206,10 @@ final class ScrollingCaptureSession {
 
     private var continuation: CheckedContinuation<Outcome, Never>?
 
-    init(region: CGRect, display: SCDisplay) {
+    init(region: CGRect, display: SCDisplay, cornerRows: CGFloat = 0) {
         self.region = region
         self.display = display
+        self.cornerRows = cornerRows
         hooks = nil
         worker = ScrollStitchWorker()
         self.scale = CGFloat(SCContentFilter(display: display, excludingWindows: []).pointPixelScale)
@@ -211,11 +218,12 @@ final class ScrollingCaptureSession {
         self.triggerPoints = max(60, region.height * 0.4)
     }
 
-    init(region: CGRect, scale: CGFloat = 1, hooks: Hooks,
+    init(region: CGRect, scale: CGFloat = 1, hooks: Hooks, cornerRows: CGFloat = 0,
          maxTotalHeight: Int = 40_000, maxTotalPixels: Int = 50_000_000,
          workHook: (@Sendable () -> Void)? = nil) {
         self.region = region
         display = nil
+        self.cornerRows = cornerRows
         self.scale = scale
         self.hooks = hooks
         worker = ScrollStitchWorker(maxTotalHeight: maxTotalHeight, maxTotalPixels: maxTotalPixels, workHook: workHook)
@@ -420,6 +428,7 @@ final class ScrollingCaptureSession {
                 boundary = Boundary(frame: start, distance: climb.distance, exact: climb.exact)
                 await worker.reset()
                 lastFed = nil
+                closingTail = nil
                 guard autoAlive(run) else { return }
                 stitchState = ScrollStitchWorker.State()
                 guard await stitch(climb.top, predictedPx: 0, sessionGeneration: generation) != nil else { return }
@@ -749,7 +758,34 @@ final class ScrollingCaptureSession {
         }
         guard !finished, generation == sessionGeneration else { return nil }
         captureFailures = 0
-        return cropped(image)
+        return withoutCorners(cropped(image))
+    }
+
+    /// `image` above the window's rounded bottom corners, which would otherwise be cut into
+    /// every stitched strip. The rows are kept aside (copied, so the frame can go) and close
+    /// the capture once, under its last strip.
+    private func withoutCorners(_ image: CGImage) -> CGImage {
+        let rows = Int((cornerRows * scale).rounded())
+        guard rows > 0, image.height > rows * 4,
+              let body = image.cropping(to: CGRect(x: 0, y: 0, width: image.width, height: image.height - rows)),
+              let tail = ScrollCorners.copyBottomRows(of: image, count: rows) else { return image }
+        tails.append((ObjectIdentifier(body), tail))
+        if tails.count > 16 { tails.removeFirst(tails.count - 16) }
+        return body
+    }
+
+    /// The stitch with the window's bottom edge under it, rounded like the window's own corners
+    /// where the capture still reaches the window's sides.
+    private func closed(_ image: CGImage) -> CGImage {
+        guard var tail = closingTail else { return image }
+        if tail.width == capturedWidth, let columns,
+           let cut = tail.cropping(to: CGRect(x: columns.lowerBound, y: 0, width: columns.count, height: tail.height)) {
+            tail = cut
+        }
+        guard tail.width == image.width else { return image }
+        let left = columns.map { $0.lowerBound == 0 } ?? true
+        let right = columns.map { $0.upperBound == capturedWidth } ?? true
+        return ScrollCorners.appending(tail, to: image, roundLeft: left, roundRight: right) ?? image
     }
 
     /// `image` cut to the columns that scroll, once they are known.
@@ -788,6 +824,12 @@ final class ScrollingCaptureSession {
         }
         stitchState = update.state
         let outcome = update.outcome
+        switch outcome {
+        case .appended, .baselined, .buffered:
+            // The newest frame in the stitch is the one its corner rows close.
+            closingTail = tails.last { $0.frame == ObjectIdentifier(image) }?.rows
+        default: break
+        }
         logCapture(String(describing: outcome), offset: stitchState.offset, score: stitchState.score)
         if stitchState.rebaselines > rebaselines { flashHint(String(localized: "Gap · Scroll more slowly")) }
         // Only recompose the (O(n)) preview when the composite actually changed —
@@ -850,7 +892,7 @@ final class ScrollingCaptureSession {
             }
         }
         guard !finished, generation == token else { return }
-        let image = await worker.finalImage()
+        let image = await worker.finalImage().map(closed)
         guard !finished, generation == token else { return }
         finished = true
         continuation?.resume(returning: image.map { .completed($0, notice: completionNotice ?? finalNotice) }

@@ -60,7 +60,7 @@ final class CaptureAreaIndicator {
     private let defaults: UserDefaults
     private var borderPanel: NSPanel?
     private var hub: RecordingHubPanel?
-    private var borderView: AreaBorderView?
+    private var borderView: (any CaptureFrameView)?
 
     /// The frame's visibility rule, plus the timer that ends the post-start grace.
     private var frame = RecordingFrameVisibility()
@@ -115,7 +115,7 @@ final class CaptureAreaIndicator {
         guard let primaryHeight = NSScreen.screens.first?.frame.height else { return }
         let target = Geometry.cgToAppKit(cgRect, primaryScreenHeight: primaryHeight)
 
-        borderPanel = makeBorderPanel(target: target, color: color)
+        borderPanel = makeBorderPanel(target: target, color: color, lit: onStop == nil)
         if let onStop {
             beginRecordingFrame()
             hub = makeHub(
@@ -305,7 +305,7 @@ final class CaptureAreaIndicator {
     // MARK: - Live window follow (CADisplayLink, display-synced)
 
     private func startFollowing() {
-        guard let sourceView: NSView = borderView ?? hub?.hostView, let window = sourceView.window else { return }
+        guard let sourceView: NSView = (borderView as NSView?) ?? hub?.hostView, let window = sourceView.window else { return }
         let fps = max(60, window.screen?.maximumFramesPerSecond ?? 60)
         // Occlusion changes only on a human timescale (bringing another window forward), so
         // check it a few times a second — a full window-list query every frame would hitch
@@ -428,13 +428,23 @@ final class CaptureAreaIndicator {
 
     // MARK: - Panels
 
-    private func makeBorderPanel(target: CGRect, color: NSColor) -> NSPanel {
+    /// `lit` draws the scroll capture's frame: a bright line that lights up the area it takes.
+    private func makeBorderPanel(target: CGRect, color: NSColor, lit: Bool = false) -> NSPanel {
         let pad = Self.borderPad
         let frame = target.insetBy(dx: -pad, dy: -pad)
         let panel = borderlessPanel(frame: frame)
         panel.ignoresMouseEvents = true   // the window underneath must stay usable
-        let view = AreaBorderView(frame: CGRect(origin: .zero, size: frame.size))
-        view.accentColor = color
+        let view: any CaptureFrameView
+        if lit {
+            let glow = LitFrameView(frame: CGRect(origin: .zero, size: frame.size))
+            // An edge that meets the screen's is drawn just inside it, or it would not show.
+            glow.limit = relevantScreen(for: target).map { $0.frame.offsetBy(dx: -frame.minX, dy: -frame.minY) }
+            view = glow
+        } else {
+            let hairline = AreaBorderView(frame: CGRect(origin: .zero, size: frame.size))
+            hairline.accentColor = color
+            view = hairline
+        }
         view.setTarget(
             CGRect(x: pad, y: pad, width: target.width, height: target.height),
             windowCornerRadius: Self.windowCornerRadius(forSize: target.size)
@@ -538,6 +548,162 @@ final class CaptureAreaIndicator {
     }
 }
 
+/// What the indicator draws around the captured area.
+@MainActor protocol CaptureFrameView: NSView {
+    func setTarget(_ windowRectInView: CGRect, windowCornerRadius: CGFloat)
+    func animateAppear()
+    func setAlpha(_ alpha: CGFloat, animated: Bool)
+}
+
+/// The scroll capture's frame. A crisp light line over a dark halo, so it reads on a white page
+/// and on a black one, with a soft glow. It appears drawn from the top centre down both sides
+/// to meet at the bottom, then one wash of light crosses the area it takes, and it rests. The
+/// panel is left out of the capture, so none of it reaches the image.
+private final class LitFrameView: NSView, CaptureFrameView {
+    private let halo = CAShapeLayer()
+    private let line = CAShapeLayer()
+    private let glow = CAShapeLayer()
+    private let wash = CAGradientLayer()
+    private let washClip = CALayer()
+    /// The screen in view coordinates: the frame stays inside it.
+    var limit: CGRect?
+
+    static let gap: CGFloat = 2
+    static let lineWidth: CGFloat = 2
+    /// The glow's opacity at rest.
+    static let restingGlow: Float = 0.55
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        for shape in [halo, line, glow] {
+            shape.fillColor = nil
+            shape.lineJoin = .round
+            shape.lineCap = .round
+        }
+        halo.strokeColor = NSColor.black.withAlphaComponent(0.3).cgColor
+        halo.lineWidth = Self.lineWidth + 2
+        line.strokeColor = NSColor.white.withAlphaComponent(0.96).cgColor
+        line.lineWidth = Self.lineWidth
+        glow.strokeColor = NSColor.white.withAlphaComponent(0.9).cgColor
+        glow.lineWidth = Self.lineWidth
+        glow.shadowColor = NSColor.white.cgColor
+        glow.shadowOffset = .zero
+        glow.shadowRadius = 8
+        glow.shadowOpacity = 0.9
+        glow.opacity = Self.restingGlow
+        washClip.masksToBounds = true
+        washClip.cornerCurve = .continuous
+        wash.startPoint = CGPoint(x: 0, y: 1)
+        wash.endPoint = CGPoint(x: 1, y: 0)
+        wash.colors = [NSColor.white.withAlphaComponent(0).cgColor, NSColor.white.withAlphaComponent(0.13).cgColor,
+                       NSColor.white.withAlphaComponent(0).cgColor]
+        wash.locations = [-0.4, -0.2, 0]
+        wash.opacity = 0
+        washClip.addSublayer(wash)
+        layer?.addSublayer(washClip)
+        layer?.addSublayer(halo)
+        layer?.addSublayer(glow)
+        layer?.addSublayer(line)
+        layer?.opacity = 0
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override var isFlipped: Bool { false }
+
+    func setTarget(_ windowRectInView: CGRect, windowCornerRadius: CGFloat) {
+        var ring = windowRectInView.insetBy(dx: -Self.gap, dy: -Self.gap)
+        if let limit {
+            let inside = limit.insetBy(dx: Self.lineWidth, dy: Self.lineWidth)
+            let clamped = ring.intersection(inside)
+            if !clamped.isNull { ring = clamped }
+        }
+        let radius = windowCornerRadius > 0 ? windowCornerRadius + Self.gap : 0
+        let path = Self.ringPath(ring, radius: radius)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for shape in [halo, line, glow] {
+            shape.frame = bounds
+            shape.path = path
+        }
+        glow.shadowPath = path.copy(strokingWithWidth: Self.lineWidth, lineCap: .round, lineJoin: .round, miterLimit: 1)
+        washClip.frame = windowRectInView.intersection(limit ?? windowRectInView)
+        washClip.cornerRadius = windowCornerRadius
+        wash.frame = washClip.bounds
+        CATransaction.commit()
+    }
+
+    /// A rounded rectangle that starts at the bottom centre and runs counterclockwise (up the
+    /// right side), so the top centre sits exactly halfway along it.
+    static func ringPath(_ rect: CGRect, radius: CGFloat) -> CGPath {
+        let r = min(radius, rect.width / 2, rect.height / 2)
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+        path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.minY), tangent2End: CGPoint(x: rect.maxX, y: rect.maxY), radius: r)
+        path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.maxY), tangent2End: CGPoint(x: rect.minX, y: rect.maxY), radius: r)
+        path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.maxY), tangent2End: CGPoint(x: rect.minX, y: rect.minY), radius: r)
+        path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.minY), tangent2End: CGPoint(x: rect.midX, y: rect.minY), radius: r)
+        path.closeSubpath()
+        return path
+    }
+
+    func animateAppear() {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let now = CACurrentMediaTime()
+        let ease = CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1)
+        // Drawn from the top centre: both ends leave halfway along the path and meet at its start.
+        for shape in [halo, line] {
+            let start = CABasicAnimation(keyPath: "strokeStart")
+            start.fromValue = 0.5
+            start.toValue = 0
+            let end = CABasicAnimation(keyPath: "strokeEnd")
+            end.fromValue = 0.5
+            end.toValue = 1
+            let draw = CAAnimationGroup()
+            draw.animations = [start, end]
+            draw.duration = 0.5
+            draw.timingFunction = ease
+            shape.add(draw, forKey: "draw")
+        }
+        // The glow flares as the ends meet, then settles.
+        let flare = CAKeyframeAnimation(keyPath: "opacity")
+        flare.values = [0, 0, 1, Self.restingGlow]
+        flare.keyTimes = [0, 0.4, 0.6, 1]
+        flare.duration = 0.8
+        glow.add(flare, forKey: "flare")
+        // One wash of light across the area.
+        let sweep = CABasicAnimation(keyPath: "locations")
+        sweep.fromValue = [-0.4, -0.2, 0]
+        sweep.toValue = [1, 1.2, 1.4]
+        sweep.beginTime = now + 0.22
+        sweep.duration = 0.6
+        sweep.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        sweep.fillMode = .both
+        wash.add(sweep, forKey: "sweep")
+        let shown = CAKeyframeAnimation(keyPath: "opacity")
+        shown.values = [1, 1]
+        shown.beginTime = now + 0.22
+        shown.duration = 0.6
+        wash.add(shown, forKey: "shown")
+    }
+
+    func setAlpha(_ alpha: CGFloat, animated: Bool) {
+        guard let layer else { return }
+        let target = Float(min(max(alpha, 0), 1))
+        guard layer.opacity != target else { return }
+        if animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = layer.presentation()?.opacity ?? layer.opacity
+            fade.toValue = target
+            fade.duration = 0.12
+            layer.add(fade, forKey: "frameAlpha")
+        }
+        layer.opacity = target
+    }
+}
+
 /// A clean gradient hairline that hugs the window's own rounded corners — NO glow/shadow
 /// (which bloomed inward over the window and was expensive to composite while dragging).
 /// A `CAGradientLayer` masked by a plain `CALayer` border: the mask keeps `cornerCurve =
@@ -545,7 +711,7 @@ final class CaptureAreaIndicator {
 /// the same corner shape offset outward while the colour falls off along the top-left →
 /// bottom-right diagonal. Because it is a moved layer with no shadow, following a dragged
 /// window is a cheap reposition with no repaint. Lives in a click-through panel.
-private final class AreaBorderView: NSView {
+private final class AreaBorderView: NSView, CaptureFrameView {
     private let gradientLayer = CAGradientLayer()
     private let strokeMask = CALayer()
     private var color: NSColor = Theme.Palette.record.ns
