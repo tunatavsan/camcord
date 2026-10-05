@@ -119,6 +119,11 @@ import QuartzCore
         track(event)
     }
 
+    #if DEBUG
+    /// Test seam: drives the hover state without synthesising an NSEvent.
+    func indicateForTesting(_ hotspot: CameraHotspot?) { indicate(hotspot) }
+    #endif
+
     /// Everything back to rest: the pointer left the pin.
     func rest() {
         guard resizing == nil else { return }
@@ -171,11 +176,12 @@ import QuartzCore
         if let circle = CameraResizeGeometry.closeFrame(in: bounds) {
             closeChip.isHidden = false
             closeChip.frame = circle
-            // Only around the ×: a small round blur, heaviest under it, gone a little way out.
-            let side = min(bounds.height * 0.6, circle.width * 3.4)
-            let veil = CGRect(x: circle.midX - side / 2, y: bounds.maxY - side, width: side, height: side)
-            topVeil.frame = veil
-            topVeil.edge = .spot(CGPoint(x: 0.5, y: (circle.midY - veil.minY) / side), reach: 0.5)
+            // The × sits on the top edge's own blur: heaviest along the edge, gone a little below the
+            // ×, and kept to the middle, thinning out toward both sides.
+            let width = min(bounds.width, max(circle.width * 7, bounds.width * 0.4))
+            let height = min(bounds.height * 0.5, bounds.maxY - circle.minY + circle.height * 0.6)
+            topVeil.frame = CGRect(x: circle.midX - width / 2, y: bounds.maxY - height, width: width, height: height)
+            topVeil.edge = .band(sideFade: 0.38)
             topVeil.outline = clipped(to: topVeil.frame)
         } else {
             closeChip.isHidden = true
@@ -184,13 +190,10 @@ import QuartzCore
         let chip = CameraResizeGeometry.resizeChipFrame(corner, in: bounds)
         resizeChipDown.frame = chip
         resizeChipUp.frame = chip
-        let right = corner == .topRight || corner == .bottomRight
-        let top = corner == .topLeft || corner == .topRight
-        let reach = right ? bounds.maxX - chip.minX : chip.maxX - bounds.minX
-        let side = min(min(bounds.width, bounds.height) * 0.45, reach * 1.5)
-        cornerVeil.frame = CGRect(x: right ? bounds.maxX - side : bounds.minX,
-                                  y: top ? bounds.maxY - side : bounds.minY, width: side, height: side)
-        cornerVeil.edge = .corner(corner)
+        // Only around the chip: a small round blur centred on it, gone before the veil's edges.
+        let side = min(min(bounds.width, bounds.height) * 0.6, chip.width * 2.8)
+        cornerVeil.frame = CGRect(x: chip.midX - side / 2, y: chip.midY - side / 2, width: side, height: side)
+        cornerVeil.edge = .spot(CGPoint(x: 0.5, y: 0.5), reach: 0.48)
         cornerVeil.outline = clipped(to: cornerVeil.frame)
     }
 }
