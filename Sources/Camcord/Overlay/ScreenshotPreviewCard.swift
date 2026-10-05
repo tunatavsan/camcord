@@ -139,9 +139,14 @@ import UniformTypeIdentifiers
         }
         host.onKeep = { [weak self] in if current() { self?.onKeep?(capture) } }
         host.onOpen = { [weak self, weak entry] in
-            guard current(), let self, let entry else { return }
-            self.openPreview(capture, on: entry.visibleFrame, from: Self.cardRect(of: entry))
-            self.dismiss(entry, reason: "preview")
+            guard current(), let entry else { return }
+            let model = entry.model
+            Task { @MainActor [weak self, weak entry] in
+                guard let url = await model.previewFile() else { return }
+                ScreenshotCardModel.openInPreview(url)
+                guard current(), let self, let entry else { return }
+                self.dismiss(entry, reason: "preview")
+            }
         }
         host.onPin = { [weak self, weak entry] in
             guard current(), let self, let entry else { return }
@@ -152,12 +157,22 @@ import UniformTypeIdentifiers
         entries.append(entry)
         reflow()
         presenter(window)
-        fly(capture, into: entry)
-        animator(host, true, reduceMotion()) { [weak self, weak entry] in
+        let entered: @MainActor () -> Void = { [weak self, weak entry] in
             guard current(), let self, let entry else { return }
             entry.enteredAt = self.timing.now()
             entry.dwell.enter(at: self.timing.now())
             self.arm(entry)
+        }
+        if let landing = fly(capture, into: entry) {
+            // The capture flies in from where it was taken; the card forms around it as it lands.
+            host.awaitLanding()
+            Task { @MainActor [weak host] in
+                try? await Task.sleep(for: .seconds(landing))
+                guard current(), let host else { return }
+                host.land(completion: entered)
+            }
+        } else {
+            animator(host, true, reduceMotion(), entered)
         }
     }
     private func visibleFrame(for capture: CapturedScreenshot) -> CGRect? {
@@ -222,12 +237,14 @@ import UniformTypeIdentifiers
     }
     /// The capture flies from where it was taken into the card sliding in to meet it. Not for a
     /// scroll capture, whose page is far taller than the place it was taken.
-    private func fly(_ capture: CapturedScreenshot, into entry: Entry) {
+    /// - Returns: when the card should form, or nil when nothing flies.
+    private func fly(_ capture: CapturedScreenshot, into entry: Entry) -> CFTimeInterval? {
         guard !usesFixtureFrame, !reduceMotion(), capture.kind != .scrollCapture, let source = capture.sourceRect,
-              let primaryHeight = NSScreen.screens.first?.frame.height else { return }
+              let primaryHeight = NSScreen.screens.first?.frame.height else { return nil }
         let well = Self.cardRect(of: entry).insetBy(dx: ScreenshotCardGeometry.ring, dy: ScreenshotCardGeometry.ring)
         let shown = ScreenshotCardGeometry(sourceSize: capture.pointSize).imageRect.offsetBy(dx: well.minX, dy: well.minY)
         CaptureFlight.fly(capture.image, from: Geometry.cgToAppKit(source, primaryScreenHeight: primaryHeight), to: shown)
+        return CaptureFlight.landing
     }
     /// The card itself on screen, without its shadow margin.
     private static func cardRect(of entry: Entry) -> CGRect {
@@ -375,13 +392,42 @@ actor ScreenshotCardExport {
     }
     private func beginBusy() { busyCount += 1; if !isBusy { isBusy = true; onBusyChange?() } }
     private func endBusy() { busyCount -= 1; if busyCount == 0, isBusy { isBusy = false; onBusyChange?() } }
+    /// The name a file of this capture carries: what a drag drops, what Preview's title shows.
+    private var fileName: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH.mm.ss"
+        return "\(String(localized: "Screenshot")) \(formatter.string(from: createdAt)).png"
+    }
+    /// The file the system's Preview opens: the saved screenshot when there is one, else a
+    /// well-named copy of it.
+    func previewFile() async -> URL? {
+        if let savedURL, FileManager.default.fileExists(atPath: savedURL.path) { return savedURL }
+        guard isAlive else { return nil }
+        beginBusy(); defer { endBusy() }
+        let name = fileName
+        do {
+            let url = try await export.fileURL()
+            return await Task.detached { ScreenshotDragFiles.link(url, named: name) }.value ?? url
+        } catch {
+            if isAlive, !(error is CancellationError) { self.error = error.localizedDescription }
+            return nil
+        }
+    }
+    /// Opens `url` in the system's Preview, where it can be zoomed, marked up and printed.
+    static func openInPreview(_ url: URL) {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        if let preview = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Preview") {
+            NSWorkspace.shared.open([url], withApplicationAt: preview, configuration: configuration)
+        } else {
+            NSWorkspace.shared.open(url)
+        }
+    }
     /// Starts on the press that may become a drag, never for a card that is only shown.
     func prepareDragFile() {
         guard isAlive, dragFile == nil, dragPreparation == nil else { return }
         let export = export
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH.mm.ss"
-        let name = "\(String(localized: "Screenshot")) \(formatter.string(from: createdAt)).png"
+        let name = fileName
         dragPreparation = Task { [weak self] in
             do {
                 let url = try await export.fileURL()

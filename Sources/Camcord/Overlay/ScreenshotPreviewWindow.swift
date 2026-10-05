@@ -129,8 +129,9 @@ private final class ScreenshotPreviewPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
-/// The preview's content: the capture's well on the tray. Hover shows Edit, Copy, Pin and Share;
-/// the capture moves the window; the tray's edge resizes it at the capture's own ratio.
+/// The preview's content: the capture's well on the tray. Hover shows Edit, Copy, Preview (a pin)
+/// or Pin (a passing preview), and Share; the capture moves the window; the tray's edge resizes it
+/// at the capture's own ratio. It arrives lit by the glass light.
 @MainActor final class ScreenshotPreviewHost: NSView {
     var onClose: (@MainActor () -> Void)?
     var onEdit: (@MainActor () -> Void)?
@@ -151,6 +152,8 @@ private final class ScreenshotPreviewPanel: NSPanel {
     private var resize: (edges: Edges, frame: CGRect, mouse: CGPoint)?
     /// The capture, zoomable; it stands in for the well's still image.
     let zoom: ScreenshotPreviewZoom
+    /// The glass light that draws around the tray as it arrives.
+    private let ring = LitRing()
     private var surfaceRect: CGRect { bounds.insetBy(dx: ScreenshotPreviewGeometry.shadowInset, dy: ScreenshotPreviewGeometry.shadowInset) }
     private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 
@@ -169,6 +172,10 @@ private final class ScreenshotPreviewPanel: NSPanel {
         super.init(frame: .zero)
         wantsLayer = true
         addSubview(surface)
+        // Inside the tray's own layer, so it grows with the tray as it arrives.
+        ring.layer.zPosition = 20
+        ring.layer.opacity = 0
+        surface.layer?.addSublayer(ring.layer)
         share.pause = { [weak self] reason, active in if reason == .sharing { self?.isSharing = active } }
         let image = well.imageView
         image.export = model.export
@@ -196,11 +203,18 @@ private final class ScreenshotPreviewPanel: NSPanel {
         var actions: [ScreenshotCardActionBand.Action] = []
         if canEdit { actions.append(.init(title: String(localized: "Edit"), symbol: "pencil") { [weak self] _ in self?.onEdit?() }) }
         actions.append(.init(title: String(localized: "Copy"), symbol: "doc.on.doc") { [weak self] _ in self?.copy() })
+        // A pin is already the closest look in the app; the system's Preview is the next one.
         actions.append(pinned
-            ? .init(title: String(localized: "Unpin"), symbol: "pin.slash.fill") { [weak self] _ in self?.onPin?() }
+            ? .init(title: String(localized: "Preview"), symbol: "eye") { [weak self] _ in self?.openInPreview() }
             : .init(title: String(localized: "Pin"), symbol: "pin") { [weak self] _ in self?.onPin?() })
         actions.append(.init(title: String(localized: "Share"), symbol: "square.and.arrow.up") { [weak self] anchor in self?.share.share(anchor) })
         well.band.actions = actions
+    }
+    private func openInPreview() {
+        Task { [model] in
+            guard let url = await model.previewFile() else { return }
+            ScreenshotCardModel.openInPreview(url)
+        }
     }
     private func copy() {
         Task { [weak self, model] in
@@ -237,6 +251,14 @@ private final class ScreenshotPreviewPanel: NSPanel {
     override func layout() {
         super.layout()
         if surface.frame != surfaceRect { surface.frame = surfaceRect }
+        let tray = surface.bounds
+        guard ring.layer.frame != tray else { return }
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        ring.layer.frame = tray
+        CATransaction.commit()
+        let inset = ScreenshotPreviewGeometry.ring
+        ring.set(ring: tray.insetBy(dx: 1, dy: 1), radius: Theme.Radius.floating - 1,
+                 area: tray.insetBy(dx: inset, dy: inset), areaRadius: Theme.Radius.well)
     }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -351,6 +373,16 @@ private final class ScreenshotPreviewPanel: NSPanel {
         fade.preferFullRefreshRate(on: window?.screen)
         layer.add(fade, forKey: "preview-fade")
         if !reduceMotion {
+            // The glass light draws around the tray as it settles, then lets go.
+            let lit = CACurrentMediaTime() + (card == nil ? 0.1 : 0.2)
+            ring.layer.opacity = 1
+            ring.light(at: lit)
+            let release = CABasicAnimation(keyPath: "opacity")
+            release.fromValue = 1; release.toValue = 0
+            release.beginTime = lit + 1.0; release.duration = 0.5
+            release.fillMode = .backwards
+            ring.layer.add(release, forKey: "release")
+            ring.layer.opacity = 0
             let start = card.flatMap { grownFrom($0, for: layer) } ?? centeredScale(0.92, for: layer)
             let grow = CASpringAnimation.card(keyPath: "transform", from: NSValue(caTransform3D: start),
                                               to: NSValue(caTransform3D: CATransform3DIdentity),
@@ -378,17 +410,17 @@ private final class ScreenshotPreviewPanel: NSPanel {
         let from = layer.presentation()?.opacity ?? layer.opacity
         layer.opacity = 0
         let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = from; fade.toValue = 0; fade.duration = 0.16
+        fade.fromValue = from; fade.toValue = 0; fade.duration = 0.18
         fade.timingFunction = CAMediaTimingFunction(name: .easeIn)
         fade.preferFullRefreshRate(on: window?.screen)
         layer.add(fade, forKey: "preview-fade")
         if !reduceMotion {
-            layer.transform = centeredScale(0.96, for: layer)
+            layer.transform = centeredScale(0.9, for: layer)
             let shrink = CABasicAnimation(keyPath: "transform")
             shrink.fromValue = NSValue(caTransform3D: CATransform3DIdentity)
             shrink.toValue = NSValue(caTransform3D: layer.transform)
-            shrink.duration = 0.16
-            shrink.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            shrink.duration = 0.18
+            shrink.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0, 1, 1)
             shrink.preferFullRefreshRate(on: window?.screen)
             layer.add(shrink, forKey: "preview-zoom")
         }

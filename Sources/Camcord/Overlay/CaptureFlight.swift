@@ -1,17 +1,20 @@
 import AppKit
 import QuartzCore
 
-/// The moment a screenshot is taken. The capture appears over the very place it was taken, that
-/// place flashes once, and the capture flies down into its card, which slides in to meet it.
-/// It lives in its own click-through panel above the card and is gone in under a second.
+/// The moment a screenshot is taken. The capture appears over the very place it was taken and
+/// the glass light draws around it, as it does around a scroll capture: the line runs from the
+/// top centre down both sides, flares, and a wash of light crosses the capture. Then the capture
+/// glides on a gentle curve into the corner where its card forms around it. It lives in its own
+/// click-through panel above the card.
 @MainActor enum CaptureFlight {
     private static var panels: [NSPanel] = []
 
-    /// How long the flash holds the capture in place before it leaves.
-    static let hold: CFTimeInterval = 0.12
-    /// The spring that carries it into the card.
-    static let response: Double = 0.44
-    static let dampingRatio: Double = 0.88
+    /// How long the light holds the capture in place before it leaves.
+    static let hold: CFTimeInterval = 0.42
+    /// The glide into the card.
+    static let glide: CFTimeInterval = 0.56
+    /// When the card should start to form, from now: just before the capture lands in it.
+    static var landing: CFTimeInterval { hold + glide - 0.1 }
 
     /// - Parameters: source and target in global AppKit points; target is where the card shows
     ///   the capture.
@@ -35,16 +38,20 @@ import QuartzCore
         panel.contentView = view
         guard let root = view.layer else { return }
 
-        let landing = target.offsetBy(dx: -area.minX, dy: -area.minY)
         let leaving = start.offsetBy(dx: -area.minX, dy: -area.minY)
+        let landing = target.offsetBy(dx: -area.minX, dy: -area.minY)
+        // The carrier keeps the capture's own size; the glide scales it down to the card's.
+        let scale = landing.width / leaving.width
+        let radius = Theme.Radius.well / scale
         let carrier = CALayer()
-        carrier.frame = landing
+        carrier.bounds = CGRect(origin: .zero, size: leaving.size)
+        carrier.position = CGPoint(x: landing.midX, y: landing.midY)
+        carrier.transform = CATransform3DMakeScale(scale, scale, 1)
         carrier.shadowColor = NSColor.black.cgColor
-        carrier.shadowOffset = CGSize(width: 0, height: -2)
-        carrier.shadowRadius = 10
-        carrier.shadowOpacity = 0.35
-        carrier.shadowPath = CGPath(roundedRect: CGRect(origin: .zero, size: landing.size),
-                                    cornerWidth: Theme.Radius.well, cornerHeight: Theme.Radius.well, transform: nil)
+        carrier.shadowOffset = CGSize(width: 0, height: -2 / scale)
+        carrier.shadowRadius = 12 / scale
+        carrier.shadowOpacity = 0.4
+        carrier.shadowPath = CGPath(roundedRect: carrier.bounds, cornerWidth: radius, cornerHeight: radius, transform: nil)
         let photo = CALayer()
         photo.frame = carrier.bounds
         photo.contents = image
@@ -52,64 +59,72 @@ import QuartzCore
         photo.minificationFilter = .trilinear
         photo.masksToBounds = true
         photo.cornerCurve = .continuous
-        photo.cornerRadius = Theme.Radius.well
-        photo.borderColor = NSColor.white.withAlphaComponent(0.85).cgColor
-        photo.borderWidth = 0
-        let flash = CALayer()
-        flash.frame = photo.bounds
-        flash.backgroundColor = NSColor.white.cgColor
-        flash.opacity = 0
-        photo.addSublayer(flash)
+        photo.cornerRadius = radius
         carrier.addSublayer(photo)
+        // The light sits just inside the capture's edge, so a whole screen shows all of it.
+        let ring = LitRing()
+        ring.layer.frame = carrier.bounds
+        let inset = LitRing.lineWidth
+        ring.set(ring: carrier.bounds.insetBy(dx: inset, dy: inset), radius: 0, area: carrier.bounds, areaRadius: 0)
+        carrier.addSublayer(ring.layer)
         root.addSublayer(carrier)
 
         let now = CACurrentMediaTime()
-        let scale = leaving.width / landing.width
-        let from = CATransform3DConcat(CATransform3DMakeScale(scale, scale, 1),
-                                       CATransform3DMakeTranslation(leaving.midX - landing.midX, leaving.midY - landing.midY, 0))
+        let leaves = now + hold
+        let glideTiming = CAMediaTimingFunction(controlPoints: 0.45, 0, 0.15, 1)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        // Over the place it was taken, square-cornered and without a shadow, as the screen was.
-        let travel = CASpringAnimation.card(keyPath: "transform", from: NSValue(caTransform3D: from),
-                                            to: NSValue(caTransform3D: CATransform3DIdentity),
-                                            response: response, dampingRatio: dampingRatio)
-        travel.beginTime = now + hold
-        travel.fillMode = .backwards
-        travel.preferFullRefreshRate(on: panel.screen)
-        carrier.add(travel, forKey: "travel")
-        let lands = travel.settlingDuration * 0.8
+        ring.light(at: now)
+        // A gentle curve: down first, then into the corner, the way a sheet slides into a tray.
+        let from = CGPoint(x: leaving.midX, y: leaving.midY), to = CGPoint(x: landing.midX, y: landing.midY)
+        let path = CGMutablePath()
+        path.move(to: from)
+        path.addQuadCurve(to: to, control: CGPoint(x: from.x + (to.x - from.x) * 0.25, y: to.y + (from.y - to.y) * 0.3))
+        let travel = CAKeyframeAnimation(keyPath: "position")
+        travel.path = path
+        travel.calculationMode = .paced
+        let shrink = CABasicAnimation(keyPath: "transform.scale")
+        shrink.fromValue = 1
+        shrink.toValue = scale
+        let glideGroup = CAAnimationGroup()
+        glideGroup.animations = [travel, shrink]
+        glideGroup.beginTime = leaves
+        glideGroup.duration = glide
+        glideGroup.timingFunction = glideTiming
+        glideGroup.fillMode = .backwards
+        glideGroup.preferFullRefreshRate(on: panel.screen)
+        carrier.add(glideGroup, forKey: "glide")
+        // Square and flat where it was taken, as the screen was; rounded and lifted in the card.
         let rounding = CABasicAnimation(keyPath: "cornerRadius")
         rounding.fromValue = 0
-        rounding.toValue = Theme.Radius.well
-        rounding.beginTime = now + hold
-        rounding.duration = lands * 0.6
+        rounding.toValue = radius
+        rounding.beginTime = leaves
+        rounding.duration = glide * 0.7
+        rounding.timingFunction = glideTiming
         rounding.fillMode = .backwards
         photo.add(rounding, forKey: "rounding")
         let lift = CABasicAnimation(keyPath: "shadowOpacity")
         lift.fromValue = 0
-        lift.toValue = 0.35
-        lift.beginTime = now + hold
-        lift.duration = lands * 0.5
+        lift.toValue = 0.4
+        lift.beginTime = leaves
+        lift.duration = glide * 0.5
         lift.fillMode = .backwards
         carrier.add(lift, forKey: "lift")
-        // The flash: a breath of light over the capture, gone before it moves far.
-        let light = CAKeyframeAnimation(keyPath: "opacity")
-        light.values = [0, 0.42, 0]
-        light.keyTimes = [0, 0.25, 1]
-        light.duration = 0.3
-        flash.add(light, forKey: "flash")
-        // Held at the place it was taken, the capture is scaled by `scale`: its rim is not.
-        let rim = CAKeyframeAnimation(keyPath: "borderWidth")
-        rim.values = [0, 2.5 / scale, 0]
-        rim.keyTimes = [0, 0.3, 1]
-        rim.duration = 0.34
-        photo.add(rim, forKey: "rim")
-        // The card is under it by now, showing the same capture: it hands over and leaves.
+        // The light lets go as the capture leaves.
+        let dim = CABasicAnimation(keyPath: "opacity")
+        dim.fromValue = 1
+        dim.toValue = 0
+        dim.beginTime = leaves + 0.08
+        dim.duration = glide * 0.45
+        dim.fillMode = .both
+        dim.isRemovedOnCompletion = false
+        ring.layer.add(dim, forKey: "dim")
+        // The card has formed under it, showing the same capture: it hands over and leaves.
         let handover = CABasicAnimation(keyPath: "opacity")
         handover.fromValue = 1
         handover.toValue = 0
-        handover.beginTime = now + hold + lands
-        handover.duration = 0.14
+        handover.beginTime = leaves + glide
+        handover.duration = 0.16
         handover.fillMode = .forwards
         handover.isRemovedOnCompletion = false
         carrier.add(handover, forKey: "handover")
@@ -117,7 +132,7 @@ import QuartzCore
 
         panels.append(panel)
         panel.orderFrontRegardless()
-        let total = hold + lands + 0.2
+        let total = hold + glide + 0.3
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(total))
             panel.orderOut(nil)

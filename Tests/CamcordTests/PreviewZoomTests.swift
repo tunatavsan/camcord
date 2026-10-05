@@ -46,6 +46,20 @@ struct PreviewZoomTests {
         #expect(abs(geometry.rect(capture, in: view).width - 4 * capture.width) < 0.5)
     }
 
+    @Test("a pinch past the limits gives way, less the further it goes, and never runs away")
+    func elastic() {
+        var geometry = PreviewZoomGeometry()
+        let centre = CGPoint(x: 450, y: 300)
+        geometry.zoom(to: 0.5, keeping: centre, capture, in: view, elastic: true)
+        let little = geometry.zoom
+        #expect(little < 1 && little > 0.75)
+        geometry.zoom(to: 0.1, keeping: centre, capture, in: view, elastic: true)
+        #expect(geometry.zoom < little && geometry.zoom > 0.4)
+        let maximum = PreviewZoomGeometry.maximum(capture, in: view)
+        geometry.zoom(to: maximum * 4, keeping: centre, capture, in: view, elastic: true)
+        #expect(geometry.zoom > maximum && geometry.zoom < maximum * 1.6)
+    }
+
     @Test("a double click goes to the capture's own size, or twice it when the view already shows that")
     func closer() {
         #expect(abs(PreviewZoomGeometry.closer(capture, in: view) - 2) < 0.001)

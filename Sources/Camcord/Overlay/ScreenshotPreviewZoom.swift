@@ -50,12 +50,22 @@ struct PreviewZoomGeometry: Equatable {
         focus = CGPoint(x: (bounds.width / 2 - shown.minX) / shown.width, y: (bounds.height / 2 - shown.minY) / shown.height)
     }
 
+    /// A pinch past the zoom's limits gives way less and less, the way a trackpad does.
+    static func resisted(_ zoom: CGFloat, maximum: CGFloat) -> CGFloat {
+        if zoom < 1 { return pow(zoom, 0.3) }
+        if zoom > maximum { return maximum * pow(zoom / maximum, 0.3) }
+        return zoom
+    }
+
     /// Zooms to `target`, keeping the capture's point under `anchor` (view coordinates) in place.
-    mutating func zoom(to target: CGFloat, keeping anchor: CGPoint, _ size: CGSize, in bounds: CGSize) {
+    /// Elastic, it may stretch a little past the limits while a pinch is under way.
+    mutating func zoom(to target: CGFloat, keeping anchor: CGPoint, _ size: CGSize, in bounds: CGSize,
+                       elastic: Bool = false) {
         let before = rect(size, in: bounds)
         guard before.width > 0, before.height > 0 else { return }
         let unit = CGPoint(x: (anchor.x - before.minX) / before.width, y: (anchor.y - before.minY) / before.height)
-        zoom = min(max(target, 1), Self.maximum(size, in: bounds))
+        let maximum = Self.maximum(size, in: bounds)
+        zoom = elastic ? Self.resisted(target, maximum: maximum) : min(max(target, 1), maximum)
         let fitted = Self.fit(size, in: bounds)
         let shown = CGSize(width: fitted.width * zoom, height: fitted.height * zoom)
         let origin = CGPoint(x: anchor.x - unit.x * shown.width, y: anchor.y - unit.y * shown.height)
@@ -86,6 +96,8 @@ struct PreviewZoomGeometry: Equatable {
     private var readoutTask: Task<Void, Never>?
     private(set) var geometry = PreviewZoomGeometry()
     private var panFrom: CGPoint?
+    /// The zoom a pinch asks for, before it gives way at the limits.
+    private var pinch: CGFloat?
     var canInteract: @MainActor () -> Bool = { true }
     var isZoomed: Bool { geometry.zoom > 1.001 }
     static let tile = 4_096
@@ -159,8 +171,8 @@ struct PreviewZoomGeometry: Equatable {
         guard shown.width > 0, size.width > 0 else { return }
         CATransaction.begin()
         if animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            CATransaction.setAnimationDuration(0.32)
-            CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1))
+            CATransaction.setAnimationDuration(0.36)
+            CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(controlPoints: 0.2, 1.08, 0.4, 1))
         } else {
             CATransaction.setDisableActions(true)
         }
@@ -244,7 +256,20 @@ struct PreviewZoomGeometry: Equatable {
     }
     override func magnify(with event: NSEvent) {
         guard canInteract() else { return }
-        zoom(to: geometry.zoom * (1 + event.magnification), around: convert(event.locationInWindow, from: nil), animated: false)
+        let point = convert(event.locationInWindow, from: nil)
+        if event.phase == .began || pinch == nil { pinch = geometry.zoom }
+        let asked = (pinch ?? 1) * (1 + event.magnification)
+        pinch = asked
+        let before = geometry.zoom
+        geometry.zoom(to: asked, keeping: point, size, in: bounds.size, elastic: true)
+        place(animated: false)
+        if abs(geometry.zoom - before) > 0.0001 { showReadout() }
+        if event.phase == .ended || event.phase == .cancelled {
+            // Let go past a limit, it springs back to it.
+            pinch = nil
+            zoom(to: geometry.zoom, around: point, animated: true)
+        }
+        updateCursor()
     }
     override func smartMagnify(with event: NSEvent) {
         guard canInteract() else { return }
