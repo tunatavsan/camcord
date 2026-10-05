@@ -72,6 +72,8 @@ struct ScreenshotPreviewGeometry {
     private var closed = false
     /// Pinches and two-finger double taps over the pin, wherever the system sends them.
     private var gestureTap: UUID?
+    /// Carries the pin out of its card; let go as soon as the pin is taken in hand.
+    private let spring = WindowSpring()
 
     init(capture: CapturedScreenshot, operations: ScreenshotCardModel.Operations, visible: CGRect,
          claim: (@MainActor () -> (@MainActor () -> Bool))?, canEdit: Bool, pinned: Bool = false, from: CGRect? = nil) {
@@ -113,12 +115,12 @@ struct ScreenshotPreviewGeometry {
             panel.makeKeyAndOrderFront(nil)
             panel.makeFirstResponder(host)
             host.morphIn(settlingIn: Self.morphDuration)
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = Self.morphDuration
-                context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1)
-                context.allowsImplicitAnimation = true
-                panel.animator().setFrame(target, display: true)
+            host.onGrab = { [weak self] in
+                guard let self else { return }
+                self.spring.stop(self.panel)
             }
+            // A little give at the end, the way a sheet settles.
+            spring.move(panel, to: target, response: Self.morphDuration, dampingRatio: 0.8)
         } else {
             panel.makeKeyAndOrderFront(nil)
             panel.makeFirstResponder(host)
@@ -127,7 +129,7 @@ struct ScreenshotPreviewGeometry {
         installGestureMonitors()
     }
 
-    static let morphDuration: TimeInterval = 0.5
+    static let morphDuration: TimeInterval = 0.6
 
     /// A pin floats over other apps without taking their focus, so the trackpad's pinch goes to
     /// the app in front; the gesture tap gives the pin every pinch and smart zoom made over it.
@@ -174,6 +176,8 @@ private final class ScreenshotPreviewPanel: NSPanel {
     var onClose: (@MainActor () -> Void)?
     var onEdit: (@MainActor () -> Void)?
     var onPin: (@MainActor () -> Void)?
+    /// The pin was taken in hand: pressed to move, resize or pan.
+    var onGrab: (@MainActor () -> Void)?
     private(set) var isSharing = false
     private(set) var isResizing = false
     private let model: ScreenshotCardModel
@@ -228,6 +232,7 @@ private final class ScreenshotPreviewPanel: NSPanel {
         zoom.canInteract = { [weak model] in model?.isAlive == true }
         // The band's blur is drawn from the capture whole; zoomed in, only its scrim stays.
         zoom.onZoomedChange = { [weak well] zoomed in well?.band.showsBlur = !zoomed }
+        zoom.onPress = { [weak self] in self?.onGrab?() }
         zoom.setAccessibilityHelp(String(localized: "Pinch or double-click to zoom; drag to move around"))
         well.addSubview(zoom, positioned: .above, relativeTo: image)
         // The camera's × and resize corners stand in for the card's corner ×; the actions keep
@@ -402,6 +407,7 @@ private final class ScreenshotPreviewPanel: NSPanel {
         }
     }
     private func beginResize(_ edges: Edges) {
+        onGrab?()
         guard let window else { return }
         resize = (edges, window.frame, NSEvent.mouseLocation)
         isResizing = true
@@ -438,7 +444,7 @@ private final class ScreenshotPreviewPanel: NSPanel {
 
     func invalidate() {
         alive = false; observers.removeAll(); share.close()
-        onClose = nil; onEdit = nil; onPin = nil
+        onClose = nil; onEdit = nil; onPin = nil; onGrab = nil
     }
 
     /// Opens from slightly smaller, the way a window zooms into place; from a card, it grows out

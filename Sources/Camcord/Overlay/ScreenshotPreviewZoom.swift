@@ -101,6 +101,8 @@ struct PreviewZoomGeometry: Equatable {
     var canInteract: @MainActor () -> Bool = { true }
     /// Told when the capture goes from whole to zoomed, or back.
     var onZoomedChange: ((Bool) -> Void)?
+    /// Told on every press on the capture.
+    var onPress: (() -> Void)?
     private var reportedZoomed = false
     var isZoomed: Bool { geometry.zoom > 1.001 }
     static let tile = 4_096
@@ -238,6 +240,7 @@ struct PreviewZoomGeometry: Equatable {
 
     override func mouseDown(with event: NSEvent) {
         guard canInteract() else { return }
+        onPress?()
         let point = convert(event.locationInWindow, from: nil)
         if event.clickCount == 2 {
             zoom(to: isZoomed ? 1 : PreviewZoomGeometry.closer(size, in: bounds.size), around: point, animated: true)

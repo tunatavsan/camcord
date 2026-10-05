@@ -29,6 +29,9 @@ import UniformTypeIdentifiers
         var dismissReason: String?
         /// Its pinch: opening the fingers over the card pins it.
         var gestureTap: UUID?
+        /// It has its place; until it has entered it keeps that place, so a capture flying into
+        /// it lands where it is.
+        var placed = false
         init(model: ScreenshotCardModel, generation: UInt64, window: NSWindow,
              host: ScreenshotCardPresentation, visibleFrame: CGRect, now: TimeInterval) {
             self.model = model; self.generation = generation; self.window = window
@@ -54,6 +57,8 @@ import UniformTypeIdentifiers
     private let operations: ScreenshotCardModel.Operations
     private let keepsInLibrary: @MainActor () -> Bool
     let preview = ScreenshotPreviewWindow()
+    /// Cards that change place glide there on a spring, and a new place mid-glide bends the motion.
+    private let glide = WindowSpring()
     private static var hasCleanedExports = false
     /// Visible space between stacked cards; their shadow margins overlap.
     static let stackGap: CGFloat = 10
@@ -180,6 +185,8 @@ import UniformTypeIdentifiers
             entry.enteredAt = self.timing.now()
             entry.dwell.enter(at: self.timing.now())
             self.arm(entry)
+            // Its place may have changed while it arrived.
+            self.reflow()
         }
         if let flight = fly(capture, into: entry) {
             // The capture flies in from where it was taken; the card forms around it on the way.
@@ -225,6 +232,8 @@ import UniformTypeIdentifiers
         entry.dwell.leave(at: timing.now()); entry.exitAt = timing.now(); entry.dismissReason = reason
         entry.model.invalidate(); entry.host.invalidate()
         GestureTap.shared.unregister(entry.gestureTap); entry.gestureTap = nil
+        // A card leaving mid-glide leaves from where it is.
+        glide.stop(entry.window)
         entries.removeAll { $0 === entry }
         reflow()
         let finish: @MainActor () -> Void = { [entry, timing] in
@@ -247,19 +256,18 @@ import UniformTypeIdentifiers
             for entry in entries where entry.visibleFrame == display.frame {
                 let frame = CGRect(x: display.frame.maxX - size.width, y: y, width: size.width, height: size.height)
                 y += step
-                guard entry.window.frame != frame else { continue }
-                // A card still arriving simply takes its place. One already up moves as a whole
-                // window: moving its content inside the old window clipped it at the edge.
-                guard !usesFixtureFrame, !reduceMotion(), entry.enteredAt != nil else {
-                    entry.window.setFrame(frame, display: true)
+                // A new card takes its place at once and keeps it until it has arrived.
+                guard entry.placed else {
+                    entry.placed = true
+                    glide.place(entry.window, at: frame)
                     continue
                 }
-                NSAnimationContext.runAnimationGroup { context in
-                    context.duration = 0.42
-                    context.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1)
-                    context.allowsImplicitAnimation = true
-                    entry.window.animator().setFrame(frame, display: true)
-                }
+                guard entry.enteredAt != nil else { continue }
+                guard (glide.target(of: entry.window) ?? entry.window.frame) != frame else { continue }
+                // One already up moves as a whole window, on a calm spring: moving its content
+                // inside the old window clipped it at the edge.
+                if usesFixtureFrame || reduceMotion() { glide.place(entry.window, at: frame) }
+                else { glide.move(entry.window, to: frame, response: 0.8, dampingRatio: 1) }
             }
         }
     }
