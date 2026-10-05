@@ -309,14 +309,18 @@ final class CaptureCoordinator {
         }
 
         let region: CGRect
-        if focusedWindow, let frame = Self.focusedWindowFrame() {
-            region = Self.scrollRegion(forWindow: frame)
+        if focusedWindow, let focused = Self.focusedScrollRegion() {
+            region = focused
         } else {
             guard let (result, _) = await overlay.selectRegion() else { return }
             try? await Task.sleep(for: Self.postHideDelay)
             switch result {
             case .region(let r): region = r
-            case .window(let window): region = Self.scrollRegion(forWindow: window.frame)
+            case .window(let window):
+                let element = window.owningApplication.flatMap {
+                    WindowSnapper.axWindow(pid: $0.processID, matching: window.frame)
+                }
+                region = Self.scrollRegion(forWindow: window.frame, element: element)
             }
         }
         guard region.width >= 1, region.height >= 1 else {
@@ -359,8 +363,9 @@ final class CaptureCoordinator {
 
         // The stitched image is taller than the viewport; derive its point size from the
         // captured pixel scale so DPI-aware pastes stay correct.
-        let scale = clampedRegion.width > 0 ? CGFloat(image.width) / clampedRegion.width : 2
-        let pointSize = CGSize(width: clampedRegion.width, height: CGFloat(image.height) / max(scale, 0.01))
+        // A sidebar fixed beside the page may have been cut away: the width is the image's own.
+        let scale = max(session.pixelScale, 0.01)
+        let pointSize = CGSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)
         let resolutionScale = operations.screenshotSettings().resolutionScale
         let outputImage: CGImage
         if resolutionScale == .native {
@@ -390,26 +395,41 @@ final class CaptureCoordinator {
         succeeded(.fullScreenShot)
     }
 
-    /// A window's rounded bottom corners would be cut into every stitched strip; the
-    /// capture stops just above them (macOS 26 rounds a toolbar window by up to 26 pt).
-    private static func scrollRegion(forWindow frame: CGRect) -> CGRect {
-        let corner: CGFloat = CaptureAreaIndicator.windowCornerRadius(forSize: frame.size) > 0 ? 26 : 0
-        return CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: max(1, frame.height - corner))
+    /// What a scroll capture of a window takes: the part that scrolls (a browser's page, an app's
+    /// scroll area) when Accessibility names it, so tab bars and toolbars stay out; else the
+    /// whole window. Either way above the rounded bottom corners, which would otherwise be cut
+    /// into every stitched strip (macOS 26 rounds a toolbar window by up to 26 pt).
+    private static func scrollRegion(forWindow window: CGRect, element: AXUIElement?) -> CGRect {
+        let pointer = CGEvent(source: nil)?.location
+        let content = element.flatMap {
+            WindowSnapper.scrollContent(areas: WindowSnapper.scrollingAreas(in: $0), window: window, pointer: pointer)
+        }
+        let area = content ?? window
+        let corner: CGFloat = CaptureAreaIndicator.windowCornerRadius(forSize: window.size) > 0 ? 26 : 0
+        let bottom = min(area.maxY, window.maxY - corner)
+        return CGRect(x: area.minX, y: area.minY, width: area.width, height: max(1, bottom - area.minY))
     }
 
-    /// The focused window's frame: the one Accessibility names for the frontmost app, else its
-    /// front window big enough to scroll. Never one of ours, never a link-status bubble.
-    private static func focusedWindowFrame() -> CGRect? {
+    /// The scroll region in the focused window: the window Accessibility names for the frontmost
+    /// app (else its front window big enough to scroll), and in it the part that scrolls. Never
+    /// one of ours, never a link-status bubble.
+    private static func focusedScrollRegion() -> CGRect? {
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let ownPID = ProcessInfo.processInfo.processIdentifier
-        let focused = frontmostPID.flatMap { $0 == ownPID ? nil : WindowSnapper.focusedWindowFrame(pid: $0) }
+        let focused = frontmostPID.flatMap { $0 == ownPID ? nil : WindowSnapper.focusedWindow(pid: $0) }
         let target = WindowSnapper.scrollTarget(ordered: WindowSnapper.currentCandidates(),
-                                                frontmostPID: frontmostPID, ownPID: ownPID, focused: focused)
+                                                frontmostPID: frontmostPID, ownPID: ownPID, focused: focused?.frame)
+        // Its tree describes the chosen window only when that is the focused one.
+        let element = focused.flatMap { focused in
+            target.map { WindowSnapper.distance($0, focused.frame) <= 4 } == true ? focused.element : nil
+        }
+        let region = target.map { scrollRegion(forWindow: $0, element: element) }
         let describe: (CGRect?) -> String = { rect in
             rect.map { "\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))x\(Int($0.height))" } ?? "none"
         }
-        DiagnosticsLog.append("scroll target focused=\(describe(focused)) chosen=\(describe(target))")
-        return target
+        DiagnosticsLog.append("scroll target focused=\(describe(focused?.frame)) chosen=\(describe(target)) "
+            + "region=\(describe(region))")
+        return region
     }
 
     /// The SCDisplay whose frame contains the region's center.

@@ -140,6 +140,70 @@ struct AutoScrollSessionTests {
         #expect(abs(image.height - page.height) <= 2)
     }
 
+    /// A page with a sidebar fixed beside it, like a web app's navigation.
+    @MainActor final class SidebarPage: ScrollActuator {
+        let route = "scripted"
+        static let width = 160, sidebar = 40, viewport = 120
+        let height = 900
+        private(set) var offset = 0
+        /// The page and the sidebar, both `width` wide; the sidebar shows its first columns.
+        private let pageBytes: [UInt8]
+        private let sidebarBytes: [UInt8]
+        init() {
+            pageBytes = (0..<(Self.width * height / 40)).flatMap { Page.noise(rows: 1, seed: $0 &* 7) }
+            sidebarBytes = (0..<(Self.width * Self.viewport / 40)).flatMap { Page.noise(rows: 1, seed: 90_000 &+ $0) }
+        }
+        func pixel(_ x: Int, _ y: Int) -> UInt8 { pageBytes[y * Self.width + x] }
+        func frame() -> CGImage {
+            var bytes = [UInt8](repeating: 0, count: Self.width * Self.viewport)
+            for y in 0..<Self.viewport {
+                for x in 0..<Self.width {
+                    // The sidebar shows the same rows whatever the page does.
+                    bytes[y * Self.width + x] = x < Self.sidebar ? sidebarBytes[y * Self.width + x] : pixel(x, offset + y)
+                }
+            }
+            return CGImage(width: Self.width, height: Self.viewport, bitsPerComponent: 8, bitsPerPixel: 8,
+                           bytesPerRow: Self.width, space: CGColorSpaceCreateDeviceGray(),
+                           bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
+                           provider: CGDataProvider(data: Data(bytes) as CFData)!, decode: nil,
+                           shouldInterpolate: false, intent: .defaultIntent)!
+        }
+        func scroll(by points: CGFloat) async -> Bool {
+            offset = min(max(offset + Int(points.rounded()), 0), height - Self.viewport)
+            return true
+        }
+        func jumpToTop() async -> Bool { false }
+        func reverse() {}
+        func position() -> CGFloat? { nil }
+    }
+
+    @Test("a sidebar fixed beside the page is cut away instead of repeating in every strip")
+    func fixedSidebarIsCutAway() async throws {
+        let page = SidebarPage()
+        var updates = 0
+        let hooks = ScrollingCaptureSession.Hooks(
+            prepare: {}, capture: { _ in page.frame() }, update: { _, _ in updates += 1 }, actuator: page)
+        let session = ScrollingCaptureSession(
+            region: CGRect(x: 0, y: 0, width: SidebarPage.width, height: SidebarPage.viewport), hooks: hooks)
+        let run = Task { await session.run() }
+        await waitUntil { updates >= 1 && session.readyForCaptureForTesting }
+        session.toggleAutoForTesting()
+        guard case .completed(let image, _) = await run.value else { Issue.record("auto must finish"); return }
+        #expect(image.width == SidebarPage.width - SidebarPage.sidebar, "kept \(image.width) columns")
+        #expect(abs(image.height - page.height) <= 2, "captured \(image.height) of \(page.height) rows")
+        let context = try #require(CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
+                                             bytesPerRow: image.width, space: CGColorSpaceCreateDeviceGray(),
+                                             bitmapInfo: CGImageAlphaInfo.none.rawValue))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        let pixels = try #require(context.data).bindMemory(to: UInt8.self, capacity: image.width * image.height)
+        let wrong = (0..<min(image.height, page.height)).filter { y in
+            (0..<image.width).contains { x in
+                abs(Int(pixels[y * image.width + x]) - Int(page.pixel(x + SidebarPage.sidebar, y))) > 3
+            }
+        }.count
+        #expect(wrong == 0, "\(wrong) rows differ from the page")
+    }
+
     @Test("with a scroll bar it jumps to the top in one step and still stops where the owner started")
     func jumpsToTheTop() async throws {
         let page = Page(height: 1_400, startingAt: 500, jumps: true)

@@ -73,26 +73,83 @@ enum WindowSnapper {
         }
         if let focused {
             // Two windows of one app can stack within a few points of each other: the closest wins.
-            let distance: (Candidate) -> CGFloat = { candidate in
-                max(abs(candidate.bounds.minX - focused.minX), abs(candidate.bounds.minY - focused.minY),
-                    abs(candidate.bounds.width - focused.width), abs(candidate.bounds.height - focused.height))
-            }
-            if let match = eligible.filter({ distance($0) <= 4 }).min(by: { distance($0) < distance($1) }) {
+            if let match = eligible.filter({ distance($0.bounds, focused) <= 4 })
+                .min(by: { distance($0.bounds, focused) < distance($1.bounds, focused) }) {
                 return match.bounds
             }
         }
         return eligible.first?.bounds
     }
 
-    /// The app's focused window as Accessibility reports it, in CG (top-left) points. Nil without
-    /// the permission or when the app names none.
+    /// How far apart two frames are: their largest edge or size difference, in points.
+    static func distance(_ a: CGRect, _ b: CGRect) -> CGFloat {
+        max(abs(a.minX - b.minX), abs(a.minY - b.minY), abs(a.width - b.width), abs(a.height - b.height))
+    }
+
+    /// The app's window at `frame`, as Accessibility knows it (a window picked on screen).
     @MainActor
-    static func focusedWindowFrame(pid: pid_t) -> CGRect? {
+    static func axWindow(pid: pid_t, matching frame: CGRect) -> AXUIElement? {
         guard AXIsProcessTrusted() else { return nil }
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 0.3)
-        guard let window: AXUIElement = AXScrollActuator.attribute(app, kAXFocusedWindowAttribute) else { return nil }
-        return AXScrollActuator.frame(of: window)
+        let windows: [AXUIElement] = AXScrollActuator.attribute(app, kAXWindowsAttribute) ?? []
+        return windows.first { window in AXScrollActuator.frame(of: window).map { distance($0, frame) <= 4 } ?? false }
+    }
+
+    /// The app's focused window as Accessibility reports it, with its frame in CG (top-left)
+    /// points. Nil without the permission or when the app names none.
+    @MainActor
+    static func focusedWindow(pid: pid_t) -> (element: AXUIElement, frame: CGRect)? {
+        guard AXIsProcessTrusted() else { return nil }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.3)
+        guard let window: AXUIElement = AXScrollActuator.attribute(app, kAXFocusedWindowAttribute),
+              let frame = AXScrollActuator.frame(of: window) else { return nil }
+        return (window, frame)
+    }
+
+    /// The frames of the parts of `window` that scroll: a browser's web area, an app's scroll
+    /// areas. Never inside one of them (a web page's own tree is huge), and bounded in time so
+    /// the shortcut stays instant on a slow app.
+    @MainActor
+    static func scrollingAreas(in window: AXUIElement) -> [CGRect] {
+        let scrolling: Set<String> = ["AXWebArea", kAXScrollAreaRole as String]
+        let opaque: Set<String> = [kAXTextAreaRole as String, kAXTableRole as String, kAXListRole as String,
+                                   kAXOutlineRole as String, kAXBrowserRole as String]
+        let deadline = ContinuousClock.now + .milliseconds(150)
+        var queue: [(AXUIElement, Int)] = [(window, 0)]
+        var areas: [CGRect] = []
+        var visited = 0
+        while !queue.isEmpty, visited < 1_500, ContinuousClock.now < deadline {
+            let (element, depth) = queue.removeFirst()
+            visited += 1
+            let role: String = AXScrollActuator.attribute(element, kAXRoleAttribute) ?? ""
+            if scrolling.contains(role) {
+                if let frame = AXScrollActuator.frame(of: element) { areas.append(frame) }
+                continue
+            }
+            guard depth < 14, !opaque.contains(role) else { continue }
+            for child in (AXScrollActuator.attribute(element, kAXChildrenAttribute) as [AXUIElement]?) ?? [] {
+                queue.append((child, depth + 1))
+            }
+        }
+        return areas
+    }
+
+    /// Which scrolling area of `window` the capture takes: the one under the pointer, else the
+    /// largest. Areas smaller than a fifth of the window (a carousel, a palette) never count, so
+    /// a pointer over one picks the area around it.
+    static func scrollContent(areas: [CGRect], window: CGRect, pointer: CGPoint?) -> CGRect? {
+        let minimumArea = window.width * window.height / 5
+        let eligible = areas.map { $0.intersection(window) }.filter { area in
+            !area.isNull && area.width >= scrollTargetMinimumSide && area.height >= scrollTargetMinimumSide
+                && area.width * area.height >= minimumArea
+        }
+        let size: (CGRect) -> CGFloat = { $0.width * $0.height }
+        if let pointer, let under = eligible.filter({ $0.contains(pointer) }).min(by: { size($0) < size($1) }) {
+            return under
+        }
+        return eligible.max { size($0) < size($1) }
     }
 
     /// Resolves the actual active normal window from fresh WindowServer z-order. A display-sized

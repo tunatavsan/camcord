@@ -87,6 +87,12 @@ actor ScrollStitchWorker {
         workHook?()
         return stitcher.finalImage()
     }
+
+    /// The columns that scrolled between two frames `shift` rows apart, when a side stayed fixed.
+    func scrollingColumns(_ earlier: CGImage, _ later: CGImage, shift: Int) -> Range<Int>? {
+        workHook?()
+        return ScrollColumns.scrolling(earlier: earlier, later: later, shift: shift)
+    }
 }
 
 /// Drives a **manual** scrolling capture: the user scrolls the target window while we
@@ -177,6 +183,15 @@ final class ScrollingCaptureSession {
     private var autoFrame: CGImage?
     /// Auto was asked for before the first frame was in; it starts as soon as that frame is.
     private var autoRequested = false
+
+    // A sidebar fixed beside the page would repeat in every strip: once the first real move
+    // shows which columns scroll, every frame is cut to them.
+    private var columns: Range<Int>?
+    /// The width of a frame as captured, before it is cut to `columns`.
+    private var capturedWidth = 0
+    private var columnsChecked = false
+    /// The last frame given to the stitcher, as captured.
+    private var lastFed: CGImage?
     private static let maxClimbSteps = 120
     /// The smallest move auto measures, in pixels; manual scrolling keeps the stitcher's own
     /// floor against jitter and bounce.
@@ -404,6 +419,7 @@ final class ScrollingCaptureSession {
                 logAuto("climbed points=\(Int(climb.distance)) exact=\(climb.exact)")
                 boundary = Boundary(frame: start, distance: climb.distance, exact: climb.exact)
                 await worker.reset()
+                lastFed = nil
                 guard autoAlive(run) else { return }
                 stitchState = ScrollStitchWorker.State()
                 guard await stitch(climb.top, predictedPx: 0, sessionGeneration: generation) != nil else { return }
@@ -550,7 +566,7 @@ final class ScrollingCaptureSession {
                 continue
             }
             guard let boundary, last || searching else { continue }
-            let atStart = await worker.compare(frame, boundary.frame, header: stitchState.header,
+            let atStart = await worker.compare(frame, cropped(boundary.frame), header: stitchState.header,
                                                footer: stitchState.footer, predicted: 0).still
             if atStart || boundary.exact && !searching {
                 finishAuto(reason: atStart ? "start-reached" : "start-measured")
@@ -733,15 +749,43 @@ final class ScrollingCaptureSession {
         }
         guard !finished, generation == sessionGeneration else { return nil }
         captureFailures = 0
-        return image
+        return cropped(image)
     }
+
+    /// `image` cut to the columns that scroll, once they are known.
+    private func cropped(_ image: CGImage) -> CGImage {
+        guard let columns, image.width == capturedWidth,
+              let cut = image.cropping(to: CGRect(x: columns.lowerBound, y: 0,
+                                                  width: columns.count, height: image.height)) else { return image }
+        return cut
+    }
+
+    /// Points to pixels in the captured frames.
+    var pixelScale: CGFloat { scale }
 
     /// Feeds one settled frame to the stitcher and shows what changed.
     private func stitch(_ image: CGImage, predictedPx: Int, sessionGeneration: Int,
                         minimumShift: Int? = nil) async -> ScrollStitcher.Outcome? {
         let rebaselines = stitchState.rebaselines
-        let update = await worker.add(image, predictedOffset: predictedPx, minimumShift: minimumShift)
+        var update = await worker.add(image, predictedOffset: predictedPx, minimumShift: minimumShift)
         guard !finished, generation == sessionGeneration else { return nil }
+        let earlier = lastFed
+        lastFed = image
+        if !columnsChecked, let earlier, earlier.width == image.width, case .down(let shift, _) = update.state.motion {
+            // The first real move: if a side stayed fixed, start the stitch over on what scrolls.
+            columnsChecked = true
+            if let span = await worker.scrollingColumns(earlier, image, shift: shift) {
+                guard !finished, generation == sessionGeneration else { return nil }
+                capturedWidth = image.width
+                columns = span
+                if hooks == nil { DiagnosticsLog.append("scroll columns x=\(span.lowerBound) width=\(span.count) of=\(image.width)") }
+                await worker.reset()
+                _ = await worker.add(cropped(earlier), predictedOffset: 0)
+                update = await worker.add(cropped(image), predictedOffset: shift, minimumShift: minimumShift)
+                guard !finished, generation == sessionGeneration else { return nil }
+                lastFed = cropped(image)
+            }
+        }
         stitchState = update.state
         let outcome = update.outcome
         logCapture(String(describing: outcome), offset: stitchState.offset, score: stitchState.score)

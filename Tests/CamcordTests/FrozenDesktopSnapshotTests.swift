@@ -147,6 +147,31 @@ struct FrozenDesktopSnapshotTests {
                 == CGRect(x: 0, y: 39, width: 1800, height: 1049))
     }
 
+    @Test("a browser's scroll capture takes its page, not its tab and address bars")
+    func scrollContentIsTheWebArea() {
+        let window = CGRect(x: 0, y: 39, width: 1800, height: 1049)
+        let page = CGRect(x: 0, y: 74, width: 1800, height: 1014)
+        #expect(WindowSnapper.scrollContent(areas: [page, page], window: window, pointer: nil) == page)
+    }
+
+    @Test("in a window with several scrolling areas the one under the pointer wins, never a small one")
+    func scrollContentFollowsThePointer() {
+        // A file browser: a narrow sidebar and the file list beside it.
+        let window = CGRect(x: 136, y: 513, width: 920, height: 532)
+        let sidebar = CGRect(x: 144, y: 565, width: 150, height: 472)
+        let list = CGRect(x: 294, y: 565, width: 762, height: 424)
+        #expect(WindowSnapper.scrollContent(areas: [sidebar, list], window: window, pointer: CGPoint(x: 600, y: 700)) == list)
+        #expect(WindowSnapper.scrollContent(areas: [sidebar, list], window: window, pointer: nil) == list)
+        // The sidebar is under a fifth of the window: a pointer over it still takes the list.
+        #expect(WindowSnapper.scrollContent(areas: [sidebar, list], window: window, pointer: CGPoint(x: 200, y: 700)) == list)
+        // Two large panes (a mail list and a message): the pointer chooses.
+        let mailList = CGRect(x: 136, y: 565, width: 400, height: 480)
+        let message = CGRect(x: 536, y: 565, width: 520, height: 480)
+        #expect(WindowSnapper.scrollContent(areas: [mailList, message], window: window,
+                                            pointer: CGPoint(x: 300, y: 700)) == mailList)
+        #expect(WindowSnapper.scrollContent(areas: [], window: window, pointer: nil) == nil)
+    }
+
     @Test("with Camcord frontmost the scroll shortcut targets the front window of another app")
     func scrollTargetSkipsOwnWindows() {
         let own = WindowSnapper.Candidate(windowID: 30, layer: 0, bounds: CGRect(x: 0, y: 0, width: 400, height: 300), ownerPID: 7)
