@@ -126,10 +126,49 @@ enum ScreenshotService {
         }
     }
 
-    /// Captures a single window without bringing it forward.
+    /// Captures a single window without bringing it forward, the way it looks on screen. A window
+    /// captured on its own leaves out what shows through it: a translucent terminal or a sidebar
+    /// with a blurred backdrop came out flat and lighter than on screen. So its colours come from
+    /// the display with only the windows above it left out, and its shape (rounded corners,
+    /// anti-aliased edges) from the window on its own. A window that is not wholly on one display
+    /// is taken on its own, as before.
     static func captureWindow(
         _ window: SCWindow,
         resolutionScale: ResolutionScale = .native
+    ) async throws -> CGImage {
+        let alone = try await captureWindowAlone(window, resolutionScale: resolutionScale)
+        guard let seen = try? await captureWindowAsSeen(window, width: alone.width, height: alone.height),
+              let composed = WindowAppearance.composite(seen: seen, shape: alone) else { return alone }
+        return composed
+    }
+
+    /// The window's rect on its display with every window above it left out, at `width` by `height` pixels.
+    private static func captureWindowAsSeen(_ window: SCWindow, width: Int, height: Int) async throws -> CGImage? {
+        guard window.isOnScreen else { return nil }
+        let content = try await SCShareableContent.current
+        guard let display = content.displays.first(where: { $0.frame.insetBy(dx: -1, dy: -1).contains(window.frame) }) else {
+            return nil
+        }
+        let above = Set(WindowAppearance.windowsAbove(window.windowID))
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        let excluded = content.windows.filter { above.contains($0.windowID) || $0.owningApplication?.processID == ownPID }
+        let filter = SCContentFilter(display: display, excludingWindows: excluded)
+        let configuration = SCStreamConfiguration()
+        configuration.showsCursor = false
+        configuration.captureResolution = .best
+        configuration.sourceRect = window.frame.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
+        configuration.width = width
+        configuration.height = height
+        let box = FilterConfigurationBox(filter: filter, configuration: configuration)
+        return try await withHardTimeout(.seconds(2), onTimeout: CaptureError.timeout) {
+            try await SCScreenshotManager.captureImage(contentFilter: box.filter, configuration: box.configuration)
+        }
+    }
+
+    /// The window on its own, with what shows through it left transparent.
+    private static func captureWindowAlone(
+        _ window: SCWindow,
+        resolutionScale: ResolutionScale
     ) async throws -> CGImage {
         let filter = SCContentFilter(desktopIndependentWindow: window)
         let configuration = SCStreamConfiguration()
