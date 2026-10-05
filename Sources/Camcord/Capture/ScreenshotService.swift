@@ -138,17 +138,29 @@ enum ScreenshotService {
     ) async throws -> CGImage {
         let alone = try await captureWindowAlone(window, resolutionScale: resolutionScale)
         guard let seen = try? await captureWindowAsSeen(window, width: alone.width, height: alone.height),
-              let composed = WindowAppearance.composite(seen: seen, shape: alone) else { return alone }
+              let composed = WindowAppearance.composite(seen: seen.image, at: seen.placement, shape: alone) else {
+            DiagnosticsLog.append("window shot as-seen=false")
+            return alone
+        }
         return composed
     }
 
-    /// The window's rect on its display with every window above it left out, at `width` by `height` pixels.
-    private static func captureWindowAsSeen(_ window: SCWindow, width: Int, height: Int) async throws -> CGImage? {
-        guard window.isOnScreen else { return nil }
+    /// The part of the window on its display, with every window above it left out, and where it
+    /// sits in the window's own `width` by `height` pixels (bottom-left origin). A window a point
+    /// past the screen's edge, as a zoomed one is, keeps the part that is on it.
+    private static func captureWindowAsSeen(_ window: SCWindow, width: Int, height: Int)
+        async throws -> (image: CGImage, placement: CGRect)? {
+        guard window.isOnScreen, window.frame.width > 0, window.frame.height > 0 else { return nil }
         let content = try await SCShareableContent.current
-        guard let display = content.displays.first(where: { $0.frame.insetBy(dx: -1, dy: -1).contains(window.frame) }) else {
+        guard let display = content.displays.first(where: { $0.frame.insetBy(dx: -2, dy: -2).contains(window.frame) }) else {
             return nil
         }
+        let visible = window.frame.intersection(display.frame)
+        guard visible.width >= 1, visible.height >= 1 else { return nil }
+        let scale = CGFloat(width) / window.frame.width
+        let placement = CGRect(x: ((visible.minX - window.frame.minX) * scale).rounded(),
+                               y: ((window.frame.maxY - visible.maxY) * scale).rounded(),
+                               width: (visible.width * scale).rounded(), height: (visible.height * scale).rounded())
         let above = Set(WindowAppearance.windowsAbove(window.windowID))
         let ownPID = ProcessInfo.processInfo.processIdentifier
         let excluded = content.windows.filter { above.contains($0.windowID) || $0.owningApplication?.processID == ownPID }
@@ -156,13 +168,14 @@ enum ScreenshotService {
         let configuration = SCStreamConfiguration()
         configuration.showsCursor = false
         configuration.captureResolution = .best
-        configuration.sourceRect = window.frame.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
-        configuration.width = width
-        configuration.height = height
+        configuration.sourceRect = visible.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
+        configuration.width = Int(placement.width)
+        configuration.height = Int(placement.height)
         let box = FilterConfigurationBox(filter: filter, configuration: configuration)
-        return try await withHardTimeout(.seconds(2), onTimeout: CaptureError.timeout) {
+        let image = try await withHardTimeout(.seconds(2), onTimeout: CaptureError.timeout) {
             try await SCScreenshotManager.captureImage(contentFilter: box.filter, configuration: box.configuration)
         }
+        return (image, placement)
     }
 
     /// The window on its own, with what shows through it left transparent.

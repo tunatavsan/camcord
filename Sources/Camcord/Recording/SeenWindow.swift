@@ -12,13 +12,17 @@ import AppKit
     let windows: [SCWindow]
     let windowID: CGWindowID
 
-    /// Nil for an opaque window, or one that is not on screen wholly on one display.
+    /// Nil for a window that looks on screen as it does on its own, or one that is not on screen
+    /// wholly on one display. A window can be opaque to itself and still let the screen through
+    /// (a terminal whose window server draws its background translucent), so the test is how it
+    /// looks: a small shot on its own against a small shot as seen.
     static func plan(for window: SCWindow) async -> SeenWindow? {
-        guard window.isOnScreen, await isTranslucent(window) else { return nil }
+        guard window.isOnScreen else { return nil }
         guard let content = try? await withHardTimeout(.seconds(2), onTimeout: CaptureError.timeout, operation: {
             try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        }) else { return nil }
-        return plan(for: window.windowID, frame: window.frame, in: content)
+        }), let plan = plan(for: window.windowID, frame: window.frame, in: content),
+              await plan.looksDifferent(window) else { return nil }
+        return plan
     }
 
     /// The same plan against fresh content, after the stream had to be rebuilt.
@@ -43,10 +47,26 @@ import AppKit
         frame.intersection(display.frame).offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
     }
 
-    /// Whether the window lets the screen show through anywhere inside its edges: a small shot of
-    /// it on its own, its alpha read away from the rounded corners.
-    private static func isTranslucent(_ window: SCWindow) async -> Bool {
-        guard let shot = try? await ScreenshotService.captureWindowThumbnail(window, maxWidth: 160) else { return false }
-        return WindowAppearance.isTranslucent(shot)
+    /// Whether the window on its own differs from the window as seen, away from its edges.
+    private func looksDifferent(_ window: SCWindow) async -> Bool {
+        guard let alone = try? await ScreenshotService.captureWindowThumbnail(window, maxWidth: 160) else { return false }
+        let configuration = SCStreamConfiguration()
+        configuration.showsCursor = false
+        configuration.sourceRect = sourceRect(for: window.frame)
+        configuration.width = alone.width
+        configuration.height = alone.height
+        let filter = filter
+        let box = SeenShot(filter: filter, configuration: configuration)
+        guard let seen = try? await withHardTimeout(.seconds(2), onTimeout: CaptureError.timeout, operation: {
+            try await SCScreenshotManager.captureImage(contentFilter: box.filter, configuration: box.configuration)
+        }), let difference = WindowAppearance.difference(alone, seen) else { return false }
+        DiagnosticsLog.append("recording window difference=\(String(format: "%.1f", difference))")
+        return difference > 3
     }
+}
+
+/// The filter and configuration of a small shot, handed to ScreenCaptureKit across actors.
+private struct SeenShot: @unchecked Sendable {
+    let filter: SCContentFilter
+    let configuration: SCStreamConfiguration
 }

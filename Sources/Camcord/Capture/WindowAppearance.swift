@@ -11,8 +11,16 @@ enum WindowAppearance {
     /// `seen` (the display under the window's rect) inside the shape of `shape` (the window on
     /// its own, transparent where it lets the screen through). Nil when they differ in size.
     static func composite(seen: CGImage, shape: CGImage) -> CGImage? {
+        guard seen.width == shape.width, seen.height == shape.height else { return nil }
+        return composite(seen: seen, at: CGRect(x: 0, y: 0, width: seen.width, height: seen.height), shape: shape)
+    }
+
+    /// `seen` placed at `placement` (pixels, bottom-left origin) inside the shape of `shape`; a part
+    /// of the window that was off the screen is left out.
+    static func composite(seen: CGImage, at placement: CGRect, shape: CGImage) -> CGImage? {
         let width = shape.width, height = shape.height
-        guard seen.width == width, seen.height == height, width > 0, height > 0 else { return nil }
+        guard width > 0, height > 0, placement.width >= 1, placement.height >= 1,
+              CGRect(x: 0, y: 0, width: width, height: height).insetBy(dx: -1, dy: -1).contains(placement) else { return nil }
         var coverage = [UInt8](repeating: 0, count: width * height)
         let drew: Bool = coverage.withUnsafeMutableBytes { bytes in
             guard let alpha = CGContext(data: bytes.baseAddress, width: width, height: height, bitsPerComponent: 8,
@@ -32,28 +40,38 @@ enum WindowAppearance {
                                       space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         let rect = CGRect(x: 0, y: 0, width: width, height: height)
         context.clip(to: rect, mask: mask)
-        context.draw(seen, in: rect)
+        context.draw(seen, in: placement)
         return context.makeImage()
     }
 
-    /// Whether `image` (a window on its own) is see-through anywhere away from its edges.
-    static func isTranslucent(_ image: CGImage) -> Bool {
-        let width = image.width, height = image.height
-        guard width > 8, height > 8 else { return false }
-        var alpha = [UInt8](repeating: 0, count: width * height)
-        let drew: Bool = alpha.withUnsafeMutableBytes { bytes in
-            guard let context = CGContext(data: bytes.baseAddress, width: width, height: height, bitsPerComponent: 8,
-                                          bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(),
-                                          bitmapInfo: CGImageAlphaInfo.alphaOnly.rawValue) else { return false }
-            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-            return true
+    /// How far apart two shots of the same window are, away from their edges: the mean difference
+    /// of their channels, 0…255. A window that looks different on screen than on its own lets the
+    /// screen through, whatever its own alpha says.
+    static func difference(_ a: CGImage, _ b: CGImage) -> Double? {
+        let width = min(a.width, b.width), height = min(a.height, b.height)
+        guard width > 8, height > 8 else { return nil }
+        func pixels(_ image: CGImage) -> [UInt8]? {
+            var bytes = [UInt8](repeating: 0, count: width * height * 4)
+            let drew: Bool = bytes.withUnsafeMutableBytes { buffer in
+                guard let context = CGContext(data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                                              bytesPerRow: width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+                context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+                return true
+            }
+            return drew ? bytes : nil
         }
-        guard drew else { return false }
-        let insetX = max(2, width / 8), insetY = max(2, height / 8)
+        guard let one = pixels(a), let two = pixels(b) else { return nil }
+        let insetX = width / 8, insetY = height / 8
+        var total = 0, count = 0
         for y in insetY..<(height - insetY) {
-            for x in insetX..<(width - insetX) where alpha[y * width + x] < 245 { return true }
+            for x in insetX..<(width - insetX) {
+                let i = (y * width + x) * 4
+                total += abs(Int(one[i]) - Int(two[i])) + abs(Int(one[i + 1]) - Int(two[i + 1])) + abs(Int(one[i + 2]) - Int(two[i + 2]))
+                count += 3
+            }
         }
-        return false
+        return count > 0 ? Double(total) / Double(count) : nil
     }
 
     /// The on-screen windows below `windowID`, front to back.

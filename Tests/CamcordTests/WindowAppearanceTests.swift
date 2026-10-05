@@ -48,12 +48,23 @@ struct WindowAppearanceTests {
         #expect(pixels[3] == 0, "the corner stays clear, as the window's own is")
     }
 
-    @Test("a window is translucent when the screen shows through it inside its edges, not at its corners")
-    func translucency() {
-        let opaque = Self.image(40, 40) { x, y in x < 3 && y < 3 ? (0, 0, 0, 0) : (80, 80, 90, 255) }
-        #expect(!WindowAppearance.isTranslucent(opaque), "rounded corners alone do not count")
-        let terminal = Self.image(40, 40) { _, _ in (30, 30, 40, 217) }
-        #expect(WindowAppearance.isTranslucent(terminal))
+    @Test("a window that looks different on screen than on its own is told apart from one that does not")
+    func seenDifference() throws {
+        let alone = Self.image(40, 40) { _, _ in (49, 51, 61, 255) }
+        let same = Self.image(40, 40) { x, y in x < 2 ? (0, 0, 0, 0) : (49, 51, 61, 255) }
+        let throughIt = Self.image(40, 40) { _, _ in (31, 31, 42, 255) }
+        #expect(try #require(WindowAppearance.difference(alone, same)) < 1, "edges do not count")
+        #expect(try #require(WindowAppearance.difference(alone, throughIt)) > 3)
+    }
+
+    @Test("a window partly off the screen keeps the part that is on it, placed where it belongs")
+    func placed() throws {
+        let alone = Self.image(20, 10) { _, _ in (80, 80, 90, 255) }
+        let seen = Self.image(18, 10) { _, _ in (30, 30, 60, 255) }
+        let composed = try #require(WindowAppearance.composite(seen: seen, at: CGRect(x: 2, y: 0, width: 18, height: 10), shape: alone))
+        let pixels = Self.pixels(composed)
+        #expect(pixels[3] == 0, "the off-screen column is left out")
+        #expect(pixels[(5 * 20 + 10) * 4 + 2] == 60)
     }
 
     @Test("images of different sizes are not combined")
