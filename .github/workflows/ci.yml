@@ -33,8 +33,16 @@ jobs:
           xcodebuild -version
           swift --version
 
-      - name: Build and test
-        run: scripts/check.sh
+      - name: Build
+        shell: bash
+        run: |
+          set -o pipefail
+          swift build -Xswiftc -warnings-as-errors 2>&1 | tee build.log
+          ! grep -q 'warning:' build.log
+
+      - name: Test
+        timeout-minutes: 20
+        run: swift test -Xswiftc -warnings-as-errors
 
       - name: Package an unsigned app bundle
         run: scripts/build.sh --unsigned
