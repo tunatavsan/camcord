@@ -1154,7 +1154,7 @@ struct EditorNativeInteractionTests {
         #expect(stride(from:3,to:patched.count,by:4).map { patched[$0] }.min() == UInt8((alpha*255).rounded()))
         #expect(!window.isVisible)
     }
-    @Test("Native padded and rounded tile edges match monolithic flat source strips at fractional zoom", arguments:[CGFloat(0.75),CGFloat(1.33),CGFloat(1.93),CGFloat(1855)/960])
+    @Test("Native padded and rounded tile edges match monolithic flat source strips at fractional zoom", .needsLocalMac, arguments:[CGFloat(0.75),CGFloat(1.33),CGFloat(1.93),CGFloat(1855)/960])
     func nativePaddedTileEdges(physicalZoom:CGFloat) async throws {
         for alpha in [CGFloat(1),CGFloat(0.5)] {
             for preset in [EditorBackground.Preset.paper,.none] {

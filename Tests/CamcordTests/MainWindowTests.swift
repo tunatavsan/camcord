@@ -620,7 +620,7 @@ struct MainWindowTests {
         controller.windowForTesting?.close()
     }
 
-    @Test("opening the window gives the Dock icon, closing it takes it away and keeps the window")
+    @Test("opening the window gives the Dock icon, closing it takes it away and keeps the window", .needsLocalMac)
     func windowOpensAndCloses() throws {
         _ = NSApplication.shared
         let defaults = try freshDefaults()

@@ -68,7 +68,7 @@ struct RecordingHubPanelTests {
         hub.hide()
     }
 
-    @Test("a collapse halfway through the release settle still lands the disc on the dock's centre")
+    @Test("a collapse halfway through the release settle still lands the disc on the dock's centre", .needsLocalMac)
     func collapseDuringSettleLandsCentred() throws {
         _ = NSApplication.shared
         let hub = RecordingHubPanel(defaults: try freshDefaults(), panelPresenter: { _ in })

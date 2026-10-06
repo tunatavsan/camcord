@@ -179,7 +179,7 @@ struct PerformanceDiagnosticsTests {
         return sampled.withLock { $0 }
     }
 
-    @MainActor @Test("system sampler captures a real blocked main-thread frame")
+    @MainActor @Test("system sampler captures a real blocked main-thread frame", .needsLocalMac)
     func genuineMainThreadStack() throws {
         let result = try #require(Self.mainThreadStackSentinel(), "system sampler exceeded its two-second deadline")
         #expect(result.succeeded)
