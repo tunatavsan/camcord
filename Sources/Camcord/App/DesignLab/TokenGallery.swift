@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The Design Lab's token page (RUN UI-2 P1.1): every colour token in its four variants side by
+/// The Design Lab's token page: every colour token in its four variants side by
 /// side, then type, spacing, radii, motion and the glass styles in the window's own appearance.
 struct TokenGallery: View {
     var body: some View {

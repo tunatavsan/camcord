@@ -2,8 +2,8 @@ import Testing
 
 @testable import Camcord
 
-/// Pure state-machine tests for the double-tap Right-⌘ gesture detector (fact 6 of the
-/// M2 brief). No CGEventTap/AX calls here -- the detector takes synthetic timestamps.
+/// Pure state-machine tests for the double-tap Right-⌘ gesture detector. No CGEventTap/AX
+/// calls here -- the detector takes synthetic timestamps.
 @Suite("DoubleTapDetector")
 struct DoubleTapDetectorTests {
 

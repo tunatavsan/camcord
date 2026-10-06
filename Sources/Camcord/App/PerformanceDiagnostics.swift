@@ -212,7 +212,7 @@ final class DiagnosticMainWindow: NSWindow {
 }
 
 /// Request-to-mounted-layout intervals; the visual transition has its own duration.
-/// Fixed identifiers contain no document, device, window or owner data.
+/// Fixed identifiers contain no document, device, window or user data.
 @MainActor
 final class NavigationPerformanceDiagnostics {
     enum Target: Hashable {

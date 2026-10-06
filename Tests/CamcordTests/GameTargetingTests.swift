@@ -4,7 +4,7 @@ import Testing
 
 @testable import Camcord
 
-/// Phase R/W2: the rules that decide what the window picker offers and what the record
+/// The rules that decide what the window picker offers and what the record
 /// hotkey does when a fullscreen game owns the screen. All pure — no ScreenCaptureKit.
 @MainActor
 @Suite("Game targeting")
@@ -171,7 +171,7 @@ struct GameTargetingTests {
                 FullscreenContext.cover(in: chrome, frontmostPID: 7, ownPID: 1, displayBounds: display) == nil,
                 "\(owner) at level \(layer) must not read as cover"
             )
-            // The app IN FRONT is trusted at any level: it is what the owner is looking at.
+            // The app IN FRONT is trusted at any level: it is what the user is looking at.
             #expect(FullscreenContext.cover(in: chrome, frontmostPID: 42, ownPID: 1, displayBounds: display)?
                 .source == "front")
         }

@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-// The first run (docs/design/native/SPEC.md S6, BRIEF P1 "download → capture in 10 s"): one small
+// The first run (the goal: "download → capture in 10 s"): one small
 // frosted window. Screen Recording is the only gate, with a live tick; camera, microphone and
 // Accessibility are asked for when their feature is first switched on. The primary action is a
 // region capture.
@@ -46,7 +46,7 @@ final class ScreenRecordingPermission {
         if let simulated { granted = simulated } else { granted = check() }
     }
 
-    /// The live check's stand-in for a state it cannot create on the owner's Mac (revoking the
+    /// The live check's stand-in for a state it cannot create on the user's Mac (revoking the
     /// grant): shows the window as if Screen Recording were (not) allowed.
     var simulated: Bool? {
         didSet { refresh() }

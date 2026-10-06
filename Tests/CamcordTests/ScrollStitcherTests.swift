@@ -529,7 +529,7 @@ struct ScrollStitcherTests {
 
         // A later frame that commits nothing (the resting page, then a lost alignment) must
         // clear it: as a latch it would end the NEXT auto-scroll run on its first frame and
-        // leave "Sayfa sonu" on screen for a page that had only just grown.
+        // leave "End of page" on screen for a page that had only just grown.
         stitcher.add(
             repeatedTailViewport(contentOffset: page - h, height: h, pageHeight: page,
                                  block: block, times: 2),

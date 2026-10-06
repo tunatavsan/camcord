@@ -3,7 +3,7 @@ import QuartzCore
 
 /// Where the hub rests: the four corners of the display plus the top centre — five places
 /// a control hub belongs, and the reason a throw can no longer land it "to the right" when
-/// the owner aimed at the top middle. Persisted in `RecordingSettings.hubDock`.
+/// the user aimed at the top middle. Persisted in `RecordingSettings.hubDock`.
 enum RecordingHubDock: String, Codable, CaseIterable, Sendable {
     case topLeft
     case topCenter
@@ -230,7 +230,7 @@ final class RecordingHubPanel {
     private let present: PanelPresenter
 
     private var mode: RecordingHubMode = .recording
-    /// The dock the hub rests on now, and the one the owner chose (persisted): they differ
+    /// The dock the hub rests on now, and the one the user chose (persisted): they differ
     /// only while the camera tile holds the chosen one.
     private var dock: RecordingHubDock = .topCenter
     private var preferredDock: RecordingHubDock = .topCenter
@@ -360,7 +360,7 @@ final class RecordingHubPanel {
         layer.add(fade, forKey: "hub-arrive-fade")
     }
 
-    /// Becomes another mode in place — armed into recording at Başlat — with a soft crossfade
+    /// Becomes another mode in place — armed into recording at Start — with a soft crossfade
     /// instead of leaving and coming back.
     func morph(to mode: RecordingHubMode) {
         guard mode != self.mode else { return }
@@ -391,7 +391,7 @@ final class RecordingHubPanel {
     }
 
     /// Elapsed/pause updates must never turn an armed hub into a recording one — the arming
-    /// pushes idle UI state while it waits for Başlat.
+    /// pushes idle UI state while it waits for Start.
     func setRecordingMode(paused: Bool) {
         guard !mode.isArmed else { return }
         setMode(paused ? .paused : .recording)
@@ -510,7 +510,7 @@ final class RecordingHubPanel {
     }
 
     /// The window is the widest OPEN capsule's size (armed or recording) and only ever moves:
-    /// opening, closing and the Başlat morph are layer changes inside it, never a resize.
+    /// opening, closing and the Start morph are layer changes inside it, never a resize.
     private func placeWindow() {
         let open = CGSize(width: [RecordingHubMode.armed, .recording].map {
             RecordingHubLayout.expandedWidth(mode: $0, growth: dock.growth)
@@ -593,7 +593,7 @@ final class RecordingHubPanel {
     private func land() {
         let dropped = RecordingHubDock.dock(forDrop: capsule, velocity: dragVelocity, in: area)
         // A drop onto the camera tile's dock rests on the nearest free one — and that is
-        // what is remembered, because that is where the owner sees it land.
+        // what is remembered, because that is where the user sees it land.
         let landed = RecordingHubPlacement.dock(preferred: dropped, in: area, mode: mode, avoiding: tileFrame())
         preferredDock = landed
         dock = landed
@@ -699,7 +699,7 @@ final class RecordingHubPanel {
     }
 
     /// Runs both springs through the real integration in 1/120 s display-link ticks, for at
-    /// most `seconds` or until they rest — the path the owner's drifting-disc bug lived in.
+    /// most `seconds` or until they rest — the path the drifting-disc bug lived in.
     func advanceMotionForTesting(seconds: Double) {
         var elapsed = 0.0
         while elapsed < seconds, !expansion.isSettled || settle != nil {

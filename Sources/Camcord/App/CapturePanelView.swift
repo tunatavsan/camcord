@@ -298,7 +298,7 @@ private struct PanelRecordCell: View {
             PanelDeviceToggle(title: "Microphone", symbol: "mic", on: context.settings?.microphone == true,
                               available: canConfigure && context.settings != nil, focus: focusState("mic"),
                               action: { context.toggleMicrophone(canConfigure: canConfigure) }, hover: hover("mic"))
-            // Only the owner's view of the camera; the recording keeps it either way.
+            // Only the user's view of the camera; the recording keeps it either way.
             PanelDeviceToggle(title: "Camera preview", symbol: "eye", on: previewVisible, available: true,
                               focus: focusState("preview"), slash: "eye.slash",
                               action: { CameraOverlayController.shared.togglePreview() }, hover: hover("preview"))

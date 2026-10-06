@@ -4,7 +4,7 @@ import Testing
 @testable import Camcord
 
 /// The hub panel's geometry end to end: show, hover open, drag, drop, settle, close. The
-/// owner's bug was a disc that came back 72 pt left of the top-centre dock after every drop,
+/// bug was a disc that came back 72 pt left of the top-centre dock after every drop,
 /// so these measure the disc against the dock's centre after each of those steps.
 @MainActor
 @Suite("Recording hub panel geometry", .serialized)
@@ -229,7 +229,7 @@ struct RecordingHubPanelTests {
         hub.hide()
     }
 
-    // MARK: - Inside the recorded window (K3)
+    // MARK: - Inside the recorded window
 
     private let window = CGRect(x: 300, y: 200, width: 900, height: 600)
 

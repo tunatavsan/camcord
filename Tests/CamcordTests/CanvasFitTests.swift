@@ -32,7 +32,7 @@ struct CanvasFitTests {
         #expect(fit.backdrop.contains(CGRect(origin: .zero, size: canvas)))
     }
 
-    /// DENETIM-1 R1, measured 2026-09-25 with the SCK probe on a 1× (`.oneX`) buffer: a
+    /// Measured 2026-09-25 with the SCK probe on a 1× (`.oneX`) buffer: a
     /// 600×482 pt window captured into a 600×482 px buffer reports `contentRect`
     /// (0,0,300,241), `contentScale` 0.5, `scaleFactor` 2 — output points, like the native
     /// case — and shrunk to 400 pt wide it reports (0,0,200,241) with pixels lit at x 0…399.

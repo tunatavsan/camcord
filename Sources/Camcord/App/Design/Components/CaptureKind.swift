@@ -1,8 +1,8 @@
 import KeyboardShortcuts
 import SwiftUI
 
-/// The five captures, each with one name everywhere (K8): the window toolbar, the panel's keys,
-/// the empty Library's key caps, the menu. SF Symbols only (SPEC N5).
+/// The five captures, each with one name everywhere: the window toolbar, the panel's keys,
+/// the empty Library's key caps, the menu. SF Symbols only.
 enum CaptureKind: String, CaseIterable, Identifiable, Sendable {
     case region, window, screen, scroll, text
 
@@ -58,7 +58,7 @@ enum CaptureKind: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// The hotkey as the owner set it ("⇧⌘2"), or nil when none is assigned.
+    /// The hotkey as the user set it ("⇧⌘2"), or nil when none is assigned.
     @MainActor var shortcut: KeyboardShortcuts.Shortcut? { KeyboardShortcuts.getShortcut(for: shortcutName) }
 
     /// Starts this capture through the coordinator's existing entry points.

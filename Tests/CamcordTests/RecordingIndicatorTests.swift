@@ -87,7 +87,7 @@ struct RecordingIndicatorTests {
         indicator.hide()
     }
 
-    @Test("the armed hub starts and cancels, and shows its frame quietly until Başlat")
+    @Test("the armed hub starts and cancels, and shows its frame quietly until Start")
     func armedHubActions() throws {
         _ = NSApplication.shared
         let primaryHeight = try #require(NSScreen.screens.first?.frame.height)
@@ -109,7 +109,7 @@ struct RecordingIndicatorTests {
         )
 
         let hub = try #require(indicator.hubForTesting)
-        // The window holds the open capsule; collapsed, the hub shows Başlat alone inside it.
+        // The window holds the open capsule; collapsed, the hub shows Start alone inside it.
         let growth = hub.viewForTesting.growth
         let widest = max(RecordingHubLayout.expandedWidth(mode: .armed, growth: growth),
                          RecordingHubLayout.expandedWidth(mode: .recording, growth: growth))
@@ -189,7 +189,7 @@ struct RecordingIndicatorTests {
         let view = try #require(indicator.hubForTesting?.viewForTesting)
 
         // Stop, pause and the camera eye each land on their OWN closure. `.start` and
-        // `.stop` deliberately share one — an armed hub's Başlat IS the start action — so
+        // `.stop` deliberately share one — an armed hub's Start IS the start action — so
         // a slip that routed anything else there would be invisible without this.
         view.pressForTesting(.stop)
         #expect((stops, pauses, previews) == (1, 0, 0))

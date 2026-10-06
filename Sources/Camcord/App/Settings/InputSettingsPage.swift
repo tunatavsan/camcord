@@ -110,7 +110,7 @@ struct InputSettingsPage: View {
     }
 
     /// A duplicate is never taken silently: it is put back the moment it is seen, and the sheet
-    /// asks whether the owner meant to move it off the other action.
+    /// asks whether the user meant to move it off the other action.
     private func shortcutChanged(_ name: KeyboardShortcuts.Name, to shortcut: KeyboardShortcuts.Shortcut?) {
         guard activity.isActive else { return }
         guard let shortcut else {

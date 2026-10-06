@@ -1,10 +1,9 @@
 import AppKit
 import SwiftUI
 
-// Glass, the system's own only (docs/design/native/SPEC.md §2.6, K2.1): a tint on
-// `glassEffect` / `NSGlassEffectView`, never a blur plus a translucent fill. One glass layer per
-// region (K2.2). Reduce Transparency gets the opaque solid tokens (K2.7); system glass also
-// handles it by itself, the solid fill is for the shapes we tint.
+// Glass, the system's own only: a tint on `glassEffect` / `NSGlassEffectView`, never a blur
+// plus a translucent fill. One glass layer per region. Reduce Transparency gets the opaque
+// solid tokens; system glass also handles it by itself, the solid fill is for the shapes we tint.
 
 /// The glass a piece of chrome wears.
 enum GlassStyle: CaseIterable, Sendable {
@@ -207,7 +206,7 @@ extension NSGlassEffectView {
     }
 }
 
-/// The window's tray (owner, 2026-10-02: "one tray"): a single untinted blur of whatever lies
+/// The window's tray: a single untinted blur of whatever lies
 /// behind the window, under every glass panel, so the sidebar, the module and any later pane
 /// float on one frosted surface. It is how the system frosts the floating sidebar's alleyway
 /// (a backdrop layer with a blur filter), stretched across the whole window. Not public API:
@@ -220,7 +219,7 @@ struct TrayBlur: NSViewRepresentable {
 }
 
 final class TrayBlurView: NSView {
-    /// The native sidebar's own radius: words behind the window stay readable (owner, 2026-10-02).
+    /// The native sidebar's own radius: words behind the window stay readable.
     static let radius = 2.0
 
     init(cornerRadius: CGFloat) {

@@ -1,6 +1,6 @@
 import Foundation
 
-/// The Library's settings (docs/RUN-UI-2.md K4): screenshots and scroll captures that were only
+/// The Library's settings: screenshots and scroll captures that were only
 /// copied are kept in Camcord's own folder so the Library can show them — on by default, for 30
 /// days, within 2 GB, oldest first out.
 struct LibrarySettings: Equatable, Sendable {
@@ -31,7 +31,7 @@ struct LibrarySettings: Equatable, Sendable {
         defaults.set(NSNumber(value: min(max(capBytes, 1 << 20), 100 << 30)), forKey: Self.capBytesKey)
     }
 
-    /// Camcord's own folder for copied captures (K4).
+    /// Camcord's own folder for copied captures.
     static func cacheDirectory(fileManager: FileManager = .default) -> URL {
         let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")

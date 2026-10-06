@@ -3,7 +3,7 @@ import Testing
 
 @testable import Camcord
 
-/// The first run (SPEC S6): when it shows, when it counts as seen, and the live permission state.
+/// The first run: when it shows, when it counts as seen, and the live permission state.
 @MainActor
 @Suite("First run", .serialized)
 struct FirstRunTests {

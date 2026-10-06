@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The Settings module's groups (K7), in sidebar order.
+/// The Settings module's groups, in sidebar order.
 enum SettingsGroup: String, CaseIterable, Identifiable, Codable {
     case general, screenshot, recording, camera, input, library, permissions
 

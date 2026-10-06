@@ -158,7 +158,7 @@ struct MainWindowGeometryTests {
                     defaults: defaults, autosaveName: "test") == nil)
                 #expect(defaults.string(forKey: "NSWindow Frame test") == old)
                 #expect(defaults.bool(forKey: MainWindowGeometry.migrationKey(for: "test")))
-                // A later manual resize to the exact old default remains the owner's choice.
+                // A later manual resize to the exact old default remains the user's choice.
                 let later = descriptor(NSRect(origin: frame.origin, size: MainWindowGeometry.legacyContentSize))
                 #expect(MainWindowGeometry.initialFrame(savedFrameDescriptor: later, visibleFrame: display,
                     defaults: defaults, autosaveName: "test") == nil)

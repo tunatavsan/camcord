@@ -178,7 +178,7 @@ struct RecordingHubTests {
 
     // MARK: - Layout
 
-    @Test("collapsed is the identity pill: the time while recording, Başlat while armed")
+    @Test("collapsed is the identity pill: the time while recording, Start while armed")
     func collapsedDisc() {
         for mode in [RecordingHubMode.recording, .paused, .armed] {
             #expect(RecordingHubLayout.size(mode: mode, progress: 0)
@@ -237,7 +237,7 @@ struct RecordingHubTests {
         }
     }
 
-    @Test("the recording hub offers pause, the camera and a mic level beside a time pill that stops; armed offers Başlat, × and the camera")
+    @Test("the recording hub offers pause, the camera and a mic level beside a time pill that stops; armed offers Start, × and the camera")
     @MainActor func itemsPerMode() {
         #expect(RecordingHubLayout.items(mode: .recording) == [.elapsed, .divider, .pause, .camera, .preview, .micLevel])
         #expect(RecordingHubLayout.items(mode: .paused) == RecordingHubLayout.items(mode: .recording))

@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-// The Library's data model (docs/RUN-UI-2.md K4 — a seam: these types are plan-owned).
+// The Library's data model.
 
 struct CaptureItem: Identifiable, Hashable, Sendable {
     enum Kind: String, Codable, Sendable { case screenshot, scrollCapture, recording }
@@ -39,7 +39,7 @@ struct CaptureItem: Identifiable, Hashable, Sendable {
     func rename(_ id: String, to name: String) async throws
 }
 
-/// How a file on disk becomes a `CaptureItem` (SPEC §6): the kind from the extension and
+/// How a file on disk becomes a `CaptureItem`: the kind from the extension and
 /// Camcord's own tag, the id from the path or the cache file's UUID.
 enum CaptureFileRules {
     /// The extended attribute Camcord writes on every scroll-capture PNG it saves or caches.
@@ -94,7 +94,7 @@ enum CaptureFileRules {
     }
 }
 
-/// Which copied captures the cache keeps (K4): nothing older than `keepDays`, and within
+/// Which copied captures the cache keeps: nothing older than `keepDays`, and within
 /// `capBytes`, dropping the oldest first. Pure, so every edge is testable.
 enum CacheRetention {
     struct Entry: Equatable, Sendable {

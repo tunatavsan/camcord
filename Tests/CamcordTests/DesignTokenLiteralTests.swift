@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-/// K3 of docs/RUN-UI-2.md: new and restyled surfaces read colour, type size and animation
+/// New and restyled surfaces read colour, type size and animation
 /// timing from `Theme` only. This greps them for literals; `App/Design/Theme.swift` and
 /// `Glass.swift` are where the literals live. Each restyle step adds its files to `enforced`.
 @Suite("Design token literals")

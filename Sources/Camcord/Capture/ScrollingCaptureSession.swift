@@ -323,7 +323,7 @@ final class ScrollingCaptureSession {
             scrollMonitors.append(local)
         }
         // Esc cancels (best-effort — a global key monitor needs Accessibility; the HUD's
-        // İptal button is the always-available path).
+        // Cancel button is the always-available path).
         if let esc = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
             if event.keyCode == 53 { self?.finish(keep: false) }
         }) {
@@ -347,9 +347,9 @@ final class ScrollingCaptureSession {
 
     // MARK: - Auto-scroll
     //
-    // The owner scrolls to where the capture should end, then lets Camcord scroll: it climbs
+    // The user scrolls to where the capture should end, then lets Camcord scroll: it climbs
     // to the top of the page and captures down, one settled step at a time, until it is back
-    // where the owner started — or, started at the top, until the page ends. Then it
+    // where the user started — or, started at the top, until the page ends. Then it
     // finishes by itself.
 
     /// The scroll shortcut pressed again while this session runs. A double press lands before
@@ -417,7 +417,7 @@ final class ScrollingCaptureSession {
         guard let start = await settledFrame(run) else { return }
         autoFrame = start
         var boundary: Boundary?
-        // A fresh capture starts from the top; one the owner has already scrolled on carries on.
+        // A fresh capture starts from the top; one the user has already scrolled on carries on.
         if stitchState.sections <= 1 {
             if hooks == nil { preview.setClimbing(true) }
             let climb = await climbToTop(actuator, from: start, run: run)
@@ -438,7 +438,7 @@ final class ScrollingCaptureSession {
         await descend(actuator, to: boundary, run: run)
     }
 
-    /// Where the owner started: the frame, and how far above it the top was.
+    /// Where the user started: the frame, and how far above it the top was.
     private struct Boundary {
         let frame: CGImage
         let distance: CGFloat
@@ -499,10 +499,10 @@ final class ScrollingCaptureSession {
         return (previous, distance, false)
     }
 
-    /// Down one settled step at a time, back to where the owner started (or, started at the
+    /// Down one settled step at a time, back to where the user started (or, started at the
     /// top, to the page end). Each frame is measured against the stitch before it is committed,
     /// so a step that went wrong is taken back instead of stitched. The last step is exactly
-    /// what remains, and the frame it lands on is checked against the one the owner started from.
+    /// what remains, and the frame it lands on is checked against the one the user started from.
     private func descend(_ actuator: any ScrollActuator, to boundary: Boundary?, run: Int) async {
         // Steps are a share of what actually scrolls: the region less its fixed bands. Small
         // until the stitch has found those bands, then long: a quarter to a third of the view
@@ -628,7 +628,7 @@ final class ScrollingCaptureSession {
 
     private func stopAutoScroll(reachedEnd: Bool, reason: String = "manual") {
         guard autoScrolling else { return }
-        // The owner reads the file log to explain a run that ended early.
+        // The file log explains a run that ended early.
         logAuto("stop reason=\(reason) end=\(reachedEnd) sections=\(stitchState.sections)")
         if reachedEnd { autoEnded = true }
         autoScrolling = false

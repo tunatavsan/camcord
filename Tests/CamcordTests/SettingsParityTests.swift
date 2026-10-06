@@ -5,7 +5,7 @@ import Testing
 
 @testable import Camcord
 
-/// K7 of docs/RUN-UI-2.md: every setting the old Settings window wrote has a control in the
+/// Every setting the old Settings window wrote has a control in the
 /// Settings module, under the same key. The required keys are enumerated from the settings
 /// structs themselves (so a new field without a control fails here), and the controls are the
 /// rows the module's pages actually draw (each reports its key while it renders).
@@ -156,7 +156,7 @@ struct SettingsParityTests {
         Mirror(reflecting: value).children.compactMap { $0.label.map { "\(prefix).\($0)" } }
     }
 
-    /// Every key the old window could write (docs/_scratch/run-ui-2/settings-parity.md §2).
+    /// Every key the old window could write.
     static var requiredKeys: Set<String> {
         var keys = Set(fields(of: RecordingSettings(), prefix: "recordingSettings"))
         keys.remove("recordingSettings.camera")
@@ -212,7 +212,7 @@ struct SettingsParityTests {
         #expect(missing.isEmpty, "no control for: \(missing.sorted())")
     }
 
-    @Test("the groups follow K7, and the Settings sidebar remembers its group")
+    @Test("the groups are in sidebar order, and the Settings sidebar remembers its group")
     func groups() throws {
         #expect(SettingsGroup.allCases.map(\.rawValue) == ["general", "screenshot", "recording", "camera", "input", "library", "permissions"])
         let defaults = try #require(UserDefaults(suiteName: Self.suiteName))
@@ -327,7 +327,7 @@ struct SettingsParityTests {
         #expect(attempts == [true])
         #expect(!store.launchAtLogin)
         #expect(store.launchAtLoginIssue)
-        actual = true // The owner approved it in System Settings.
+        actual = true // The user approved it in System Settings.
         store.refresh()
         #expect(store.launchAtLogin)
         #expect(!store.launchAtLoginIssue)

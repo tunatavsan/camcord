@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// Camcord's mark: four viewfinder brackets, optionally around a tally dot (K1). The one custom
-/// glyph in the app (SPEC N5); it appears on the status item, the sidebar, empty states, first
+/// Camcord's mark: four viewfinder brackets, optionally around a tally dot. The one custom
+/// glyph in the app; it appears on the status item, the sidebar, empty states, first
 /// run and the capture moment.
 struct ViewfinderMark: Shape {
     /// The bracket arm length as a fraction of the side.

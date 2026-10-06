@@ -1,9 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// The pre-Graphite-II style names, now a thin alias layer onto `Theme` (docs/RUN-UI-2.md K3).
+/// The pre-Graphite-II style names, now a thin alias layer onto `Theme`.
 /// Only surfaces that are not restyled yet read these; each restyle moves its surface to
-/// `Theme` directly, and the whole layer is deleted in P6.4.
+/// `Theme` directly, and the whole layer is deleted once none is left.
 enum CamcordStyle {
     static let accent = Theme.Palette.legacyAccent.color
     static let recording = Theme.Palette.record.color

@@ -1,7 +1,7 @@
 import SwiftUI
 
-// The main window's seam (docs/RUN-UI-1.md K9). The types are plan-owned; change them only
-// through the overseer.
+// The main window's module contract: the module ids and sections, the protocol every module
+// implements, the registry, and the persisted selection and Dock icon mode.
 
 enum ModuleID: String, CaseIterable, Codable { case library, studio, edit, settings }
 
@@ -56,7 +56,7 @@ enum ModuleRegistry {
     }
 }
 
-/// The last selected module, persisted so the window reopens where the owner left it.
+/// The last selected module, persisted so the window reopens where the user left it.
 enum ModuleSelection {
     static let defaultsKey = "mainWindow.selectedModule"
 

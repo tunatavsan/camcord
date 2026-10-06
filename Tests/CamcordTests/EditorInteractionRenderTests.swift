@@ -5,7 +5,7 @@ import SwiftUI
 import Testing
 @testable import Camcord
 
-/// A normal owned window with actual production controls, held for background CUA
+/// A normal owned window with actual production controls, held for background UI automation
 /// and SCK window-ID recording by the external driver. No scripted model tour.
 @MainActor @Suite("Editor interaction window", .serialized,
                   .enabled(if: ProcessInfo.processInfo.environment["CAMCORD_EDITOR_INTERACTION"] == "1"))
@@ -264,7 +264,7 @@ struct EditorNativeEventPacingTests {
 }
 
 /// Optional video stimulus through real production event handlers. These are
-/// native-event fixture actions, not a customer CUA tour or model mutations.
+/// native-event fixture actions, not a scripted UI-automation tour or model mutations.
 @MainActor private final class EditorNativeEventPlayback {
     let pacing: EditorNativeEventPacing
     var phase = "idle"

@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Console's instrument details (K1): the running timecode and the tally with its seconds sweep.
+// Console's instrument details: the running timecode and the tally with its seconds sweep.
 
 /// Elapsed time as a recorder shows it: mm:ss under an hour, h:mm:ss above.
 enum Timecode {
@@ -99,7 +99,7 @@ struct EmptyState<Actions: View>: View {
 
 // MARK: - Motion pieces
 
-/// Frost's condense (SPEC §2.5): a small surface arrives from a blur and 96 % scale. Reduce
+/// Frost's condense: a small surface arrives from a blur and 96 % scale. Reduce
 /// Motion gets a plain fade.
 struct CondenseTransition: Transition {
     var reduceMotion = false
@@ -136,7 +136,7 @@ struct CaptureBrackets: Shape {
     }
 }
 
-/// The capture moment's frost breath (K1): a pane of system glass over the captured rect frosts
+/// The capture moment's frost breath: a pane of system glass over the captured rect frosts
 /// and clears once per `trigger`, instead of a white flash. Reduce Motion: no breath at all.
 struct FrostBreath: View {
     let trigger: Int

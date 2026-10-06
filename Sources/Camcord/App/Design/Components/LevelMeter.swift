@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The kit's live level meter (SPEC §3). Audio measurements arrive at 30 Hz; native layers
+/// The kit's live level meter. Audio measurements arrive at 30 Hz; native layers
 /// animate independently at the display refresh rate, without recomputing the SwiftUI view every
 /// frame, and the display link stops whenever the meter cannot be seen.
 struct AudioLevelMeter: View {

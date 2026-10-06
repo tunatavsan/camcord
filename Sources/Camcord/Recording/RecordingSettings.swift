@@ -116,7 +116,7 @@ struct RecordingSettings: Codable, Equatable {
     var windowGlowEnabled: Bool
 
     /// Where the recording hub rests on the display. Persisted so it comes back where the
-    /// owner last threw it, instead of guessing from the target's geometry.
+    /// user last threw it, instead of guessing from the target's geometry.
     var hubDock: RecordingHubDock
 
     /// The canvas of a window recording (region and display targets ignore it).
@@ -203,7 +203,7 @@ struct RecordingSettings: Codable, Equatable {
 
     /// The scale a DISPLAY target is captured at. `SCDisplay.frame` is in logical points,
     /// so the display's backing scale means native Retina pixels and 1 means points —
-    /// exactly the half-resolution "Oyunda 1080p kaydet" wants for a game-like target.
+    /// exactly the half-resolution "Record games at 1080p" wants for a game-like target.
     func captureScale(displayScale: CGFloat, gameLike: Bool) -> CGFloat {
         gameLike && gameModeScale ? 1 : displayScale
     }

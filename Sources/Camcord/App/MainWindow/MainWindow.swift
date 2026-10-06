@@ -37,7 +37,7 @@ final class MainWindowModel {
         }
     }
 
-    /// The Settings group on screen; while Settings is open the sidebar lists the groups (SPEC N3).
+    /// The Settings group on screen; while Settings is open the sidebar lists the groups.
     var settingsGroup: SettingsGroup {
         willSet {
             if selection == .settings, newValue != settingsGroup {
@@ -108,7 +108,7 @@ struct MainWindowView: View {
     private var module: any CamcordModule { ModuleRegistry.module(model.selection) ?? ModuleRegistry.all[0] }
 
     var body: some View {
-        // The sidebar is always shown (owner, 2026-10-02): no toggle, no collapse.
+        // The sidebar is always shown: no toggle, no collapse.
         NavigationSplitView(columnVisibility: .constant(.all)) {
             ZStack {
                 if model.selection == .settings {
@@ -155,7 +155,7 @@ struct MainWindowView: View {
     }
 }
 
-/// The sidebar is always shown (owner, 2026-10-02), so the split view's own toggle is hidden.
+/// The sidebar is always shown, so the split view's own toggle is hidden.
 /// Hidden, not removed: `toolbar(removing: .sidebarToggle)` narrows the native sidebar to
 /// 148 pt even with a fixed column width. SwiftUI re-creates the item as the toolbar changes,
 /// so the window re-checks it on every update; the check is a few items, and idempotent.
@@ -384,8 +384,8 @@ enum MainWindowLayout {
     }
 }
 
-/// The sidebar: the mark, then the modules by section, each with its ⌘ key (K1), on its own
-/// frosted backdrop. The rows draw the ink selection capsule (KARAR-1), never the user's accent.
+/// The sidebar: the mark, then the modules by section, each with its ⌘ key, on its own
+/// frosted backdrop. The rows draw the ink selection capsule, never the user's accent.
 private struct MainWindowSidebar: View {
     @Binding var selection: ModuleID
 
@@ -483,7 +483,7 @@ extension ModuleSection {
     }
 }
 
-/// ⌘1…⌘4 pick the modules in registry order (K1).
+/// ⌘1…⌘4 pick the modules in registry order.
 enum ModuleShortcut {
     @MainActor static func index(of id: ModuleID) -> Int? {
         ModuleRegistry.all.firstIndex { $0.id == id }.flatMap { $0 < 9 ? $0 + 1 : nil }
@@ -632,7 +632,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     var windowForTesting: NSWindow? { window }
 
     /// Opens the window, on `module` when one is given. `activate: false` (LiveCheck) neither
-    /// takes the owner's focus nor covers their work: the window goes behind their windows,
+    /// takes the user's focus nor covers their work: the window goes behind their windows,
     /// where a window-ID capture still sees all of it.
     func show(module: ModuleID? = nil, activate: Bool = true) {
         presentationGeneration &+= 1
@@ -695,7 +695,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     func windowDidDeminiaturize(_ notification: Notification) { refreshVisibility() }
 
     /// A fresh SwiftUI tree. Setting a content view controller resizes the window to the
-    /// controller's view, so the frame the owner left is put back afterwards.
+    /// controller's view, so the frame the user left is put back afterwards.
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? {
         model.selection == .edit ? services?.editor.editUndoManager ?? standardUndoManager : standardUndoManager
     }

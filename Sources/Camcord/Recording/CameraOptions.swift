@@ -72,7 +72,7 @@ struct CameraOptions: Codable, Equatable, Sendable {
     var mirrored: Bool
     /// Unit coordinates in the available travel area, with the origin at bottom-left.
     var position: CameraPosition?
-    /// The owner's manual format per camera, keyed by `formatKey(deviceID)`; a camera with
+    /// The user's manual format per camera, keyed by `formatKey(deviceID)`; a camera with
     /// no entry is on Auto.
     var formats: [String: CameraFormatChoice] = [:]
 

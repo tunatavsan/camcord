@@ -11,7 +11,7 @@ private final class DetachedControlPanel: NSPanel {
 
 /// The menu-bar panel itself: a borderless palette under the status item. It becomes key
 /// without activating Camcord, so its glass is drawn in its active state from the first frame
-/// instead of the washed-out inactive one (owner, 2026-10-02).
+/// instead of the washed-out inactive one.
 private final class AnchoredControlPanel: NSPanel {
     var cancel: (() -> Void)?
     override var canBecomeKey: Bool { true }
@@ -366,7 +366,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
 
     /// Capture flows close at once, so nothing of the panel reaches a frozen screen; the
-    /// owner's own dismissals (the status item, Esc, a click elsewhere) play the closing motion.
+    /// user's own dismissals (the status item, Esc, a click elsewhere) play the closing motion.
     func close(animated: Bool = false) {
         hideAnchored(transient: false, animated: animated)
         model.isPanelVisible = false

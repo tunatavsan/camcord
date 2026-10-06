@@ -12,7 +12,7 @@ struct CapturedScreenshot: Sendable {
     /// The display selected by this capture, independent of later cursor or display changes.
     /// Older callers and imported images may not have a live display identity.
     let originDisplayID: CGDirectDisplayID?
-    /// False when the owner chose to keep screenshots in the Library only.
+    /// False when the user chose to keep screenshots in the Library only.
     let copiedToClipboard: Bool
     /// Where the capture was on screen, in global top-left points: its card is reached from
     /// there. Nil for imports and for captures larger than any screen.

@@ -9,7 +9,7 @@ struct CameraDragMotion {
     private(set) var magnetCorner: CameraCorner?
     private(set) var released = false
     /// How far the release has to travel: the dock spring is chosen once, at the throw,
-    /// so it cannot stiffen underneath the owner as the frame closes in.
+    /// so it cannot stiffen underneath the user as the frame closes in.
     private var throwDistance: CGFloat = 0
     let area: CGSize
 
@@ -41,7 +41,7 @@ struct CameraDragMotion {
     }
 
     /// One unbounded spring step. The live drag runs it inside its own clamp; a test can
-    /// run it against a target no bound sits on and see the overshoot the owner feels.
+    /// run it against a target no bound sits on and see the overshoot the user feels.
     static func integrate(_ position: inout CGPoint, velocity: inout CGPoint, toward target: CGPoint,
                           stiffness: CGFloat, damping: CGFloat, seconds dt: TimeInterval) {
         velocity.x += ((target.x - position.x) * stiffness - velocity.x * damping) * dt
@@ -207,7 +207,7 @@ enum CameraResizeGeometry {
         return circle.insetBy(dx: -slop, dy: -slop)
     }
 
-    /// The zone that REVEALS the close button — the owner moves to the top middle, not onto a
+    /// The zone that REVEALS the close button — the user moves to the top middle, not onto a
     /// 20 pt circle. Grown from the circle itself (two independent formulas drifted apart and
     /// left the drawn × outside the zone that summoned it), extended to the top edge, and
     /// clipped clear of the corner resize zones so it never steals a resize.

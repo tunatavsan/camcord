@@ -3,10 +3,10 @@ import CoreGraphics
 import QuartzCore
 
 /// When the recording frame is visible. A frame that is on all the time is a permanent red
-/// rectangle on the owner's screen — worst of all in a fullscreen game — so during a
+/// rectangle on the user's screen — worst of all in a fullscreen game — so during a
 /// recording it stays out of the way entirely and only the hub can summon it: hovering the
 /// hub, or the first moment and a half after the start, when it is still saying "this is
-/// what I am recording". While armed it shows quietly until Başlat. A display recording
+/// what I am recording". While armed it shows quietly until Start. A display recording
 /// never draws one, and the scrolling-capture border (no hub) is always visible.
 struct RecordingFrameVisibility: Equatable, Sendable {
     enum Mode: Equatable, Sendable {
@@ -173,7 +173,7 @@ final class CaptureAreaIndicator {
         onTogglePreview: (() -> Void)? = nil,
         onStop: @escaping () -> Void
     ) {
-        // A hub handed over at Başlat stays on screen and simply takes the recording's controls.
+        // A hub handed over at Start stays on screen and simply takes the recording's controls.
         let kept = handingOff ? hub : nil
         if kept != nil { hub = nil }
         hide()
@@ -246,7 +246,7 @@ final class CaptureAreaIndicator {
         hub?.setCamera(on: on, available: available)
     }
 
-    /// Başlat: the armed hub stays and turns into the recording one while the stream starts;
+    /// Start: the armed hub stays and turns into the recording one while the stream starts;
     /// its controls answer nothing until the recording is live.
     private var handingOff = false
     func beginHandoff(elapsed: String) {

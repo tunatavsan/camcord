@@ -61,7 +61,7 @@ enum CanvasAspect: String, Codable, CaseIterable, Sendable {
 /// ScreenCaptureKit, with `scalesToFit` and `preservesAspectRatio`, puts a resized window's
 /// content in the TOP-LEFT of the fixed buffer — shrunk windows at 1×, grown ones scaled
 /// down — and leaves the rest black. `SCStreamFrameInfo.contentRect` is that content, in
-/// output points (measured 2026-09-25; docs/_scratch/run-ui-1/DEFTER.md). This moves it to
+/// output points (measured 2026-09-25). This moves it to
 /// the centre, aspect-fit, over a backdrop made from the same frame.
 struct CanvasFit: Equatable, Sendable {
     /// The canvas, which is also the buffer ScreenCaptureKit fills.

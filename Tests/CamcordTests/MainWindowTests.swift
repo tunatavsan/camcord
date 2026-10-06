@@ -82,7 +82,7 @@ private actor MainWindowEditorDecodeGate {
     }
 }
 
-/// The main window's seam (K9) and its Dock behaviour (K10): the module registry, the
+/// The main window's module contract and its Dock behaviour: the module registry, the
 /// persisted selection, and every Dock policy transition — pure or with an injected setter,
 /// so nothing here touches the real Dock.
 @MainActor

@@ -1,11 +1,10 @@
 import AppKit
 import SwiftUI
 
-// The main window's modules. The Library and the Studio get their real pages in P3 and P4;
-// until then the Library shows its empty state (K1) and the Studio says what it will hold.
+// The main window's modules: Library, Studio, Edit and Settings.
 
-/// A module that carries a small tag beside its sidebar row ("Later"). Additive to the K9 seam:
-/// the module types themselves are unchanged.
+/// A module that carries a small tag beside its sidebar row ("Later"). Additive: the module
+/// types themselves are unchanged.
 @MainActor protocol ModuleBadging {
     var badge: LocalizedStringResource? { get }
 }
@@ -49,8 +48,8 @@ struct EditModule: CamcordModule {
     func makeView() -> AnyView { AnyView(ScreenshotEditorView()) }
 }
 
-/// Settings inside the window (K7): its groups take over the sidebar, its pages are the
-/// prototype's cards (App/Settings/).
+/// Settings inside the window: its groups take over the sidebar, its pages are cards of rows
+/// (App/Settings/).
 struct SettingsModule: CamcordModule {
     let id = ModuleID.settings
     let title = LocalizedStringResource("Settings", comment: "Main window module")

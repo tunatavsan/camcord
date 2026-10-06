@@ -1,6 +1,6 @@
 import AppKit
 
-/// When Camcord has a Dock icon (docs/RUN-UI-1.md K10). The bundle stays `LSUIElement`;
+/// When Camcord has a Dock icon. The bundle stays `LSUIElement`;
 /// the policy is switched at runtime. Pure, so every transition is testable.
 enum DockPolicy {
     static func activationPolicy(mode: DockIconMode, windowOpen: Bool) -> NSApplication.ActivationPolicy {
@@ -27,7 +27,7 @@ final class DockController {
     init(defaults: UserDefaults = .standard, setPolicy: PolicySetter? = nil) {
         self.defaults = defaults
         // Never activates: `.always` applies at launch, where coming forward would steal
-        // focus from whatever the owner is doing. The window activates when it is shown.
+        // focus from whatever the user is doing. The window activates when it is shown.
         self.setPolicy = setPolicy ?? { NSApp.setActivationPolicy($0) }
         observer = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: defaults, queue: .main

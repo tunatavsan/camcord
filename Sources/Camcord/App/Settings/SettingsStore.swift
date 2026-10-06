@@ -3,7 +3,7 @@ import KeyboardShortcuts
 import SwiftUI
 
 /// The Settings module's model: the persisted settings structs, loaded from and saved to one
-/// defaults suite with the same keys the old Settings window used (K7). A save merges only the
+/// defaults suite with the same keys the old Settings window used. A save merges only the
 /// fields this page changed into what is on disk, so a change made meanwhile from the menu-bar
 /// panel is never overwritten; the store reloads when another surface saves recording settings.
 @MainActor @Observable
@@ -179,7 +179,7 @@ final class SettingsStore {
 // MARK: - Folder rows
 
 /// Choosing and revealing a folder: an open panel sheeted to the key window, and a reveal that
-/// creates the folder first. A failure to reveal always tells the owner, whatever the toast setting.
+/// creates the folder first. A failure to reveal always tells the user, whatever the toast setting.
 @MainActor
 enum FolderPicker {
     private static let errorToast = HUDToast()
@@ -280,7 +280,7 @@ struct ValueSlider: View {
 
 /// Which persisted settings the pages build a control for. `settingsKey(_:)` runs while a page's
 /// body builds its rows, so a row that is not built (a hidden branch) is not counted; the parity
-/// test turns every branch on, renders every page and compares (K7).
+/// test turns every branch on, renders every page and compares.
 @MainActor
 final class SettingsKeyRecorder {
     /// Set only by the parity test while it renders.

@@ -433,7 +433,7 @@ import Testing
 }
 
 /// Root-owned evidence only. This fixture never creates a panel, captures a display,
-/// changes activation, or publishes to the owner's pasteboard.
+/// changes activation, or publishes to the user's pasteboard.
 @Suite("Screenshot card owned window", .serialized,
        .enabled(if: ProcessInfo.processInfo.environment["CAMCORD_CARD_INTERACTION"] == "1"))
 @MainActor struct ScreenshotCardInteractionWindowTests {

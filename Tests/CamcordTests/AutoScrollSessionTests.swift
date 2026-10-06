@@ -97,11 +97,11 @@ struct AutoScrollSessionTests {
         return image
     }
 
-    @Test("started mid-page, it climbs to the top and captures down to exactly where the owner started")
+    @Test("started mid-page, it climbs to the top and captures down to exactly where the user started")
     func capturesFromTopToTheStart() async throws {
         let page = Page(height: 1_400, startingAt: 640)
         let image = try #require(await autoCapture(page))
-        #expect(page.offset == 640, "the page ends where the owner left it, not at \(page.offset)")
+        #expect(page.offset == 640, "the page ends where the user left it, not at \(page.offset)")
         #expect(abs(image.height - (640 + page.viewport)) <= 2, "captured \(image.height) rows")
     }
 
@@ -246,7 +246,7 @@ struct AutoScrollSessionTests {
         #expect(rgba[(last * image.width + 20) * 4 + 3] == 255, "the bottom edge between the corners is the page")
     }
 
-    @Test("with a scroll bar it jumps to the top in one step and still stops where the owner started")
+    @Test("with a scroll bar it jumps to the top in one step and still stops where the user started")
     func jumpsToTheTop() async throws {
         let page = Page(height: 1_400, startingAt: 500, jumps: true)
         let image = try #require(await autoCapture(page))

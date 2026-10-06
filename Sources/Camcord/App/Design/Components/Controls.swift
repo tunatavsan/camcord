@@ -1,8 +1,8 @@
 import KeyboardShortcuts
 import SwiftUI
 
-// System controls wearing Camcord's tokens (SPEC N1/N2): the system draws them, the tokens tint
-// them. Record is the one strong colour; "on" states are ink, never the system accent (K1).
+// System controls wearing Camcord's tokens: the system draws them, the tokens tint them.
+// Record is the one strong colour; "on" states are ink, never the system accent.
 
 /// Record / Stop. Always the system's prominent bordered button, tinted record red.
 struct RecordButton: View {
@@ -93,7 +93,7 @@ struct KeyCap: View {
         .padding(.horizontal, Theme.Space.s - 2)
         .padding(.vertical, 2)
         .background {
-            // A key's lower edge is a second cap one point down, not a shadow (K2.5).
+            // A key's lower edge is a second cap one point down, not a shadow.
             ZStack {
                 RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous)
                     .fill(Theme.Palette.hairlineStrong.color)
@@ -159,7 +159,7 @@ struct SectionHeader: View {
     }
 }
 
-/// An inset well inside a glass surface: a concentric recess, not a second glass (K2.2).
+/// An inset well inside a glass surface: a concentric recess, not a second glass.
 struct InsetWell<Content: View>: View {
     @ViewBuilder var content: Content
 

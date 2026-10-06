@@ -137,7 +137,7 @@ struct HoldGestureDetector {
 
 /// Input events the double-tap state machine reacts to. `otherKeyDown` covers any
 /// non-Right-Command key going down (e.g. the "C" in a Cmd+C chord) and resets the
-/// sequence per the M2 brief -- so two quick Cmd+C's never look like a double-tap.
+/// sequence -- so two quick Cmd+C's never look like a double-tap.
 enum TapKeyEvent {
     case rightCmdDown
     case rightCmdUp

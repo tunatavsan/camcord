@@ -1,7 +1,7 @@
 import SwiftUI
 
-// KARAR-1: Camcord's navigation lists (the main window's sidebar, the Settings group list) draw
-// their own selection, the ink capsule, so the user's system accent never colours them (K1).
+// Camcord's navigation lists (the main window's sidebar, the Settings group list) draw their
+// own selection, the ink capsule, so the user's system accent never colours them.
 // Everything else keeps the system's selection. Keyboard and VoiceOver parity is part of the
 // component: ↑/↓ move the selection while the list has focus, each row is a button that
 // carries the selected trait.
@@ -35,7 +35,7 @@ struct InkNavigationList<ID: Hashable, Content: View>: View {
         .scrollIndicators(.never)
         .focusable()
         .focused($focused)
-        // No accent focus ring (K1): focus shows as a stronger selection capsule, the way the
+        // No accent focus ring: focus shows as a stronger selection capsule, the way the
         // system's own sidebar turns its highlight on and off with focus.
         .focusEffectDisabled()
         .environment(\.inkNavigationFocused, focused)
@@ -105,7 +105,7 @@ struct InkNavigationRow<ID: Hashable, Label: View>: View {
 
     private var fill: Color {
         if isSelected {
-            // Navigation remains identifiable while Camcord is behind the owner's work.
+            // Navigation remains identifiable while Camcord is behind the user's work.
             return Theme.Palette.selectionStrong.color
         }
         return hovering ? Theme.Palette.hover.color : .clear

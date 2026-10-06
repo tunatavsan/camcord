@@ -1,7 +1,7 @@
 import Foundation
 
 /// Persistent diagnostics sink: the installed app's `os_log` lines are not retrievable with
-/// `log show`, so the trigger (G.1) and scroll session (S.2) logs also write to
+/// `log show`, so the trigger and scroll session logs also write to
 /// `~/Library/Logs/Camcord/diagnostics.log`, opened once per process and started empty when
 /// the previous run left it over `maxBytes`. `stamp`/`handle`/`opened` are queue-confined.
 enum DiagnosticsLog {

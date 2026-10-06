@@ -3,7 +3,7 @@ import Testing
 
 @testable import Camcord
 
-/// Phase P/W4: the panel's audio channel strip. Everything it decides before a pixel is
+/// The panel's audio channel strip. Everything it decides before a pixel is
 /// drawn — which control is live in which state, what the meter has to show, and which
 /// input a saved device resolves to once it is unplugged.
 @Suite("Audio channel strip")

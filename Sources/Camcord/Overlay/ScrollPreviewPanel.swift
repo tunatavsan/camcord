@@ -50,7 +50,7 @@ final class ScrollPreviewPanel {
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
         panel.isReleasedWhenClosed = false
         panel.animationBehavior = .none
-        // Wherever it landed, the owner can carry it aside by its tray.
+        // Wherever it landed, the user can carry it aside by its tray.
         panel.isMovableByWindowBackground = true
         // Like the recording hub: white controls on a tinted tray, whatever is behind it.
         panel.appearance = NSAppearance(named: .darkAqua)

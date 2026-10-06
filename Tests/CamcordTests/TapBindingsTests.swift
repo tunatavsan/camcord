@@ -159,7 +159,7 @@ struct HoldGestureDetectorTests {
             .toggleRecording: free,
         ]
 
-        // Another action holds it → the owner is asked before anything moves.
+        // Another action holds it → the user is asked before anything moves.
         #expect(ShortcutCatalogue.conflict(assigning: taken, to: .toggleCameraPreview, in: assignments) == .captureRegion)
         // Re-recording the SAME combination onto the action that already has it is not a
         // conflict with itself — that would make a shortcut impossible to re-confirm.
@@ -190,7 +190,7 @@ struct HoldGestureDetectorTests {
             #expect(!entry.label.isEmpty)
             #expect(ShortcutCatalogue.label(for: entry.name) == entry.label)
         }
-        // The two camera shortcuts the owner asked for are in the list the recorders draw.
+        // The two camera shortcuts are in the list the recorders draw.
         #expect(names.contains(.toggleCameraPreview))
         #expect(names.contains(.toggleCameraRecording))
     }

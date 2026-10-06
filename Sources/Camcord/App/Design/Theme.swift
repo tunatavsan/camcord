@@ -2,10 +2,9 @@ import AppKit
 import CoreText
 import SwiftUI
 
-// Camcord's design tokens (docs/design/native/SPEC.md §2, docs/RUN-UI-2.md K1–K3). Colour, type,
-// spacing, radius and motion live here and nowhere else: every surface reads these names, and
-// DesignTokenLiteralTests fails on a literal colour, font size or duration in the files that
-// consume them. Palette and type from Console, shape and spacing from Graphite, motion precise.
+// Camcord's design tokens. Colour, type, spacing, radius and motion live here and nowhere
+// else: every surface reads these names, and DesignTokenLiteralTests fails on a literal colour,
+// font size or duration in the files that consume them. Palette and type from Console, shape and spacing from Graphite, motion precise.
 
 enum Theme {}
 
@@ -103,7 +102,7 @@ struct ThemeColor: Sendable {
             return alpha < 1 ? "\(hex) \(Int((alpha * 100).rounded()))%" : hex
         }
 
-        /// WCAG relative luminance, for the contrast floor (BRIEF §7.10).
+        /// WCAG relative luminance, for the contrast floor.
         var luminance: CGFloat {
             func linear(_ c: CGFloat) -> CGFloat { c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
             return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
@@ -170,7 +169,7 @@ struct ThemeColor: Sendable {
 
     /// Increase Contrast cannot be read from an appearance (measured: the Accessibility
     /// appearances are composites named plain DarkAqua / Aqua), so it comes from the system
-    /// setting, or from the live check's in-app override (never the owner's system setting).
+    /// setting, or from the live check's in-app override (never the user's system setting).
     nonisolated(unsafe) static var highContrastOverride: Bool?
 
     static var increaseContrast: Bool {
@@ -191,7 +190,7 @@ struct ThemeColor: Sendable {
 private typealias C = ThemeColor.RGBA
 
 extension Theme {
-    /// The palette (SPEC §2.1). No token reads the system accent (K1): selection and "on" are
+    /// The palette. No token reads the system accent: selection and "on" are
     /// ink, record red is the only strong colour, ok/warn appear only in meters and permissions.
     enum Palette {
         static let window = ThemeColor("window", dark: C(0x16181B), light: C(0xE3E6EA),
@@ -252,12 +251,12 @@ extension Theme {
                                                 light: C(0xD8DCE1, alpha: 0.60),
                                                 highContrastDark: C(0x2E333A, alpha: 0.88),
                                                 highContrastLight: C(0xD8DCE1, alpha: 0.88))
-        /// Reduce Transparency: the opaque stand-ins for glass (K2.7).
+        /// Reduce Transparency: the opaque stand-ins for glass.
         static let glassSolidChrome = ThemeColor("glassSolidChrome", dark: C(0x1E2125), light: C(0xECEEF1))
         static let glassSolidSidebar = ThemeColor("glassSolidSidebar", dark: C(0x24282D), light: C(0xD8DCE1))
         static let glassSolidHUD = ThemeColor("glassSolidHUD", dark: C(0x1E2125), light: C(0x1E2125))
         /// Pre-Graphite-II accent, kept ONLY for surfaces not yet restyled (the old panel, the old
-        /// Settings window, the hub). Deleted with the CamcordStyle alias layer in P6.4.
+        /// Settings window, the hub). Deleted with the CamcordStyle alias layer.
         static let legacyAccent = ThemeColor("legacyAccent", dark: C(0x596ED8), light: C(0x596ED8))
 
         static let all: [ThemeColor] = [
@@ -342,9 +341,9 @@ extension Theme {
         static let xxl: CGFloat = 32
     }
 
-    /// The inspected Graphite II window shell (`index.html` 138–158).
+    /// The Graphite II window shell.
     enum Navigation {
-        // CSS's 236-point boundary includes the native sidebar's measured 8-point outer inset.
+        // The design's 236-point boundary includes the native sidebar's measured 8-point outer inset.
         // navigationSplitViewColumnWidth sizes the content, rather than that outer boundary.
         static let sidebarBoundary: CGFloat = 236
         static let nativeSidebarInset: CGFloat = 8
@@ -365,7 +364,7 @@ extension Theme {
         static let badgeVerticalInset: CGFloat = 1
     }
 
-    /// One concentric family (K2.4): an inner corner is its outer corner minus the inset
+    /// One concentric family: an inner corner is its outer corner minus the inset
     /// between them. Where the OS owns a corner (window, sidebar, toolbar items, menus), it wins.
     enum Radius {
         static let floating: CGFloat = 18
@@ -380,7 +379,7 @@ extension Theme {
         static func inset(_ outer: CGFloat, by inset: CGFloat) -> CGFloat { max(badge, outer - inset) }
     }
 
-    /// The one shadow in the app: the camera tile's lift (K2.5). Glass draws its own.
+    /// The one shadow in the app: the camera tile's lift. Glass draws its own.
     enum Shadow {
         static let tileColor = ThemeColor("tileShadow", dark: C(0x000000, alpha: 0.55), light: C(0x141A22, alpha: 0.34))
         static let tileRadius: CGFloat = 14
@@ -470,7 +469,7 @@ extension Theme {
 // MARK: - Motion
 
 extension Theme {
-    /// Precise springs, bounce ≤ 0.05 (K1, K2.6). `reduced` is what Reduce Motion gets (K2.7).
+    /// Precise springs, bounce ≤ 0.05. `reduced` is what Reduce Motion gets.
     enum Motion {
         enum Duration {
             static let instant: Double = 0.12

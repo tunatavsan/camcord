@@ -5,9 +5,9 @@ extension EnvironmentValues {
     @Entry var formPageSelected = true
 }
 
-// The prototype's settings page (ref `settings-*`): a display title, then cards of rows — a
-// label (with an optional note under it) on the left, the control on the right, hairlines
-// between rows. Cards are opaque content on the frosted window (K1.G, NOTE-2).
+// The settings page: a display title, then cards of rows — a label (with an optional note
+// under it) on the left, the control on the right, hairlines between rows. Cards are opaque
+// content on the frosted window.
 
 /// A page of cards under a display title, scrolling as one.
 struct FormPage<Content: View>: View {
@@ -113,7 +113,7 @@ struct FormRow<Control: View>: View {
 }
 
 extension View {
-    /// A switch in ink, the prototype's "on" colour (K1: never the system accent).
+    /// A switch in ink, the design's "on" colour (never the system accent).
     func inkSwitch() -> some View {
         toggleStyle(.switch).tint(Theme.Palette.ink.color).labelsHidden()
     }

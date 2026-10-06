@@ -4,7 +4,7 @@ import Testing
 
 @testable import Camcord
 
-/// The Graphite II tokens (docs/design/native/SPEC.md §2): the accessibility floor in the
+/// The Graphite II tokens: the accessibility floor in the
 /// palette, dynamic resolution per appearance, the concentric radii, the motion rules, glass
 /// fallbacks, and the live-check commands.
 @MainActor
@@ -18,7 +18,7 @@ struct ThemeTests {
         return RGBA.contrast(text.value(variant).over(groundValue), groundValue)
     }
 
-    @Test("text is at least 4.5:1 on the window and on surfaces, in every variant (BRIEF §7.10)",
+    @Test("text is at least 4.5:1 on the window and on surfaces, in every variant",
           arguments: ThemeColor.Variant.allCases)
     func textContrast(variant: ThemeColor.Variant) {
         let texts = [Theme.Palette.ink, Theme.Palette.ink2, Theme.Palette.ink3]

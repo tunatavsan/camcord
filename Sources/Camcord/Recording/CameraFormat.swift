@@ -1,7 +1,7 @@
 import AVFoundation
 import CoreMedia
 
-/// The camera's capture format: Camcord's choice, or the owner's. Persisted per device in
+/// The camera's capture format: Camcord's choice, or the user's. Persisted per device in
 /// `CameraOptions.formats`, keyed by the device's `uniqueID`.
 enum CameraFormatChoice: Codable, Hashable, Sendable {
     case auto

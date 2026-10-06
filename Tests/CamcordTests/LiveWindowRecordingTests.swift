@@ -137,7 +137,7 @@ struct LiveWindowRecordingTests {
         #expect(perFrame < 8, "\(perFrame) ms per 4K frame")
     }
 
-    /// The owner's own camera, through the real `CameraCapture`, on Auto.
+    /// The machine's own camera, through the real `CameraCapture`, on Auto.
     @Test("the built-in camera starts on Auto and delivers frames of the format it reports")
     func builtInCameraOnAuto() async throws {
         let device = try #require(AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .unspecified))

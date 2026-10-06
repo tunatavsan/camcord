@@ -279,7 +279,7 @@ final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         }
     }
 
-    /// Applies the owner's choice (Auto or a manual `W×H @ fps`) through the pure rules in
+    /// Applies the user's choice (Auto or a manual `W×H @ fps`) through the pure rules in
     /// `CameraFormatSelection`, and returns what the device now runs.
     private static func configure(device: AVCaptureDevice, choice: CameraFormatChoice) throws -> CameraFormatResolution {
         let formats = device.formats

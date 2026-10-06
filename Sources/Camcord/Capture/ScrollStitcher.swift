@@ -144,7 +144,7 @@ final class ScrollStitcher {
         return min(maxTotalHeight, maxTotalPixels / outputWidth)
     }
 
-    /// Number of stitched sections so far — for the live "N bölüm" readout.
+    /// Number of stitched sections so far — for the live "N sections" readout.
     var sectionCount: Int {
         if detected { return (topImage != nil ? 1 : 0) + strips.count + (hasPending ? 1 : 0) }
         return warmup.isEmpty ? 0 : 1

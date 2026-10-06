@@ -4,9 +4,9 @@ import os
 
 /// What owns the display under the cursor. A fullscreen game covers the screen, often
 /// sits above every panel level Camcord can reach, and may hold the display captured —
-/// so an overlay or a picker there is invisible at best. Phase G routes triggers in this
-/// context to UI-less captures; G.1 logs the measurement at every trigger so the owner's
-/// LoL run says which failure class applies.
+/// so an overlay or a picker there is invisible at best. Triggers in this context are routed
+/// to UI-less captures, and the measurement is logged at every trigger so an in-game test run
+/// says which failure class applies.
 ///
 /// The decision is a pure function of the four measurements, so it can be table-tested;
 /// `current()` is a thin live wrapper around it.
@@ -67,7 +67,7 @@ struct FullscreenContext: Equatable {
         )
     }
 
-    /// The same measurement for a surface the owner reaches THROUGH Camcord (the window
+    /// The same measurement for a surface the user reaches THROUGH Camcord (the window
     /// picker): clicking our panel makes Camcord frontmost, so `current()` would report
     /// ourselves and never see the game still covering the screen behind us. Reads the
     /// covering app off the window list's own front-to-back order instead.
@@ -120,7 +120,7 @@ struct FullscreenContext: Equatable {
     /// display's bounds. Fully transparent windows and Finder's desktop are not cover.
     /// Pure over the window list so the filtering itself is testable with fake dictionaries.
     /// The frontmost app is trusted at ANY level: it is in front, so whatever it draws over
-    /// the display is what the owner is looking at.
+    /// the display is what the user is looking at.
     static func coveringLayer(in list: [[String: Any]], pid: pid_t, displayBounds: CGRect) -> Int? {
         for window in list where window[kCGWindowOwnerPID as String] as? pid_t == pid {
             if let layer = layerIfCovering(window, displayBounds: displayBounds) { return layer }
@@ -203,7 +203,7 @@ struct FullscreenContext: Equatable {
     }
 }
 
-/// Phase G.4. A game-like context owns the display and sits above every ordinary panel
+/// A game-like context owns the display and sits above every ordinary panel
 /// level, so Camcord's own transient surfaces have to be raised to the shielding level to be
 /// seen at all. The flag lives next to the measurement that decides it because more than one
 /// surface reads it — the camera tile, its shadow, the HUD toast — and each reads it as it
@@ -244,8 +244,8 @@ enum GameOverlayElevation {
 /// One line per trigger, so a run inside a fullscreen game says whether the trigger
 /// reached us at all (Class A) and, if it did, what was in front of it (Class B).
 /// The installed app's `os_log` lines are not retrievable with `log show`, so every line
-/// also goes to `~/Library/Logs/Camcord/diagnostics.log` — that file is what the owner
-/// reads after an in-game trigger test.
+/// also goes to `~/Library/Logs/Camcord/diagnostics.log` — that file is what to read after
+/// an in-game trigger test.
 enum TriggerLog {
     private static let logger = Logger(subsystem: "dev.tavsan.camcord", category: "trigger")
 

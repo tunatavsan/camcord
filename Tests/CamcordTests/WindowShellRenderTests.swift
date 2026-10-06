@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 
 @testable import Camcord
 
-/// Root-only compositor/CUA evidence. The default test run creates no app or window here.
+/// Root-only compositor/UI-automation evidence. The default test run creates no app or window here.
 @MainActor
 @Suite("Window shell native evidence", .serialized,
        .enabled(if: ProcessInfo.processInfo.environment["CAMCORD_SHELL_WINDOWS"] == "1"))
@@ -26,7 +26,7 @@ struct WindowShellRenderTests {
         while clock.now < deadline, configuration.isAuthorized,
               !FileManager.default.fileExists(atPath: configuration.finish.path), !Task.isCancelled {
             try await Task.sleep(for: .milliseconds(250))
-            // Observe actual CUA navigation/visibility changes; never drive a product state.
+            // Observe actual UI-automation navigation/visibility changes; never drive a product state.
             try fixture.writeMetadata()
         }
         #expect(!fixture.services.recordingController.isBusy)
@@ -193,7 +193,7 @@ private final class ShellFixture {
         services = AppServices(defaults: defaults, coordinator: coordinator, recordingController: recordingController,
                                eventTapEngine: eventTap, recordingState: state, library: library, editor: editor,
                                studioSession: studio)
-        // The tour is of shell callbacks. Even accidental body Copy cannot change the owner's clipboard.
+        // The tour is of shell callbacks. Even accidental body Copy cannot change the user's clipboard.
         library.claimClipboardPublication = { { false } }
         editor.claimClipboardPublication = { { false } }
         controller = MainWindowController(presentBackground: { $0.orderBack(nil) }, isAppActive: { false },
@@ -482,7 +482,7 @@ private enum ShellCaptureImage {
     }
 }
 
-/// Owned three-background raster samples exercise the actual export renderer, without a UI or owner data.
+/// Owned three-background raster samples exercise the actual export renderer, without a UI or user data.
 enum ShellAnnotationSheet {
     static func write(scale: Int, to url: URL, textBackgroundOnly: Bool = false) throws {
         let cell = CGSize(width: 280, height: 140), rowHeight = 180

@@ -182,7 +182,7 @@ final class AXScrollActuator: ScrollActuator {
 /// event per step, with no gesture or momentum phase, which every engine applies at once and
 /// exactly. It carries the mark scroll smoothers such as Mos leave alone, so they never
 /// reverse, smooth or fling it. Wheel events go to the window under the pointer: the pointer
-/// is parked in the region, and while the owner moves it away nothing is posted.
+/// is parked in the region, and while the user moves it away nothing is posted.
 @MainActor
 final class WheelScrollActuator: ScrollActuator {
     let route = "wheel"
@@ -215,7 +215,7 @@ final class WheelScrollActuator: ScrollActuator {
             guard let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 1,
                                       wheel1: sign * value, wheel2: 0, wheel3: 0) else { return false }
             event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
-            // No modifier the owner may still hold rides along: ⇧ would turn it sideways.
+            // No modifier the user may still hold rides along: ⇧ would turn it sideways.
             event.flags = []
             event.setIntegerValueField(.eventSourceUserData, value: Self.smootherBypass)
             event.post(tap: .cghidEventTap)

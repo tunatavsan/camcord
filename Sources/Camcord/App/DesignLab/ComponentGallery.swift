@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The Design Lab's component page (RUN UI-2 P1.2): every kit component in all its states.
+/// The Design Lab's component page: every kit component in all its states.
 struct ComponentGallery: View {
     @State private var cameraOn = true
     @State private var micOn = true

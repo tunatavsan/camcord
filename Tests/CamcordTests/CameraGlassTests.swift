@@ -108,7 +108,7 @@ struct CameraEntranceTests {
     }
 }
 
-/// G.4: what raises the tile and the toast over a fullscreen game, and what the owner reads
+/// What raises the tile and the toast over a fullscreen game, and what the user reads
 /// in the log afterwards.
 @MainActor
 @Suite("Game overlay elevation", .serialized)

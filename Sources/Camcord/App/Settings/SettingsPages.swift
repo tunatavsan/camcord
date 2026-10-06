@@ -20,8 +20,8 @@ struct SettingsActivity: DynamicProperty {
     }
 }
 
-// The Settings module's pages (K7, SPEC S5): the prototype's page — a display title and cards
-// of rows — in place of the old Settings window, with the same keys (settings-parity.md).
+// The Settings module's pages: a display title and cards of rows, in place of the old Settings
+// window, with the same keys (SettingsParityTests holds them to it).
 
 /// The Settings module's content: the page of the group the sidebar has selected.
 struct SettingsModuleView: View {
@@ -249,7 +249,7 @@ struct ResolutionPicker: View {
     }
 }
 
-// MARK: - Library (K4)
+// MARK: - Library
 
 struct LibrarySettingsPage: View {
     @Bindable var store: SettingsStore
@@ -351,7 +351,7 @@ struct LibrarySettingsPage: View {
 
 }
 
-/// The copied-captures folder (K4): its size and emptying it to the Trash.
+/// The copied-captures folder: its size and emptying it to the Trash.
 enum LibraryCache {
     enum CacheError: Error { case unsafeDirectory, trashFailed(Int) }
 

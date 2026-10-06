@@ -67,7 +67,7 @@ final class HUDToast {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
-        // G.4: while a fullscreen game owns the display the ordinary status-bar level is
+        // While a fullscreen game owns the display the ordinary status-bar level is
         // under it, and a confirmation nobody can see is not a confirmation. Measured at
         // show time, at the toast's own place on screen, so leaving the game puts the next
         // toast back at its usual level.

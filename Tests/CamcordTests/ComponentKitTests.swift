@@ -4,7 +4,7 @@ import Testing
 
 @testable import Camcord
 
-/// The component kit's logic (docs/design/native/SPEC.md §3): the capture kinds, the mark and
+/// The component kit's logic: the capture kinds, the mark and
 /// the capture brackets, the timecode and tally sweep, the meter scale, and condense under
 /// Reduce Motion.
 @MainActor
@@ -84,7 +84,7 @@ struct ComponentKitTests {
         #expect(rest.opacity == 1 && rest.scale == 1 && rest.blur == 0)
     }
 
-    @Test("ink navigation: arrows move one step among the ids and stop at the ends (KARAR-1)")
+    @Test("ink navigation: arrows move one step among the ids and stop at the ends")
     func inkNavigation() {
         let order = ["library", "studio", "edit", "settings"]
         #expect(InkNavigation.move(from: "library", by: 1, in: order) == "studio")

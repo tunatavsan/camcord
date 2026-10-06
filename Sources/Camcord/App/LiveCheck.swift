@@ -1,9 +1,8 @@
 import AppKit
 
-/// Focus-safe hooks for RUN UI-2's live checks (docs/design/native/SPEC.md §7). Off unless the
-/// app's `liveCheck` default is true; then a distributed notification can put a surface on
-/// screen WITHOUT activating the app and set the app's own appearance, so dark and light
-/// screenshots never take the owner's focus or touch their system setting.
+/// Focus-safe hooks for live UI checks. Off unless the app's `liveCheck` default is true;
+/// then a distributed notification can put a surface on screen WITHOUT activating the app and
+/// set the app's own appearance, so dark and light screenshots never take the user's focus or touch their system setting.
 ///
 ///     defaults write dev.tavsan.camcord liveCheck -bool true
 ///     post "dev.tavsan.camcord.livecheck" with object "window library" | "appearance dark" | …
