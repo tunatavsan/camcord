@@ -41,8 +41,8 @@ jobs:
           ! grep -q 'warning:' build.log
 
       - name: Test
-        timeout-minutes: 20
-        run: swift test -Xswiftc -warnings-as-errors
+        timeout-minutes: 15
+        run: swift test -Xswiftc -warnings-as-errors --no-parallel
 
       - name: Package an unsigned app bundle
         run: scripts/build.sh --unsigned
