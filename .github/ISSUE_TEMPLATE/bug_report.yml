@@ -1,0 +1,76 @@
+name: Bug report
+description: Something in Camcord does not work as expected.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. If the problem could expose what someone captured, please report
+        it privately as described in SECURITY.md instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe what you saw. Screenshots and recordings help, but please use neutral content and hide personal information.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Press the region shortcut …
+        2. Select …
+        3. …
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Screenshot
+        - Scrolling capture
+        - Text recognition
+        - Recording
+        - Camera or microphone
+        - Editor
+        - Library
+        - Studio
+        - Settings or shortcuts
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: macOS 26.1 (25B78)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Camcord version or commit
+      placeholder: 0.2.10 or a commit SHA
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Displays and devices
+      description: Number of displays and their scaling, and any camera, microphone or mouse involved.
+  - type: textarea
+    id: log
+    attributes:
+      label: Diagnostics log
+      description: |
+        Optional. The last lines of ~/Library/Logs/Camcord/diagnostics.log. Remove window titles and paths you do not
+        want to share.
+      render: text
