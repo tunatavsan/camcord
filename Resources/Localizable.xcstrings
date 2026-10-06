@@ -11267,6 +11267,1554 @@
           }
         }
       }
+    },
+    "Control Panel": {
+      "extractionState": "manual",
+      "comment": "App menu: opens the menu bar panel",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Control Panel"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kontrol Paneli"
+          }
+        }
+      }
+    },
+    "Settings…": {
+      "extractionState": "manual",
+      "comment": "Menu item: opens Settings",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Settings…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ayarlar…"
+          }
+        }
+      }
+    },
+    "Cut": {
+      "extractionState": "manual",
+      "comment": "Edit menu",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cut"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kes"
+          }
+        }
+      }
+    },
+    "Select All": {
+      "extractionState": "manual",
+      "comment": "Edit menu",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select All"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tümünü Seç"
+          }
+        }
+      }
+    },
+    "File not found · it may have been moved or deleted": {
+      "extractionState": "manual",
+      "comment": "Toast when a capture's file is missing",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File not found · it may have been moved or deleted"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dosya bulunamadı · taşınmış veya silinmiş olabilir"
+          }
+        }
+      }
+    },
+    "Couldn't open the file or folder · try again from Finder": {
+      "extractionState": "manual",
+      "comment": "Toast when a file or folder cannot be opened",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't open the file or folder · try again from Finder"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dosya veya klasör açılamadı · Finder’dan tekrar deneyebilirsin"
+          }
+        }
+      }
+    },
+    "Capture Active Window": {
+      "extractionState": "manual",
+      "comment": "Status menu item",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capture Active Window"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aktif Pencereyi Çek"
+          }
+        }
+      }
+    },
+    "Capture Full Screen": {
+      "extractionState": "manual",
+      "comment": "Status menu item",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capture Full Screen"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tüm Ekranı Çek"
+          }
+        }
+      }
+    },
+    "Capture Text (OCR)": {
+      "extractionState": "manual",
+      "comment": "Status menu item",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capture Text (OCR)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metni Çek (OCR)"
+          }
+        }
+      }
+    },
+    "Scroll Capture…": {
+      "extractionState": "manual",
+      "comment": "Status menu item",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scroll Capture…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydırmalı Çekim…"
+          }
+        }
+      }
+    },
+    "Extract Text from Image…": {
+      "extractionState": "manual",
+      "comment": "Status menu item",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Extract Text from Image…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Görüntüden Metni Çıkar…"
+          }
+        }
+      }
+    },
+    "Start Recording…": {
+      "extractionState": "manual",
+      "comment": "Status menu item",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start Recording…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayda Başla…"
+          }
+        }
+      }
+    },
+    "Stop Recording": {
+      "extractionState": "manual",
+      "comment": "Status menu item",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop Recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydı Durdur"
+          }
+        }
+      }
+    },
+    "Pause Recording": {
+      "extractionState": "manual",
+      "comment": "Status menu item",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pause Recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydı Duraklat"
+          }
+        }
+      }
+    },
+    "Resume Recording": {
+      "extractionState": "manual",
+      "comment": "Status menu item",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resume Recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydı Sürdür"
+          }
+        }
+      }
+    },
+    "Record Full Screen": {
+      "extractionState": "manual",
+      "comment": "Status menu item",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record Full Screen"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tüm Ekranı Kaydet"
+          }
+        }
+      }
+    },
+    "Camera Preview": {
+      "extractionState": "manual",
+      "comment": "Status menu item",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camera Preview"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera Önizlemesi"
+          }
+        }
+      }
+    },
+    "Open Recording Panel": {
+      "extractionState": "manual",
+      "comment": "Status menu item",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Recording Panel"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt Panelini Aç"
+          }
+        }
+      }
+    },
+    "Request Screen Recording Permission…": {
+      "extractionState": "manual",
+      "comment": "Status menu item",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Request Screen Recording Permission…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekran Kaydı İzni İste…"
+          }
+        }
+      }
+    },
+    "No microphone permission — Open": {
+      "extractionState": "manual",
+      "comment": "Status menu item",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No microphone permission — Open"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon izni yok — Aç"
+          }
+        }
+      }
+    },
+    "Open at Login": {
+      "extractionState": "manual",
+      "comment": "Status menu item",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open at Login"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bilgisayar Açılışında Başlat"
+          }
+        }
+      }
+    },
+    "Records the screen the pointer is on": {
+      "extractionState": "manual",
+      "comment": "Tooltip on Record Full Screen",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Records the screen the pointer is on"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İmlecin bulunduğu ekran kaydedilir"
+          }
+        }
+      }
+    },
+    "Screen Recording: Allowed": {
+      "extractionState": "manual",
+      "comment": "Status menu: permission state",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screen Recording: Allowed"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekran Kaydı: İzin verildi"
+          }
+        }
+      }
+    },
+    "Screen Recording: Not Allowed": {
+      "extractionState": "manual",
+      "comment": "Status menu: permission state",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screen Recording: Not Allowed"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekran Kaydı: İzin yok"
+          }
+        }
+      }
+    },
+    "Accessibility permission needed — Open": {
+      "extractionState": "manual",
+      "comment": "Status menu: mouse shortcuts need a permission",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accessibility permission needed — Open"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erişilebilirlik izni gerekli — Aç"
+          }
+        }
+      }
+    },
+    "Mouse/gesture shortcuts disabled": {
+      "extractionState": "manual",
+      "comment": "Status menu: the mouse shortcut hook is down",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mouse/gesture shortcuts disabled"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fare/hareket bağlantısı devre dışı"
+          }
+        }
+      }
+    },
+    "Extract Text": {
+      "extractionState": "manual",
+      "comment": "Open panel button: OCR the chosen image",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Extract Text"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metni Çıkar"
+          }
+        }
+      }
+    },
+    "Choose an image to extract text from": {
+      "extractionState": "manual",
+      "comment": "Open panel message: OCR an image file",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose an image to extract text from"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metnini çıkarmak istediğin görüntüyü seç"
+          }
+        }
+      }
+    },
+    "Camcord: no image found in the selection.": {
+      "extractionState": "manual",
+      "comment": "Services menu error: the selection holds no image",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camcord: no image found in the selection."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camcord: seçimde bir görüntü bulunamadı."
+          }
+        }
+      }
+    },
+    "System": {
+      "extractionState": "manual",
+      "comment": "Audio channel: the sound the computer plays",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistem"
+          }
+        }
+      }
+    },
+    "Microphone input": {
+      "extractionState": "manual",
+      "comment": "Accessibility: the microphone input picker",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone input"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon girişi"
+          }
+        }
+      }
+    },
+    "No microphone permission — opens Permissions": {
+      "extractionState": "manual",
+      "comment": "Help on the microphone Test button",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No microphone permission — opens Permissions"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon izni yok — İzinler bölümünü açar"
+          }
+        }
+      }
+    },
+    "Listens to the microphone without recording, so you can check the level here": {
+      "extractionState": "manual",
+      "comment": "Help on the microphone Test button",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Listens to the microphone without recording, so you can check the level here"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofonu kayıt almadan dinler, seviyeyi buradan görürsün"
+          }
+        }
+      }
+    },
+    "Record %@ audio": {
+      "extractionState": "manual",
+      "comment": "Accessibility: an audio channel's on/off switch",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record %@ audio"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ sesini kaydet"
+          }
+        }
+      }
+    },
+    "%@ audio gain": {
+      "extractionState": "manual",
+      "comment": "Accessibility: an audio channel's gain slider",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ audio gain"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ ses kazancı"
+          }
+        }
+      }
+    },
+    "Camera permission is required. Open Permissions to enable it.": {
+      "extractionState": "manual",
+      "comment": "Camera preview status",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camera permission is required. Open Permissions to enable it."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera izni gerekli. İzinler bölümünden açabilirsin."
+          }
+        }
+      }
+    },
+    "The recording camera is unavailable.": {
+      "extractionState": "manual",
+      "comment": "Camera preview status",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The recording camera is unavailable."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt kamerası kullanılamıyor."
+          }
+        }
+      }
+    },
+    "Waiting for the camera image…": {
+      "extractionState": "manual",
+      "comment": "Camera preview status",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for the camera image…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera görüntüsü bekleniyor…"
+          }
+        }
+      }
+    },
+    "The camera preview could not be rendered.": {
+      "extractionState": "manual",
+      "comment": "Camera preview status",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The camera preview could not be rendered."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera önizlemesi oluşturulamadı."
+          }
+        }
+      }
+    },
+    "The camera disconnected. Check its connection and try again.": {
+      "extractionState": "manual",
+      "comment": "Camera preview status",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The camera disconnected. Check its connection and try again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera bağlantısı kesildi. Bağlantıyı kontrol edip yeniden dene."
+          }
+        }
+      }
+    },
+    "No camera found. Check the connection and the selected camera.": {
+      "extractionState": "manual",
+      "comment": "Camera preview error",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No camera found. Check the connection and the selected camera."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera bulunamadı. Bağlantıyı ve seçili kamerayı kontrol et."
+          }
+        }
+      }
+    },
+    "The camera could not start with this format. Choose another camera.": {
+      "extractionState": "manual",
+      "comment": "Camera preview error",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The camera could not start with this format. Choose another camera."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera bu görüntü ayarıyla açılamadı. Başka bir kamera seç."
+          }
+        }
+      }
+    },
+    "The camera could not start. Check its connection and try again.": {
+      "extractionState": "manual",
+      "comment": "Camera preview error",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The camera could not start. Check its connection and try again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera açılamadı. Bağlantıyı kontrol edip yeniden dene."
+          }
+        }
+      }
+    },
+    "Recording camera is live": {
+      "extractionState": "manual",
+      "comment": "Camera preview status",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording camera is live"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt kamerası canlı"
+          }
+        }
+      }
+    },
+    "Camera off": {
+      "extractionState": "manual",
+      "comment": "Camera preview status",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camera off"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera kapalı"
+          }
+        }
+      }
+    },
+    "Start preview": {
+      "extractionState": "manual",
+      "comment": "Camera preview placeholder",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start preview"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önizlemeyi başlat"
+          }
+        }
+      }
+    },
+    "Live": {
+      "extractionState": "manual",
+      "comment": "Accessibility value: the camera preview",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Canlı"
+          }
+        }
+      }
+    },
+    "Live, mirrored": {
+      "extractionState": "manual",
+      "comment": "Accessibility value: the camera preview",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live, mirrored"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Canlı, aynalanmış"
+          }
+        }
+      }
+    },
+    "The recording is using the camera": {
+      "extractionState": "manual",
+      "comment": "Accessibility: the camera preview while a recording owns the camera",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The recording is using the camera"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera kayıt tarafından kullanılıyor"
+          }
+        }
+      }
+    },
+    "Stops the camera preview": {
+      "extractionState": "manual",
+      "comment": "Accessibility hint: the camera preview button",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stops the camera preview"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera önizlemesini durdurur"
+          }
+        }
+      }
+    },
+    "Asks for camera permission and starts the preview": {
+      "extractionState": "manual",
+      "comment": "Accessibility hint: the camera preview button",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Asks for camera permission and starts the preview"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera izni ister ve önizlemeyi başlatır"
+          }
+        }
+      }
+    },
+    "Stage": {
+      "extractionState": "manual",
+      "comment": "Recording panel: title of the stage preview",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stage"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sahne"
+          }
+        }
+      }
+    },
+    "Position and size are shared by every target.": {
+      "extractionState": "manual",
+      "comment": "Recording panel: note beside the stage title",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Position and size are shared by every target."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Konum ve boyut tüm hedeflerde ortaktır."
+          }
+        }
+      }
+    },
+    "Recording stage": {
+      "extractionState": "manual",
+      "comment": "Accessibility: the recording panel's stage",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording stage"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt sahnesi"
+          }
+        }
+      }
+    },
+    "Getting the window image…": {
+      "extractionState": "manual",
+      "comment": "Recording stage: a picked window is loading",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Getting the window image…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pencere görüntüsü alınıyor…"
+          }
+        }
+      }
+    },
+    "Waiting for the recording image…": {
+      "extractionState": "manual",
+      "comment": "Recording stage: no frame yet",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for the recording image…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt görüntüsü bekleniyor…"
+          }
+        }
+      }
+    },
+    "Appears here when recording starts": {
+      "extractionState": "manual",
+      "comment": "Recording stage: nothing to show yet",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Appears here when recording starts"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt başlayınca burada görünür"
+          }
+        }
+      }
+    },
+    "Drag to move; drag a corner to resize": {
+      "extractionState": "manual",
+      "comment": "Accessibility hint: the camera on the stage",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drag to move; drag a corner to resize"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Taşımak için sürükle; köşelerden sürükleyerek boyutlandır"
+          }
+        }
+      }
+    },
+    "Text copied to the clipboard": {
+      "extractionState": "manual",
+      "comment": "Toast after a text capture",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text copied to the clipboard"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metin panoya kopyalandı"
+          }
+        }
+      }
+    },
+    "Couldn't save the image to a file — check the save location": {
+      "extractionState": "manual",
+      "comment": "Toast when a screenshot file cannot be written",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't save the image to a file — check the save location"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Görüntü dosyaya kaydedilemedi — kayıt konumunu kontrol et"
+          }
+        }
+      }
+    },
+    "Text · OCR": {
+      "extractionState": "manual",
+      "comment": "Label above a text-recognition selection",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text · OCR"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metin · OCR"
+          }
+        }
+      }
+    },
+    "Can't change this while recording": {
+      "extractionState": "manual",
+      "comment": "Toast: the camera shortcut pressed mid-recording",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Can't change this while recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt sürerken değiştirilemez"
+          }
+        }
+      }
+    },
+    "Camera will be added to the recording": {
+      "extractionState": "manual",
+      "comment": "Toast: the camera shortcut turned the camera on",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camera will be added to the recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera kayda gömülecek"
+          }
+        }
+      }
+    },
+    "Camera won't be added to the recording": {
+      "extractionState": "manual",
+      "comment": "Toast: the camera shortcut turned the camera off",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camera won't be added to the recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera kayda gömülmeyecek"
+          }
+        }
+      }
+    },
+    "Recording controls": {
+      "extractionState": "manual",
+      "comment": "Accessibility: the floating recording hub",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording controls"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt merkezi"
+          }
+        }
+      }
+    },
+    "Hide camera preview": {
+      "extractionState": "manual",
+      "comment": "Accessibility: the hub's preview button",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide camera preview"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önizlemeyi gizle"
+          }
+        }
+      }
+    },
+    "Show camera preview": {
+      "extractionState": "manual",
+      "comment": "Accessibility: the hub's preview button",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show camera preview"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önizlemeyi göster"
+          }
+        }
+      }
+    },
+    "This recording started without the camera": {
+      "extractionState": "manual",
+      "comment": "Tooltip on the hub's camera chip",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This recording started without the camera"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu kayıt kamerasız başladı"
+          }
+        }
+      }
+    },
+    "%@ — full screen": {
+      "extractionState": "manual",
+      "comment": "Window picker card: an app covering the whole screen",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ — full screen"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ — tam ekran"
+          }
+        }
+      }
+    },
+    "Recording continues": {
+      "extractionState": "manual",
+      "comment": "Recording toast",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording continues"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt sürüyor"
+          }
+        }
+      }
+    },
+    "Recording started": {
+      "extractionState": "manual",
+      "comment": "Recording toast",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording started"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt başladı"
+          }
+        }
+      }
+    },
+    "Recording failed": {
+      "extractionState": "manual",
+      "comment": "Recording toast",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording failed"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt başarısız oldu"
+          }
+        }
+      }
+    },
+    "Recording interrupted · the recorded part was kept": {
+      "extractionState": "manual",
+      "comment": "Recording toast",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording interrupted · the recorded part was kept"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt kesildi · kaydedilen kısım korundu"
+          }
+        }
+      }
+    },
+    "Recording saved; the audio was kept on separate tracks": {
+      "extractionState": "manual",
+      "comment": "Recording toast",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording saved; the audio was kept on separate tracks"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıt kaydedildi; sesler ayrı kanallarda korundu"
+          }
+        }
+      }
+    },
+    "Time limit reached — recording saved": {
+      "extractionState": "manual",
+      "comment": "Recording toast",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Time limit reached — recording saved"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Süre sınırına ulaşıldı — kayıt kaydedildi"
+          }
+        }
+      }
+    },
+    "Disk full — recording saved": {
+      "extractionState": "manual",
+      "comment": "Recording toast",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disk full — recording saved"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disk doldu — kayıt kaydedildi"
+          }
+        }
+      }
+    },
+    "No microphone permission — your voice won't be recorded": {
+      "extractionState": "manual",
+      "comment": "Recording toast",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No microphone permission — your voice won't be recorded"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon izni yok — sesin kaydedilmeyecek"
+          }
+        }
+      }
+    },
+    "No camera permission — the recording will start without the camera": {
+      "extractionState": "manual",
+      "comment": "Recording toast",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No camera permission — the recording will start without the camera"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera izni yok — ekran kaydı kamerasız başlayacak"
+          }
+        }
+      }
+    },
+    "This recording started without the camera — it can't be added now": {
+      "extractionState": "manual",
+      "comment": "Recording toast",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This recording started without the camera — it can't be added now"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu kayıt kamerasız başladı — kamera eklenemez"
+          }
+        }
+      }
+    },
+    "No sound from the microphone — check the audio input": {
+      "extractionState": "manual",
+      "comment": "Recording toast",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No sound from the microphone — check the audio input"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofondan ses gelmiyor — ses girişini kontrol et"
+          }
+        }
+      }
+    },
+    "Audio isn't recording properly — check the audio settings": {
+      "extractionState": "manual",
+      "comment": "Recording toast",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio isn't recording properly — check the audio settings"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ses kaydında sorun var — ses ayarlarını kontrol et"
+          }
+        }
+      }
+    },
+    "Audio dropouts detected — still recording": {
+      "extractionState": "manual",
+      "comment": "Recording toast",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio dropouts detected — still recording"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ses kesintileri algılandı — kayıt devam ediyor"
+          }
+        }
+      }
+    },
+    "Camera disconnected — the screen recording continues": {
+      "extractionState": "manual",
+      "comment": "Recording toast: a camera problem",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camera disconnected — the screen recording continues"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera bağlantısı kesildi — ekran kaydı sürüyor"
+          }
+        }
+      }
+    },
+    "Couldn't open the camera — the recording will start without it": {
+      "extractionState": "manual",
+      "comment": "Recording toast: a camera problem",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't open the camera — the recording will start without it"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera açılamadı — ekran kaydı kamerasız başlayacak"
+          }
+        }
+      }
+    },
+    "Couldn't add the camera to the video — the preview and screen recording continue": {
+      "extractionState": "manual",
+      "comment": "Recording toast: a camera problem",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't add the camera to the video — the preview and screen recording continue"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kamera videoya eklenemedi — önizleme ve ekran kaydı sürüyor"
+          }
+        }
+      }
+    },
+    "MOV · Apple": {
+      "extractionState": "manual",
+      "comment": "Container option",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MOV · Apple"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MOV · Apple"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

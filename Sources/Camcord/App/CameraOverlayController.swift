@@ -11,7 +11,7 @@ final class CameraOverlayController: NSObject {
 
     var onPlacementChange: ((CameraOptions) -> Void)?
     var isVisible: Bool { panel.isVisible }
-    /// Only the owner's own surfaces change `previewVisible`, and only through the two named
+    /// Only the user's own surfaces change `previewVisible`, and only through the two named
     /// intents below: `togglePreview()` (panel chip, status-menu item, shortcut) and
     /// `closeFromTile()` (the × on the tile). Arming and recording may CONFINE the preview
     /// (`prepareRecording`), never open it: a placement made with it closed lands in the
@@ -49,7 +49,7 @@ final class CameraOverlayController: NSObject {
     private(set) var hapticWidthStop: Double?
     /// Guards a fade-out completion against a show() that raced it.
     private var visibilityToken = 0
-    /// G.4: true while the tile is raised above a fullscreen game. Kept as state because the
+    /// True while the tile is raised above a fullscreen game. Kept as state because the
     /// reveal and the fade also write `ignoresMouseEvents`, and a raised tile stays
     /// click-through — at the shielding level our own hit test would take clicks meant for
     /// the game underneath.
@@ -94,7 +94,7 @@ final class CameraOverlayController: NSObject {
             }
         }.store(in: &observations)
         monitor.$message.sink { [weak self] message in
-            MainActor.assumeIsolated { self?.cameraView.message = message ?? "Kamera açılıyor…" }
+            MainActor.assumeIsolated { self?.cameraView.message = message ?? String(localized: "Starting camera…", comment: "Camera preview status") }
         }.store(in: &observations)
         NotificationCenter.default.publisher(for: RecordingSettings.didChangeNotification)
             .sink { @Sendable [weak self] _ in
@@ -137,15 +137,15 @@ final class CameraOverlayController: NSObject {
     }
 
     #if DEBUG
-    /// Test seam: places the owner's switch without `setPreviewVisible`'s device side
+    /// Test seam: places the user's switch without `setPreviewVisible`'s device side
     /// effects (opening it asks for camera permission, which a unit test must never do).
     func setPreviewVisibleForTesting(_ value: Bool) { previewVisible = value }
     #endif
 
-    /// The tile's own × — an owner intent like the chip, not a recording-driven change.
+    /// The tile's own × — a user intent like the chip, not a recording-driven change.
     func closeFromTile() { setPreviewVisible(false) }
 
-    /// The single writer behind every owner surface: chip, status menu, the tile's × and
+    /// The single writer behind every user surface: chip, status menu, the tile's × and
     /// the shortcut. Private on purpose — see `previewVisible`.
     private func setPreviewVisible(_ visible: Bool, requestPermission: Bool = false) {
         guard previewVisible != visible else { return }
@@ -160,7 +160,7 @@ final class CameraOverlayController: NSObject {
         setPreviewVisible(!previewVisible, requestPermission: true)
     }
 
-    /// Drops the confinement rect an arming or a recording put up. The owner's choice is
+    /// Drops the confinement rect an arming or a recording put up. The user's choice is
     /// untouched: an open preview goes back to free-floating, a closed one stays closed.
     func recordingEnded() {
         recordingBounds = nil
@@ -296,9 +296,9 @@ final class CameraOverlayController: NSObject {
         }
     }
 
-    /// G.4. Raises the tile and its shadow to the shielding level (and hands the same level
+    /// Raises the tile and its shadow to the shielding level (and hands the same level
     /// to the HUD toast), or puts both back. A raised tile is click-through: at that level it
-    /// sits over a game the owner is playing, and it must never take their clicks.
+    /// sits over a game the user is playing, and it must never take their clicks.
     func setElevated(_ active: Bool) {
         guard elevated != active else { return }
         elevated = active
@@ -319,9 +319,10 @@ final class CameraOverlayController: NSObject {
         setElevated(FullscreenContext.covering(at: centre).isGameLike)
     }
 
-    /// G.4's probe, the same shape as G.1's: `show()` has ordered the panels in, so 50 ms
-    /// later the tile is either on screen or something is over it. `isVisible` stays true
-    /// under a fullscreen game — occlusion is the measurement that does not.
+    /// The elevation probe, the same shape as the selection overlay's trigger probe: `show()`
+    /// has ordered the panels in, so 50 ms later the tile is either on screen or something is
+    /// over it. `isVisible` stays true under a fullscreen game — occlusion is the measurement
+    /// that does not.
     private func probeVisibility() {
         previewProbe?.cancel()
         let token = visibilityToken
@@ -337,7 +338,7 @@ final class CameraOverlayController: NSObject {
 
     private var probedVisible: Bool { panel.isVisible && panel.occlusionState.contains(.visible) }
 
-    /// The line the owner reads after toggling the preview inside a game.
+    /// The line the user reads after toggling the preview inside a game.
     private func logPreviewState() {
         DiagnosticsLog.append(
             "camera " + GameOverlayElevation.logLine(surface: "preview", visible: probedVisible, level: panel.level)
@@ -350,14 +351,14 @@ final class CameraOverlayController: NSObject {
         panel.ignoresMouseEvents = elevated || pendingReveal || fadingOut
     }
 
-    /// `animated` is the owner dismissing the preview. Every other caller (recording
+    /// `animated` is the user dismissing the preview. Every other caller (recording
     /// preparation, teardown) must leave the screen in the same run loop pass, or a
     /// fading preview would burn into the recording's first frames.
     func hide(animated: Bool = false) {
         stopMotion()
         restartTask?.cancel()
         // A preview waiting for its first frame is cancelled here too, or it would fade in
-        // onto a screen the owner has already closed it on.
+        // onto a screen the user has already closed it on.
         pendingReveal = false
         revealTimeout?.cancel()
         revealTimeout = nil
@@ -371,7 +372,7 @@ final class CameraOverlayController: NSObject {
             return
         }
         // A tile that is fading out must not eat the click the × invited: the pointer is
-        // already on it, and the next 150 ms would swallow whatever the owner clicks next.
+        // already on it, and the next 150 ms would swallow whatever the user clicks next.
         fadingOut = true
         updateInteractivity()
         let token = visibilityToken
@@ -389,8 +390,8 @@ final class CameraOverlayController: NSObject {
         }
     }
 
-    /// Dropping the device blanks the view back to "Kamera açılıyor…", so it waits for
-    /// the fade: the preview must dissolve on its last frame, not on a placeholder.
+    /// Dropping the device blanks the view back to "Starting camera…", so
+    /// it waits for the fade: the preview must dissolve on its last frame, not on a placeholder.
     private func releaseDevice() {
         CameraPreviewMonitor.shared.setVisible(false, owner: "floating")
         Task { await CameraPreviewMonitor.shared.stopIfUnobserved() }
@@ -606,11 +607,11 @@ enum CameraEntrance {
 final class FloatingCameraView: NSView {
     enum DragPhase { case began, changed, ended }
     var onDrag: ((DragPhase, CGPoint, CameraCorner?) -> Void)?
-    /// The owner dismissing the preview from the tile itself.
+    /// The user dismissing the preview from the tile itself.
     var onClose: (() -> Void)?
     var image: NSImage? { didSet { needsDisplay = true } }
     var mirrored = true { didSet { needsDisplay = true } }
-    var message = "Kamera açılıyor…" { didSet { needsDisplay = true } }
+    var message = String(localized: "Starting camera…", comment: "Camera preview status") { didSet { needsDisplay = true } }
     private var resizeCorner: CameraCorner?
     private(set) var indicated: CameraHotspot?
     var indicatedCorner: CameraCorner? { indicated?.corner }
@@ -886,7 +887,7 @@ private final class CameraShadowView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let rect = bounds.insetBy(dx: padding, dy: padding)
         let shape = NSBezierPath(roundedRect: rect, xRadius: trayRadius, yRadius: trayRadius)
-        // Sized off the tray, in the same pixels the compositor uses, so what the owner places
+        // Sized off the tray, in the same pixels the compositor uses, so what the user places
         // on screen is what the file shows.
         let drop = CameraOptions.shadow(forTile: rect.size,
                                         pixelsPerUnit: window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2)

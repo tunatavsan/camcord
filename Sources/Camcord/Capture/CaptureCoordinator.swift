@@ -149,7 +149,7 @@ final class CaptureCoordinator {
 
     /// The first `SCShareableContent` query of a process pays for the window enumeration AND
     /// the capture-server handshake, and today it lands on the critical path of the FIRST
-    /// trigger — which is exactly the "it hangs once, then never again" the owner sees.
+    /// trigger — which is exactly the "it hangs once, then never again" the user sees.
     /// Doing it at launch moves that cost off the gesture. No pixels are captured.
     func prewarm() {
         Task.detached(priority: .utility) { [cache] in
@@ -946,7 +946,7 @@ final class CaptureCoordinator {
                 fail("Text capture: clipboard write failed")
                 return
             }
-            succeeded(.textOCR, toast: ToastRequest(text: "Metin panoya kopyalandı", systemSymbol: "doc.on.clipboard.fill"))
+            succeeded(.textOCR, toast: ToastRequest(text: String(localized: "Text copied to the clipboard", comment: "Toast after a text capture"), systemSymbol: "doc.on.clipboard.fill"))
         }
     }
 
@@ -1007,7 +1007,7 @@ final class CaptureCoordinator {
                 }
             case .failure:
                 self?.onScreenshotDelivery?(.saveFailed(delivery))
-                self?.onToast?(ToastRequest(text: "Görüntü dosyaya kaydedilemedi — kayıt konumunu kontrol et", systemSymbol: "externaldrive.badge.exclamationmark", tint: .systemOrange, important: true))
+                self?.onToast?(ToastRequest(text: String(localized: "Couldn't save the image to a file — check the save location", comment: "Toast when a screenshot file cannot be written"), systemSymbol: "externaldrive.badge.exclamationmark", tint: .systemOrange, important: true))
             }
         }
         guard !Task.isCancelled, clipboardRequests.isCurrent(token) else { return nil }

@@ -47,7 +47,7 @@ func salvageDeliversOnce() {
     controller.handleUnexpectedStop(salvagedURL: url, error: RecordingError.incompleteRecording(url, nil))
 
     #expect(delivered == [url])
-    #expect(warnings == ["Kayıt kesildi · kaydedilen kısım korundu"])
+    #expect(warnings == ["Recording interrupted · the recorded part was kept"])
     #expect(failures == 0)
 }
 

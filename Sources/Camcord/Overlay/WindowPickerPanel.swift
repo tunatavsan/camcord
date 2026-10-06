@@ -196,7 +196,7 @@ final class WindowPickerPanel: NSObject, NSWindowDelegate {
         let name = content.applications.first { $0.bundleIdentifier == bundleID }?.applicationName
             ?? covering?.localizedName
             ?? frontmost?.localizedName
-            ?? "Uygulama"
+            ?? String(localized: "App", comment: "Window picker: an app whose name is unknown")
         DiagnosticsLog.append("picker fullscreen-card app=\(name) bundle=\(bundleID) display=\(context.displayID)")
         return PickableWindow(
             id: kCGNullWindowID,
@@ -204,7 +204,7 @@ final class WindowPickerPanel: NSObject, NSWindowDelegate {
             bundleID: bundleID,
             frame: display.frame,
             appName: name,
-            title: "\(name) — tam ekran",
+            title: String(localized: "\(name) — full screen", comment: "Window picker card: an app covering the whole screen"),
             appIcon: covering?.icon ?? frontmost?.icon,
             aspect: display.frame.height > 0 ? display.frame.width / display.frame.height : 16.0 / 9.0
         )
@@ -236,7 +236,7 @@ final class WindowPickerPanel: NSObject, NSWindowDelegate {
         guard let policy = candidate.activationPolicy else { return .noApplication }
         let coversDisplay = covers(frame: candidate.frame, displayFrames: displayFrames)
         // A fullscreen game can run as an .accessory app (no Dock tile). When its window
-        // covers a whole display it is precisely the target the owner came here for.
+        // covers a whole display it is precisely the target the user came here for.
         guard policy == .regular || (policy == .accessory && coversDisplay) else { return .activationPolicy }
         // The cache queries with onScreenWindowsOnly: false so a fullscreen surface living
         // on another Space stays pickable — but ordinary off-screen/minimized windows
@@ -406,10 +406,10 @@ private struct WindowPickerView: View {
         VStack(spacing: 10) {
             InkSymbol(name: "macwindow.badge.plus", pointSize: 20, canvas: 30)
                 .foregroundStyle(Theme.Palette.ink3.color)
-            Text("Kaydedilecek uygun pencere bulunamadı")
+            Text("No windows available")
                 .font(Theme.Font.bodyStrong)
                 .foregroundStyle(Theme.Palette.ink2.color)
-            Text("Bir uygulama penceresi aç ve tekrar dene.")
+            Text("Open a window and try again")
                 .font(Theme.Font.caption)
                 .foregroundStyle(Theme.Palette.ink3.color)
         }

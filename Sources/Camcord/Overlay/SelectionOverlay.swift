@@ -99,7 +99,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
     /// The accent color for this session's overlay (blue = screenshot, red = recording).
     private var accent: SelectionAccent = .screenshot
     /// True while a HOLD/chord session is in OCR (.text) mode, so the overlay shows the
-    /// teal "Metin · OCR" treatment even though no right button drove the selection.
+    /// teal "Text · OCR" treatment even though no right button drove the selection.
     private var holdIsText = false
     private var highlightedWindow: SCWindow?
     private var highlightedFrozenWindow: FrozenDesktopSnapshot.Window?
@@ -375,7 +375,7 @@ final class SelectionOverlayController: NSObject, SelectionViewDelegate {
         // panel stays visible while the game display draws nothing.
         let probed = keyPanel ?? panels.first
 
-        // Phase G.1: a trigger can arrive and still draw nothing — a fullscreen game sits
+        // A trigger can arrive and still draw nothing — a fullscreen game sits
         // above .screenSaver. Report whether the panels actually made it on screen.
         presentationLog("ordered=\(panels.count) buildMs=\(CaptureCoordinator.elapsedMs(since: started))")
         let ordered = panels

@@ -102,7 +102,7 @@ struct AudioChannelStrip: View {
     var body: some View {
         VStack(spacing: 8) {
             AudioChannelRow(
-                title: "Sistem",
+                title: String(localized: "System", comment: "Audio channel: the sound the computer plays"),
                 symbol: "speaker.wave.2",
                 levels: health?.systemAudio.levels,
                 channel: systemState,
@@ -114,7 +114,7 @@ struct AudioChannelStrip: View {
             )
 
             AudioChannelRow(
-                title: "Mikrofon",
+                title: String(localized: "Microphone", comment: "Audio channel: the microphone"),
                 symbol: microphoneDenied ? "mic.slash" : "mic",
                 levels: microphoneLevels,
                 channel: microphoneState,
@@ -130,13 +130,13 @@ struct AudioChannelStrip: View {
 
             microphoneInputRow
 
-            Toggle("Tek ses kanalında birleştir", isOn: $mixTracks)
+            Toggle("Mix into one audio track", isOn: $mixTracks)
                 .toggleStyle(.checkbox)
                 .controlSize(.small)
                 .font(.system(size: 10))
                 .disabled(recording || isStarting || !(systemEnabled && microphoneEnabled))
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .help("Sistem sesi ile mikrofonu dosyada tek bir ses kanalında birleştirir")
+                .help("Mix system audio and microphone into one track")
                 .onChange(of: mixTracks) { _, _ in onMixChange() }
 
             if ownsRehearsal, let message = monitor.message {
@@ -147,7 +147,7 @@ struct AudioChannelStrip: View {
             }
         }
         .task(id: designPreview) { rehearsalVisible = !designPreview; await loadInputs() }
-        // Switching the channel off is the owner saying "not this microphone": an open
+        // Switching the channel off is the user saying "not this microphone": an open
         // rehearsal would otherwise keep the input light on with a meter that reads dead.
         .onChange(of: microphoneEnabled) { _, enabled in
             guard !enabled else { return }
@@ -158,35 +158,37 @@ struct AudioChannelStrip: View {
 
     private var microphoneInputRow: some View {
         HStack(spacing: 6) {
-            Picker("", selection: inputSelection) {
-                Text("Sistem varsayılanı").tag(String?.none)
+            Picker(selection: inputSelection) {
+                Text("System default").tag(String?.none)
                 ForEach(inputs, id: \.uniqueID) { device in
                     Text(device.localizedName).tag(String?.some(device.uniqueID))
                 }
+            } label: {
+                Text("Microphone input")
             }
             .labelsHidden()
             .controlSize(.small)
             .font(.system(size: 10))
             .disabled(!microphoneState.switchLive || !microphoneEnabled)
-            .accessibilityLabel("Mikrofon girişi")
+            .accessibilityLabel("Microphone input")
 
             Button(action: toggleRehearsal) {
-                Text(ownsRehearsal ? "Durdur" : "Test")
+                Text(ownsRehearsal ? "Stop" : "Test")
                     .font(.system(size: 10, weight: .medium))
                     .frame(minWidth: 38)
             }
             .controlSize(.small)
             .disabled(rehearsalDisabled)
             .help(microphoneDenied
-                ? "Mikrofon izni yok — İzinler bölümünü açar"
-                : "Mikrofonu kayıt almadan dinler, seviyeyi buradan görürsün")
+                ? "No microphone permission — opens Permissions"
+                : "Listens to the microphone without recording, so you can check the level here")
         }
     }
 
     /// A rehearsal is impossible while the recording owns the device; a denied permission
-    /// still leaves the button pressable, because pressing it is how the owner gets to the
+    /// still leaves the button pressable, because pressing it is how the user gets to the
     /// place that fixes it. A rehearsal that is ALREADY running can always be stopped —
-    /// greying "Durdur" out would leave the microphone open with no way to close it.
+    /// greying "Stop" out would leave the microphone open with no way to close it.
     private var rehearsalDisabled: Bool {
         if ownsRehearsal { return monitor.recordingLocked }
         return monitor.recordingLocked || recording || isStarting
@@ -256,7 +258,7 @@ private struct AudioChannelRow: View {
                     .font(.system(size: 10, weight: .medium))
                     .frame(width: 74, alignment: .leading)
                 AudioLevelMeter(levels: levels, active: channel.meterAnimates)
-                Text(isOn ? String(format: "%+.0f dB", gainDB) : "Kapalı")
+                Text(isOn ? String(format: "%+.0f dB", gainDB) : String(localized: "Off", comment: "An audio channel that is switched off"))
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .frame(width: 43, alignment: .trailing)
                 Toggle(title, isOn: $isOn)
@@ -265,14 +267,14 @@ private struct AudioChannelRow: View {
                     .controlSize(.mini)
                     .disabled(!channel.switchLive)
                     .onChange(of: isOn) { _, _ in onToggle() }
-                    .accessibilityLabel("\(title) sesini kaydet")
+                    .accessibilityLabel("Record \(title) audio")
             }
             Slider(value: $gainDB, in: range, step: 1)
                 .controlSize(.mini)
                 .disabled(!channel.gainLive)
                 .onChange(of: gainDB) { _, value in onGainChange(value) }
-                .accessibilityLabel("\(title) ses kazancı")
-                .accessibilityValue("\(Int(gainDB)) desibel")
+                .accessibilityLabel("\(title) audio gain")
+                .accessibilityValue("\(Int(gainDB)) dB")
         }
         .opacity(isOn ? 1 : 0.55)
     }

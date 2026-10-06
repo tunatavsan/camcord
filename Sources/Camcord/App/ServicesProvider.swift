@@ -1,10 +1,10 @@
 import AppKit
 
-/// Backs the macOS **Services** entry "Camcord ile Metni Çıkar": select an image file in
-/// Finder (or an image in any app) → Services → this runs OCR on it and copies the text.
-/// Registered via `NSApp.servicesProvider`; the matching `NSServices` entry lives in
-/// Info.plist. A discoverable in-app "Görüntüden Metni Çıkar…" menu item does the same for
-/// anyone who doesn't reach for the Services menu.
+/// Backs the macOS **Services** entry "Extract Text with Camcord":
+/// select an image file in Finder (or an image in any app) → Services → this runs OCR on it and
+/// copies the text. Registered via `NSApp.servicesProvider`; the matching `NSServices` entry
+/// lives in Info.plist. A discoverable in-app "Extract Text from Image…" menu item does the
+/// same for anyone who doesn't reach for the Services menu.
 @MainActor
 final class ServicesProvider: NSObject {
     private let coordinator: CaptureCoordinator
@@ -36,6 +36,7 @@ final class ServicesProvider: NSObject {
             coordinator.captureTextFromImage(cgImage)
             return
         }
-        error?.pointee = "Camcord: seçimde bir görüntü bulunamadı." as NSString
+        error?.pointee = String(localized: "Camcord: no image found in the selection.",
+                                 comment: "Services menu error: the selection holds no image") as NSString
     }
 }

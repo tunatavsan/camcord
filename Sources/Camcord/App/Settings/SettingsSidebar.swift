@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// While Settings is open the sidebar itself lists its groups (the owner's reference: Codex),
-/// so there is never a menu inside a menu (SPEC N3). "← Camcord" goes back to the module the
-/// window came from; Esc and ⌘[ do the same.
+/// While Settings is open the sidebar itself lists its groups, so there is never a menu inside
+/// a menu. "← Camcord" goes back to the module the window came from; Esc and ⌘[ do the same.
 struct SettingsSidebar: View {
     @Bindable var model: MainWindowModel
 
@@ -11,7 +10,7 @@ struct SettingsSidebar: View {
             Button {
                 model.leaveSettings()
             } label: {
-                Label { Text("Camcord", comment: "Sidebar: back from Settings to the app") } icon: {
+                Label { Text(verbatim: "Camcord") } icon: {
                     Image(systemName: "chevron.left")
                 }
                 .font(Theme.Font.body)

@@ -213,9 +213,9 @@ struct StageView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 7) {
-                Text("Sahne")
+                Text("Stage")
                     .font(.system(size: 11, weight: .semibold))
-                Text("Konum ve boyut tüm hedeflerde ortaktır.")
+                Text("Position and size are shared by every target.")
                     .font(.system(size: 9))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -243,7 +243,7 @@ struct StageView: View {
                                 .fill(.black.opacity(0.46))
                                 .frame(width: thumbnail.width, height: thumbnail.height)
                                 .overlay {
-                                    Text("duraklatıldı")
+                                    Text("Paused")
                                         .font(.system(size: 11, weight: .semibold))
                                         .foregroundStyle(.white.opacity(0.9))
                                 }
@@ -294,13 +294,13 @@ struct StageView: View {
         }
         .onDisappear(perform: deactivate)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Kayıt sahnesi")
+        .accessibilityLabel("Recording stage")
     }
 
     private var emptyMessage: String {
-        if isArmed { return "Pencere görüntüsü alınıyor…" }
-        if isLive { return "Kayıt görüntüsü bekleniyor…" }
-        return "Kayıt başlayınca burada görünür"
+        if isArmed { return String(localized: "Getting the window image…", comment: "Recording stage: a picked window is loading") }
+        if isLive { return String(localized: "Waiting for the recording image…", comment: "Recording stage: no frame yet") }
+        return String(localized: "Appears here when recording starts", comment: "Recording stage: nothing to show yet")
     }
 
     /// Purely drawn: the rectangle never takes the press that moves it.
@@ -321,8 +321,8 @@ struct StageView: View {
             .frame(width: rect.width, height: rect.height)
             .position(x: rect.midX, y: rect.midY)
             .allowsHitTesting(false)
-            .accessibilityLabel("Kamera konumu")
-            .accessibilityHint("Taşımak için sürükle; köşelerden sürükleyerek boyutlandır")
+            .accessibilityLabel("Camera position")
+            .accessibilityHint("Drag to move; drag a corner to resize")
         }
     }
 
@@ -416,7 +416,7 @@ struct StageView: View {
 
         if isArmed {
             // One retry: the window can be mid-move or the capture can fail transiently, and
-            // a stage stuck on "alınıyor…" for the whole arm is worse than a second attempt.
+            // a stage stuck on its loading placeholder for the whole arm is worse than a second attempt.
             var armed = await armedStageFrame()
             if armed == nil, token == generation {
                 try? await Task.sleep(for: .milliseconds(400))

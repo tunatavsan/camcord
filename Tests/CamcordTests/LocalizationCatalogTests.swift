@@ -4,8 +4,8 @@ import Testing
 @testable import Camcord
 
 /// The app's own strings live in `Resources/Localizable.xcstrings`, English first, Turkish
-/// second (docs/RUN-UI-1.md K2). Every key is translated, and every English-first key the
-/// code uses is in the catalog — so a new string cannot ship untranslated.
+/// second. Every key is translated, and every key the code uses is in the catalog — so a
+/// new string cannot ship untranslated.
 @Suite("Localization catalog")
 struct LocalizationCatalogTests {
     private static let root = URL(fileURLWithPath: #filePath)
@@ -65,19 +65,12 @@ struct LocalizationCatalogTests {
         return keys
     }
 
-    /// Keys that predate the catalog (Turkish literals used as keys). The list may only
-    /// shrink; K8 of docs/RUN-UI-2.md empties it by P6.
-    private func legacyKeys() throws -> Set<String> {
-        let url = Self.root.appendingPathComponent("Tests/CamcordTests/Fixtures/legacy-uncatalogued-keys.json")
-        return Set(try JSONDecoder().decode([String].self, from: Data(contentsOf: url)))
-    }
-
-    @Test("every key the compiler sees in the code is in the catalog (or on the shrinking legacy list)")
+    @Test("every key the compiler sees in the code is in the catalog")
     func codeKeysAreInTheCatalog() throws {
         let catalogKeys = Set(try catalog().strings.keys)
         let used = try compiledKeys()
         #expect(used.count >= 100, "the compiler's key files look empty; is -emit-localized-strings still set?")
-        let missing = used.subtracting(catalogKeys).subtracting(try legacyKeys())
+        let missing = used.subtracting(catalogKeys)
         #expect(missing.isEmpty, "not in Localizable.xcstrings: \(missing.sorted())")
     }
 
@@ -101,16 +94,5 @@ struct LocalizationCatalogTests {
             #expect(owner.map { URL(fileURLWithPath: $0).standardizedFileURL } == source.standardizedFileURL,
                     "no key file of its own for \(source.lastPathComponent)")
         }
-    }
-
-    @Test("the legacy list names only keys that are still in the code and still missing from the catalog")
-    func legacyListOnlyShrinks() throws {
-        let legacy = try legacyKeys()
-        let used = try compiledKeys()
-        let catalogKeys = Set(try catalog().strings.keys)
-        let gone = legacy.subtracting(used)
-        #expect(gone.isEmpty, "no longer in the code; remove from the legacy list: \(gone.sorted())")
-        let catalogued = legacy.intersection(catalogKeys)
-        #expect(catalogued.isEmpty, "now in the catalog; remove from the legacy list: \(catalogued.sorted())")
     }
 }

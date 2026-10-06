@@ -92,7 +92,7 @@ final class CameraPreviewMonitor: ObservableObject {
         }
         guard authorized else {
             isStarting = false
-            message = "Kamera izni gerekli. İzinler bölümünden açabilirsin."
+            message = String(localized: "Camera permission is required. Open Permissions to enable it.", comment: "Camera preview status")
             return
         }
 
@@ -158,7 +158,7 @@ final class CameraPreviewMonitor: ObservableObject {
         return resolved.enabled && running && deviceID == resolved.deviceID && format == resolved.format
     }
 
-    /// The running preview no longer shows the chosen camera or format: the owner would not
+    /// The running preview no longer shows the chosen camera or format: the user would not
     /// see their choice, and the record start would refuse the hand-off and reopen the camera.
     nonisolated static func isStale(deviceID: String?, format: CameraFormatChoice?,
                                     for options: CameraOptions) -> Bool {
@@ -204,7 +204,7 @@ final class CameraPreviewMonitor: ObservableObject {
         isStarting = false
         isRunning = source != nil
         if source == nil { image = nil }
-        message = source == nil ? "Kayıt kamerası kullanılamıyor." : nil
+        message = source == nil ? String(localized: "The recording camera is unavailable.", comment: "Camera preview status") : nil
         stopPolling()
         startPollingIfNeeded()
     }
@@ -285,7 +285,7 @@ final class CameraPreviewMonitor: ObservableObject {
         guard let frame = source.latestFrame() else {
             guard generation == token else { return }
             image = nil
-            if message == nil { message = "Kamera görüntüsü bekleniyor…" }
+            if message == nil { message = String(localized: "Waiting for the camera image…", comment: "Camera preview status") }
             return
         }
 
@@ -295,7 +295,7 @@ final class CameraPreviewMonitor: ObservableObject {
         guard !Task.isCancelled, generation == token, activeSource === source else { return }
         guard let rendered else {
             image = nil
-            message = "Kamera önizlemesi oluşturulamadı."
+            message = String(localized: "The camera preview could not be rendered.", comment: "Camera preview status")
             return
         }
         image = NSImage(cgImage: rendered.image, size: rendered.size)
@@ -310,7 +310,7 @@ final class CameraPreviewMonitor: ObservableObject {
         isStarting = false
         isRunning = false
         image = nil
-        message = "Kamera bağlantısı kesildi. Bağlantıyı kontrol edip yeniden dene."
+        message = String(localized: "The camera disconnected. Check its connection and try again.", comment: "Camera preview status")
         stopPolling()
         Task { await capture.stop() }
     }
@@ -318,11 +318,11 @@ final class CameraPreviewMonitor: ObservableObject {
     private static func message(for error: Error) -> String {
         switch error {
         case CameraCaptureError.noDevice:
-            "Kamera bulunamadı. Bağlantıyı ve seçili kamerayı kontrol et."
+            String(localized: "No camera found. Check the connection and the selected camera.", comment: "Camera preview error")
         case CameraCaptureError.cannotConfigure:
-            "Kamera bu görüntü ayarıyla açılamadı. Başka bir kamera seç."
+            String(localized: "The camera could not start with this format. Choose another camera.", comment: "Camera preview error")
         default:
-            "Kamera açılamadı. Bağlantıyı kontrol edip yeniden dene."
+            String(localized: "The camera could not start. Check its connection and try again.", comment: "Camera preview error")
         }
     }
 }
@@ -374,7 +374,7 @@ final class CameraPreviewRenderer: @unchecked Sendable {
 }
 
 /// Compact Settings surface. Camera permission/hardware starts only after the explicit
-/// `Önizleme` action; merely opening Settings performs no capture work.
+/// `Preview` action; merely opening Settings performs no capture work.
 struct CameraPreviewView: View {
     let options: CameraOptions
 
@@ -409,7 +409,7 @@ struct CameraPreviewView: View {
             .frame(height: 150)
             .clipShape(RoundedRectangle(cornerRadius: CamcordStyle.Radius.control))
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Kamera önizlemesi")
+            .accessibilityLabel("Camera preview")
             .accessibilityValue(accessibilityPreviewValue)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: monitor.image != nil)
 
@@ -424,12 +424,12 @@ struct CameraPreviewView: View {
                     .lineLimit(2)
                 Spacer(minLength: 8)
                 if monitor.recordingLocked {
-                    Label("Kayda bağlı", systemImage: "record.circle")
+                    Label("Used by the recording", systemImage: "record.circle")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
-                        .accessibilityLabel("Kamera kayıt tarafından kullanılıyor")
+                        .accessibilityLabel("The recording is using the camera")
                 } else {
-                    Button(monitor.isRunning ? "Durdur" : "Önizleme") {
+                    Button(monitor.isRunning ? "Stop" : "Preview") {
                         Task {
                             if monitor.isRunning {
                                 await monitor.stop()
@@ -445,7 +445,7 @@ struct CameraPreviewView: View {
                     .controlSize(.small)
                     .disabled(monitor.isStarting)
                     .accessibilityHint(
-                        monitor.isRunning ? "Kamera önizlemesini durdurur" : "Kamera izni ister ve önizlemeyi başlatır"
+                        monitor.isRunning ? "Stops the camera preview" : "Asks for camera permission and starts the preview"
                     )
                 }
             }
@@ -464,18 +464,20 @@ struct CameraPreviewView: View {
     }
 
     private var previewPlaceholder: String {
-        if monitor.isStarting { return "Kamera açılıyor…" }
-        if monitor.recordingLocked { return "Kayıt kamerası bekleniyor…" }
-        return "Önizlemeyi başlat"
+        if monitor.isStarting { return String(localized: "Starting camera…", comment: "Camera preview status") }
+        if monitor.recordingLocked { return String(localized: "Waiting for the recording camera…", comment: "Camera preview status") }
+        return String(localized: "Start preview", comment: "Camera preview placeholder")
     }
 
     private var statusText: String {
         if let message = monitor.message { return message }
-        if monitor.isStarting { return "Kamera açılıyor…" }
-        if monitor.recordingLocked, monitor.isRunning { return "Kayıt kamerası canlı" }
-        if monitor.recordingLocked { return "Kayıt kamerası bekleniyor…" }
-        if monitor.isRunning { return "Önizleme canlı" }
-        return "Kamera kapalı"
+        if monitor.isStarting { return String(localized: "Starting camera…", comment: "Camera preview status") }
+        if monitor.recordingLocked, monitor.isRunning {
+            return String(localized: "Recording camera is live", comment: "Camera preview status")
+        }
+        if monitor.recordingLocked { return String(localized: "Waiting for the recording camera…", comment: "Camera preview status") }
+        if monitor.isRunning { return String(localized: "Live preview", comment: "Camera preview status") }
+        return String(localized: "Camera off", comment: "Camera preview status")
     }
 
     private var statusColor: Color {
@@ -485,7 +487,11 @@ struct CameraPreviewView: View {
     }
 
     private var accessibilityPreviewValue: String {
-        if monitor.image != nil { return options.resolved().mirrored ? "Canlı, aynalanmış" : "Canlı" }
+        if monitor.image != nil {
+            return options.resolved().mirrored
+                ? String(localized: "Live, mirrored", comment: "Accessibility value: the camera preview")
+                : String(localized: "Live", comment: "Accessibility value: the camera preview")
+        }
         return statusText
     }
 }

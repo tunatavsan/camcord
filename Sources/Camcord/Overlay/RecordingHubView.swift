@@ -1,6 +1,6 @@
 import AppKit
 
-/// What the hub is offering right now. `armed` is a window waiting for Başlat; the other
+/// What the hub is offering right now. `armed` is a window waiting for Start; the other
 /// two are a live recording, which changes the glyphs but never the geometry.
 enum RecordingHubMode: Equatable, Sendable {
     case armed
@@ -19,7 +19,7 @@ enum RecordingHubItem: Equatable, Sendable {
     case pause
     case stop
     case preview
-    /// Whether the camera is in the recording at all (the preview only shows it to the owner).
+    /// Whether the camera is in the recording at all (the preview only shows it to the user).
     case camera
     case micLevel
     case cancel
@@ -46,7 +46,7 @@ enum RecordingHubGrowth: Equatable, Sendable {
 /// The hub's geometry, kept pure so the disc, the capsule and every hit target can be
 /// measured in a test instead of on screen. The collapsed hub is one 44 pt disc holding
 /// the identity cell; expanding lays the same cell against the docked edge and grows the
-/// controls out of it, so nothing the owner was already reading moves.
+/// controls out of it, so nothing the user was already reading moves.
 enum RecordingHubLayout {
     /// A 44 pt disc: the platform's comfortable target, and small enough to live over a
     /// game without becoming furniture.
@@ -92,7 +92,7 @@ enum RecordingHubLayout {
         growth == .centered ? 2 * centeredHalfWidth(mode: mode) : expandedWidth(mode: mode)
     }
 
-    /// Collapsed, the hub is its identity cell: the time pill, or Başlat.
+    /// Collapsed, the hub is its identity cell: the time pill, or Start.
     static func collapsedWidth(mode: RecordingHubMode) -> CGFloat { width(of: identity(mode: mode)) }
 
     /// The capsule's width at a point in the expansion spring.
@@ -109,7 +109,7 @@ enum RecordingHubLayout {
     // MARK: Centred growth (the top-centre dock)
 
     /// The cells either side of the identity at top-centre, each list read left to right.
-    /// Stop sits next to the time it ends; Başlat's label is part of its own cell.
+    /// Stop sits next to the time it ends; Start's label is part of its own cell.
     static func centeredItems(mode: RecordingHubMode) -> (left: [RecordingHubItem], right: [RecordingHubItem]) {
         mode.isArmed
             ? ([.cancel, .divider], [.divider, .camera, .preview])
@@ -193,7 +193,7 @@ enum RecordingHubLayout {
 
 /// The recording hub in the app's language: a capsule of the window tray (its light frost, the
 /// window rim, a shadow cast outside) carrying Liquid Glass chips. Collapsed it is one pill —
-/// the live dot and the time, or Başlat; hovering grows the tray and uncovers pause, a red
+/// the live dot and the time, or Start; hovering grows the tray and uncovers pause, a red
 /// glass stop, the camera and a live level, which never move while they are uncovered.
 /// Hovering a chip raises and lights its symbol while the others step back, as everywhere.
 ///
@@ -219,7 +219,7 @@ final class RecordingHubView: NSView {
             setAccessibilityValue(elapsed)
         }
     }
-    /// The owner's own view of the camera: the tile on screen, never what is recorded.
+    /// The user's own view of the camera: the tile on screen, never what is recorded.
     var previewVisible = false {
         didSet {
             guard previewVisible != oldValue else { return }
@@ -256,7 +256,7 @@ final class RecordingHubView: NSView {
     private let meter = HubBars()
     private var focus: RecordingHubItem?
     private var tracking: NSTrackingArea?
-    /// Glass tints: dark for every chip, the record red for stop and Başlat.
+    /// Glass tints: dark for every chip, the record red for stop and Start.
     private static let neutral = NSColor.black.withAlphaComponent(0.18)
     private static let red = Theme.Palette.record.ns.withAlphaComponent(0.62)
 
@@ -268,7 +268,7 @@ final class RecordingHubView: NSView {
         addSubview(surface)
         content.layer?.addSublayer(meter)
         setAccessibilityRole(.group)
-        setAccessibilityLabel("Kayıt merkezi")
+        setAccessibilityLabel(String(localized: "Recording controls", comment: "Accessibility: the floating recording hub"))
         rebuildChips()
         refresh()
     }
@@ -528,12 +528,13 @@ final class RecordingHubView: NSView {
         switch item {
         case .start: String(localized: "Start")
         case .pause: mode == .paused ? String(localized: "Resume") : String(localized: "Pause")
-        case .stop: "Kaydı durdur"
-        case .preview: previewVisible ? "Önizlemeyi gizle" : "Önizlemeyi göster"
-        case .camera: "Kamerayı kayda al ya da çıkar"
+        case .stop: String(localized: "Stop recording")
+        case .preview: previewVisible ? String(localized: "Hide camera preview", comment: "Accessibility: the hub's preview button")
+                                       : String(localized: "Show camera preview", comment: "Accessibility: the hub's preview button")
+        case .camera: String(localized: "Add or remove the camera in the recording")
         case .cancel: String(localized: "Cancel")
-        case .elapsed: "Geçen süre"
-        case .micLevel: "Mikrofon seviyesi"
+        case .elapsed: String(localized: "Elapsed time")
+        case .micLevel: String(localized: "Microphone level")
         case .divider: ""
         }
     }
@@ -564,7 +565,7 @@ private final class HubContent: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-/// One Liquid Glass chip on the hub: a round button, the time pill, or Başlat's pill.
+/// One Liquid Glass chip on the hub: a round button, the time pill, or Start's pill.
 @MainActor final class HubChip: NSView {
     enum Kind {
         case button, identity, start
@@ -681,9 +682,9 @@ private final class HubContent: NSView {
         light.opacity = on ? 1 : 0
         layer?.opacity = available ? 1 : 0.35
         CATransaction.commit()
-        toolTip = available ? nil : "Bu kayıt kamerasız başladı"
+        toolTip = available ? nil : String(localized: "This recording started without the camera", comment: "Tooltip on the hub's camera chip")
     }
-    /// The owner's preview of the camera: an eye, open or closed.
+    /// The user's preview of the camera: an eye, open or closed.
     func setPreview(on: Bool) {
         setSymbol(on ? "eye.fill" : "eye.slash", color: on ? .white : NSColor.white.withAlphaComponent(0.5))
     }

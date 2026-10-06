@@ -6,15 +6,15 @@ import AppKit
 enum AppMenus {
     static func editingMenuItem() -> NSMenuItem {
         let item = NSMenuItem()
-        let menu = NSMenu(title: "Düzenle")
-        menu.addItem(withTitle: "Geri Al", action: Selector(("undo:")), keyEquivalent: "z")
-        let redo = menu.addItem(withTitle: "Yinele", action: Selector(("redo:")), keyEquivalent: "z")
+        let menu = NSMenu(title: String(localized: "Edit", comment: "Menu title"))
+        menu.addItem(withTitle: String(localized: "Undo", comment: "Edit menu"), action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = menu.addItem(withTitle: String(localized: "Redo", comment: "Edit menu"), action: Selector(("redo:")), keyEquivalent: "z")
         redo.keyEquivalentModifierMask = [.command, .shift]
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Kes", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-        menu.addItem(withTitle: "Kopyala", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        menu.addItem(withTitle: "Yapıştır", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        menu.addItem(withTitle: "Tümünü Seç", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        menu.addItem(withTitle: String(localized: "Cut", comment: "Edit menu"), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        menu.addItem(withTitle: String(localized: "Copy", comment: "Edit menu"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        menu.addItem(withTitle: String(localized: "Paste", comment: "Edit menu"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        menu.addItem(withTitle: String(localized: "Select All", comment: "Edit menu"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         item.submenu = menu
         return item
     }
@@ -31,9 +31,9 @@ enum AppMenus {
         return item
     }
 
-    /// ⌘1…⌘4: the main window's modules, in sidebar order (K1). Each item carries its module's
+    /// ⌘1…⌘4: the main window's modules, in sidebar order. Each item carries its module's
     /// id; `action` on `target` opens the window on it.
-    /// The sidebar is always shown (owner, 2026-10-02), so there is no Toggle Sidebar item.
+    /// The sidebar is always shown, so there is no Toggle Sidebar item.
     static func viewMenuItem(target: AnyObject, action: Selector) -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: String(localized: "View", comment: "Menu title"))

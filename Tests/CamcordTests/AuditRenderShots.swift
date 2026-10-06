@@ -4,9 +4,9 @@ import Testing
 
 @testable import Camcord
 
-/// RUN UI-1 B1: an OFFSCREEN render of every surface that can be built without a live screen,
-/// for the UI audit (docs/design/audit). Not a screenshot: materials and Liquid Glass are
-/// compositor effects and render flat or empty here. Off unless CAMCORD_AUDIT_SHOTS=<dir>.
+/// An OFFSCREEN render of every surface that can be built without a live screen, for a visual
+/// review of the UI. Not a screenshot: materials and Liquid Glass are compositor effects and
+/// render flat or empty here. Off unless CAMCORD_AUDIT_SHOTS=<dir>, which is where the PNGs go.
 @MainActor
 @Suite("Audit render shots", .serialized,
        .enabled(if: ProcessInfo.processInfo.environment["CAMCORD_AUDIT_SHOTS"] != nil))
@@ -135,7 +135,7 @@ struct AuditRenderShots {
         let shot = try #require(drawn.cgImage(forProposedRect: nil, context: nil, hints: nil))
 
         for (name, show) in [
-            ("toast", { HUDToast().show(text: "Kopyalandı", systemSymbol: "checkmark.circle.fill", respectsSetting: false, duration: 30) }),
+            ("toast", { HUDToast().show(text: "Copied", systemSymbol: "checkmark.circle.fill", respectsSetting: false, duration: 30) }),
             ("screenshot-card", { ScreenshotPreviewCard().show(capture: CapturedScreenshot(id: UUID(), image: shot, pointSize: drawn.size, kind: .screenshot, saveToDiskRequested: false)) }),
             ("scroll-hud", { ScrollPreviewPanel().show(near: CGRect(x: 400, y: 300, width: 600, height: 500),
                                                         onDone: {}, onCancel: {}, onToggleAuto: {}) }),

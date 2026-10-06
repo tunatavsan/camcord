@@ -25,9 +25,7 @@ let package = Package(
         .testTarget(
             name: "CamcordTests",
             dependencies: ["Camcord"],
-            path: "Tests/CamcordTests",
-            // Read by path (#filePath), never bundled: no Bundle.module (docs/RUN-UI-1.md K2).
-            exclude: ["Fixtures"]
+            path: "Tests/CamcordTests"
         )
     ]
 )

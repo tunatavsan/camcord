@@ -12,26 +12,26 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let coordinator: CaptureCoordinator
     private let recordingController: RecordingController
     private let eventTapEngine: EventTapEngine
-    /// Opens Settings: the main window on its Settings module (K7).
+    /// Opens Settings: the main window on its Settings module.
     var onOpenSettings: (() -> Void)?
 
-    private let captureRegionItem = NSMenuItem(title: "Bölgeyi Çek", action: nil, keyEquivalent: "")
-    private let captureActiveWindowItem = NSMenuItem(title: "Aktif Pencereyi Çek", action: nil, keyEquivalent: "")
-    private let captureFullScreenItem = NSMenuItem(title: "Tüm Ekranı Çek", action: nil, keyEquivalent: "")
-    private let captureTextItem = NSMenuItem(title: "Metni Çek (OCR)", action: nil, keyEquivalent: "")
-    private let captureScrollingItem = NSMenuItem(title: "Kaydırmalı Çekim…", action: nil, keyEquivalent: "")
-    private let captureTextFromFileItem = NSMenuItem(title: "Görüntüden Metni Çıkar…", action: nil, keyEquivalent: "")
-    private let recordToggleItem = NSMenuItem(title: "Kayda Başla…", action: nil, keyEquivalent: "")
-    private let recordFullScreenItem = NSMenuItem(title: "Tüm Ekranı Kaydet", action: nil, keyEquivalent: "")
-    private let cameraPreviewItem = NSMenuItem(title: "Kamera Önizlemesi", action: nil, keyEquivalent: "")
-    private let showPanelItem = NSMenuItem(title: "Kayıt Panelini Aç", action: nil, keyEquivalent: "")
-    private let pauseResumeItem = NSMenuItem(title: "Kaydı Duraklat", action: nil, keyEquivalent: "")
+    private let captureRegionItem = NSMenuItem(title: String(localized: "Capture Region", comment: "Status menu item"), action: nil, keyEquivalent: "")
+    private let captureActiveWindowItem = NSMenuItem(title: String(localized: "Capture Active Window", comment: "Status menu item"), action: nil, keyEquivalent: "")
+    private let captureFullScreenItem = NSMenuItem(title: String(localized: "Capture Full Screen", comment: "Status menu item"), action: nil, keyEquivalent: "")
+    private let captureTextItem = NSMenuItem(title: String(localized: "Capture Text (OCR)", comment: "Status menu item"), action: nil, keyEquivalent: "")
+    private let captureScrollingItem = NSMenuItem(title: String(localized: "Scroll Capture…", comment: "Status menu item"), action: nil, keyEquivalent: "")
+    private let captureTextFromFileItem = NSMenuItem(title: String(localized: "Extract Text from Image…", comment: "Status menu item"), action: nil, keyEquivalent: "")
+    private let recordToggleItem = NSMenuItem(title: String(localized: "Start Recording…", comment: "Status menu item"), action: nil, keyEquivalent: "")
+    private let recordFullScreenItem = NSMenuItem(title: String(localized: "Record Full Screen", comment: "Status menu item"), action: nil, keyEquivalent: "")
+    private let cameraPreviewItem = NSMenuItem(title: String(localized: "Camera Preview", comment: "Status menu item"), action: nil, keyEquivalent: "")
+    private let showPanelItem = NSMenuItem(title: String(localized: "Open Recording Panel", comment: "Status menu item"), action: nil, keyEquivalent: "")
+    private let pauseResumeItem = NSMenuItem(title: String(localized: "Pause Recording", comment: "Status menu item"), action: nil, keyEquivalent: "")
     private let screenRecordingStatusItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    private let requestScreenRecordingItem = NSMenuItem(title: "Ekran Kaydı İzni İste…", action: nil, keyEquivalent: "")
-    private let micStatusItem = NSMenuItem(title: "Mikrofon izni yok — Aç", action: nil, keyEquivalent: "")
-    private let launchAtLoginItem = NSMenuItem(title: "Bilgisayar Açılışında Başlat", action: nil, keyEquivalent: "")
+    private let requestScreenRecordingItem = NSMenuItem(title: String(localized: "Request Screen Recording Permission…", comment: "Status menu item"), action: nil, keyEquivalent: "")
+    private let micStatusItem = NSMenuItem(title: String(localized: "No microphone permission — Open", comment: "Status menu item"), action: nil, keyEquivalent: "")
+    private let launchAtLoginItem = NSMenuItem(title: String(localized: "Open at Login", comment: "Status menu item"), action: nil, keyEquivalent: "")
     private let tapStatusItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    private let settingsItem = NSMenuItem(title: "Ayarlar…", action: nil, keyEquivalent: ",")
+    private let settingsItem = NSMenuItem(title: String(localized: "Settings…", comment: "Menu item: opens Settings"), action: nil, keyEquivalent: ",")
 
     private let menu = NSMenu()
 
@@ -106,7 +106,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
 
         // Recording is started from the panel/menu only (no keyboard default); the
-        // owner can bind pause/resume from Settings.
+        // user can bind pause/resume from Settings.
         recordToggleItem.target = self
         recordToggleItem.action = #selector(toggleRecording)
         recordToggleItem.setShortcut(for: .toggleRecording)
@@ -115,7 +115,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         recordFullScreenItem.target = self
         recordFullScreenItem.action = #selector(recordFullScreen)
         if NSScreen.screens.count > 1 {
-            recordFullScreenItem.toolTip = "İmlecin bulunduğu ekran kaydedilir"
+            recordFullScreenItem.toolTip = String(localized: "Records the screen the pointer is on", comment: "Tooltip on Record Full Screen")
         }
         menu.addItem(recordFullScreenItem)
 
@@ -169,7 +169,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         settingsItem.action = #selector(openSettings)
         settingsItem.keyEquivalentModifierMask = .command
         menu.addItem(settingsItem)
-        // Hidden: replaces Settings while ⌥ is held (RUN UI-1 C2's native glass spike).
+        // Hidden: replaces Settings while ⌥ is held (the Design Lab's native glass specimens).
         let designLabItem = NSMenuItem(title: "Design Lab…", action: #selector(openDesignLab), keyEquivalent: ",")
         designLabItem.keyEquivalentModifierMask = [.command, .option]
         designLabItem.isAlternate = true
@@ -224,7 +224,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private func refreshScreenRecordingState() {
         let granted = CGPreflightScreenCaptureAccess()
-        screenRecordingStatusItem.title = granted ? "Ekran Kaydı: İzin verildi" : "Ekran Kaydı: İzin yok"
+        screenRecordingStatusItem.title = granted
+            ? String(localized: "Screen Recording: Allowed", comment: "Status menu: permission state")
+            : String(localized: "Screen Recording: Not Allowed", comment: "Status menu: permission state")
         requestScreenRecordingItem.isHidden = granted
     }
 
@@ -250,10 +252,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             return
         }
         if !AccessibilityPermission.isTrusted() {
-            tapStatusItem.title = "Erişilebilirlik izni gerekli — Aç"
+            tapStatusItem.title = String(localized: "Accessibility permission needed — Open", comment: "Status menu: mouse shortcuts need a permission")
             tapStatusItem.isHidden = false
         } else if !eventTapEngine.isTapHealthy {
-            tapStatusItem.title = "Fare/hareket bağlantısı devre dışı"
+            tapStatusItem.title = String(localized: "Mouse/gesture shortcuts disabled", comment: "Status menu: the mouse shortcut hook is down")
             tapStatusItem.isHidden = false
         } else {
             tapStatusItem.isHidden = true
@@ -311,7 +313,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     func setPreparing(_ preparing: Bool) {
         if preparing, lastUIState == nil || lastUIState == .idle {
             showRecordLight(.preparing)
-            statusItem.button?.toolTip = "Kayıt hazırlanıyor"
+            statusItem.button?.toolTip = String(localized: "Preparing recording…")
         } else if !preparing {
             let state = lastUIState ?? .idle
             lastUIState = nil
@@ -418,19 +420,19 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private func refreshRecordingItems() {
         switch recordingController.uiState {
         case .idle:
-            recordToggleItem.title = "Kayda Başla…"
+            recordToggleItem.title = String(localized: "Start Recording…", comment: "Status menu item")
             recordFullScreenItem.isHidden = false
             pauseResumeItem.isHidden = true
         case .recording:
-            recordToggleItem.title = "Kaydı Durdur"
+            recordToggleItem.title = String(localized: "Stop Recording", comment: "Status menu item")
             recordFullScreenItem.isHidden = true
             pauseResumeItem.isHidden = false
-            pauseResumeItem.title = "Kaydı Duraklat"
+            pauseResumeItem.title = String(localized: "Pause Recording", comment: "Status menu item")
         case .paused:
-            recordToggleItem.title = "Kaydı Durdur"
+            recordToggleItem.title = String(localized: "Stop Recording", comment: "Status menu item")
             recordFullScreenItem.isHidden = true
             pauseResumeItem.isHidden = false
-            pauseResumeItem.title = "Kaydı Sürdür"
+            pauseResumeItem.title = String(localized: "Resume Recording", comment: "Status menu item")
         }
     }
 
@@ -475,7 +477,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         Task {
             // The menu is still open/closing when this fires; give it time to close
             // before showing the overlay panels, or the menu's own chrome briefly
-            // overlaps them. M2's global hotkey path won't need this (no menu involved).
+            // overlaps them. The global hotkey path doesn't need this (no menu involved).
             try? await Task.sleep(for: .milliseconds(200))
             await coordinator.captureRegionInteractive()
         }
@@ -515,8 +517,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = [.image]
-        panel.prompt = "Metni Çıkar"
-        panel.message = "Metnini çıkarmak istediğin görüntüyü seç"
+        panel.prompt = String(localized: "Extract Text", comment: "Open panel button: OCR the chosen image")
+        panel.message = String(localized: "Choose an image to extract text from", comment: "Open panel message: OCR an image file")
         panel.begin { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
             self?.coordinator.captureTextFromImageFile(url)

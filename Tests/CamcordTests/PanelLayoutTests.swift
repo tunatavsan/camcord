@@ -152,7 +152,7 @@ struct PanelLayoutTests {
     func stageSourceSurvivesAPause() {
         // The veil sits ON the last composited frame. Re-keying the source task on pause
         // cleared the image, so the veil had nothing to cover and the stage fell back to
-        // "Kayıt görüntüsü bekleniyor…" for the whole pause.
+        // "Waiting for the recording image…" for the whole pause.
         #expect(StageView.sourceKey(isArmed: false, state: .recording)
             == StageView.sourceKey(isArmed: false, state: .paused))
         // Everything else IS a change of what the stage shows.

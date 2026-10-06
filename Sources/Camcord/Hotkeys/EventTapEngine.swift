@@ -29,7 +29,7 @@ enum AccessibilityPermission {
 
 /// Tier 2 of the hotkey engine: a hand-rolled `CGEventTap` for mouse side buttons and
 /// the double-tap Right ⌘ gesture -- the only mechanism for those, and the only piece
-/// of M2 that requires the Accessibility TCC permission.
+/// of the hotkey engine that requires the Accessibility TCC permission.
 ///
 /// The tap is created only when at least one Tier-2 binding is enabled AND the process
 /// is Accessibility-trusted. Reliability trio (fact 3): in-callback re-enable on
@@ -579,7 +579,7 @@ final class EventTapEngine: NSObject {
         MachTime.seconds(fromTicks: mach_absolute_time())
     }
 
-    /// Terminal emulators (where Claude Code and other TUIs run) take Ctrl+V, not
+    /// Terminal emulators (and the TUIs that run in them) take Ctrl+V, not
     /// Cmd+V, as their paste — so a synthesized Cmd+V does nothing there. Detect a
     /// terminal frontmost app and use Ctrl+V for it.
     private static let controlPasteBundleIDs: Set<String> = [

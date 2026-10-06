@@ -260,7 +260,7 @@ final class SelectionView: NSView {
                 border.lineWidth = 2
                 Theme.Palette.ink.ns.setStroke()
                 border.stroke()
-                drawModeLabel("Metin · OCR", near: selectionRect)
+                drawModeLabel(String(localized: "Text · OCR", comment: "Label above a text-recognition selection"), near: selectionRect)
             } else {
                 drawAccentBorder(around: selectionRect)
             }

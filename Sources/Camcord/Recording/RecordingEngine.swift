@@ -194,7 +194,7 @@ final class RecordingEngine: NSObject {
             source.setLossHandler { [weak self] in
                 Task { @MainActor [weak self] in
                     guard let self, self.cameraToken == token else { return }
-                    self.onCameraIssue?("Kamera bağlantısı kesildi — ekran kaydı sürüyor")
+                    self.onCameraIssue?(String(localized: "Camera disconnected — the screen recording continues", comment: "Recording toast: a camera problem"))
                 }
             }
             cameraSource = source
@@ -208,7 +208,7 @@ final class RecordingEngine: NSObject {
                 }
                 guard !startCancelled else { throw CancellationError() }
                 CameraPreviewMonitor.shared.useRecordingSource(source)
-                // The diagnostics file is what the owner can read back after a recording.
+                // The diagnostics file is what the user can read back after a recording.
                 let line = "camera format=\(source.activeFormat?.label ?? "unknown") "
                     + "choice=\(CameraFormatSelection.label(options.format)) handoff=\(preparedCamera != nil)"
                 logger.notice("\(line, privacy: .public)")
@@ -219,7 +219,7 @@ final class RecordingEngine: NSObject {
                 Task.detached { await source.stop() }
                 if startCancelled { throw CancellationError() }
                 CameraPreviewMonitor.shared.useRecordingSource(nil)
-                onCameraIssue?("Kamera açılamadı — ekran kaydı kamerasız başlayacak")
+                onCameraIssue?(String(localized: "Couldn't open the camera — the recording will start without it", comment: "Recording toast: a camera problem"))
             }
         }
         guard !startCancelled else { throw CancellationError() }
@@ -356,7 +356,7 @@ final class RecordingEngine: NSObject {
         writer.onCameraFailure = { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, self.writerToken == writerID else { return }
-                self.onCameraIssue?("Kamera videoya eklenemedi — önizleme ve ekran kaydı sürüyor")
+                self.onCameraIssue?(String(localized: "Couldn't add the camera to the video — the preview and screen recording continue", comment: "Recording toast: a camera problem"))
             }
         }
         let stream = SCStream(filter: filter, configuration: configuration, delegate: relay)
@@ -852,7 +852,7 @@ final class RecordingEngine: NSObject {
         nextMixID += 1
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
-            // The diagnostics file is the owner-readable record of whether the mic made
+            // The diagnostics file is the user-readable record of whether the mic made
             // it into the track every player plays.
             do {
                 try await AudioTrackMixer.mixInPlace(url: url, fileType: fileType, keepingSourceTracks: keepsSourceTracks)

@@ -179,7 +179,7 @@ final class RecordingController: NSObject {
         engine.onRecovered = { [weak self] in
             // The screen reconfigured (fullscreen app switch etc.) and the stream was
             // rebuilt seamlessly — reassure without alarming.
-            self?.onToast?(ToastRequest(text: "Kayıt sürüyor", systemSymbol: "record.circle", tint: .systemGreen, important: false))
+            self?.onToast?(ToastRequest(text: String(localized: "Recording continues", comment: "Recording toast"), systemSymbol: "record.circle", tint: .systemGreen, important: false))
         }
     }
 
@@ -335,12 +335,12 @@ final class RecordingController: NSObject {
         guard let choice = await windowPicker.pick(content: content) else { return }   // dismissed
         switch choice {
         case .window(let window):
-            // Every window pick arms: the red frame shows what will be recorded and the owner
-            // places the camera before pressing Başlat. The fullscreen→display conversion the
+            // Every window pick arms: the red frame shows what will be recorded and the user
+            // places the camera before pressing Start. The fullscreen→display conversion the
             // window path needs happens inside startArmed(), so a game window arms too.
             arm(target: .window(window))
         case .display(let display):
-            // The picker's "<App> — tam ekran" card: the game's own window never reached the
+            // The picker's "<App> — full screen" card: the game's own window never reached the
             // grid, so there is no window frame to arm a red placement rectangle against —
             // record the display it covers straight away, at the game scale.
             let settings = RecordingSettings.load(from: defaults)
@@ -359,12 +359,12 @@ final class RecordingController: NSObject {
         armedMissingBounds = 0
         let settings = RecordingSettings.load(from: defaults)
         // Arming CONFINES the camera preview to the window that will be recorded -- it never
-        // opens one. begin() composites against this very rect, so a placement the owner
+        // opens one. begin() composites against this very rect, so a placement the user
         // makes with the preview open lands in the file, and one made with it closed does
-        // too. Opening the preview is the owner's move alone (panel chip / status menu).
+        // too. Opening the preview is the user's move alone (panel chip / status menu).
         // Only when the camera is actually recorded: begin() releases the confinement when
         // it is not, and confining here anyway would visibly snap an open preview into the
-        // window at arm and back out at Başlat.
+        // window at arm and back out at Start.
         if settings.camera.enabled {
             CameraOverlayController.shared.prepareRecording(
                 cgRect: CaptureAreaIndicator.windowBounds(window.windowID) ?? window.frame,
@@ -427,14 +427,14 @@ final class RecordingController: NSObject {
         clearArmedControls()
         armed = nil
         // Drops the confinement rect the placement frame was using. The preview itself,
-        // open or closed, stays exactly as the owner left it.
+        // open or closed, stays exactly as the user left it.
         CameraOverlayController.shared.recordingEnded()
         onArmedChange?(false)
     }
 
     /// Esc while armed cancels the arming, but the local monitor must not eat every Esc
     /// in the app: only Camcord's own floating capture surfaces (the panel or popover
-    /// holding Başlat, the indicator's panels) hand it over. A titled window, a sheet or
+    /// holding Start, the indicator's panels) hand it over. A titled window, a sheet or
     /// a save panel keeps its own Esc; with no key window at all the Esc is ours.
     static func armedEscapeCancels(_ window: NSWindow?) -> Bool {
         guard let window else { return true }
@@ -467,8 +467,8 @@ final class RecordingController: NSObject {
     }
 
     /// Records the entire display under the mouse pointer (menu action). `gameLike` marks
-    /// the Phase G.6 hotkey path taken while a fullscreen game owns the screen: no
-    /// countdown, no stop pill over the game, and the "Oyunda 1080p kaydet" scale. The
+    /// the hotkey path taken while a fullscreen game owns the screen: no
+    /// countdown, no stop pill over the game, and the "Record games at 1080p" scale. The
     /// same hotkey stops the run (`toggleRecording()` handles that side).
     func recordFullScreen(gameLike: Bool = false) async {
         guard !isTerminating, uiState == .idle, !isStarting, !isFinalizing, armed == nil,
@@ -492,7 +492,7 @@ final class RecordingController: NSObject {
             let settings = RecordingSettings.load(from: defaults)
             // A short countdown keeps the panel-close animation and the parked pointer
             // out of the first frames, and gives the user a beat to set the stage. In a
-            // game it would only delay a trigger the owner pressed mid-play.
+            // game it would only delay a trigger the user pressed mid-play.
             if !gameLike, settings.countdownEnabled {
                 guard await CountdownOverlay.run(onScreenFrame: screen.frame) else { return }
             }
@@ -502,7 +502,7 @@ final class RecordingController: NSObject {
                 scale: settings.captureScale(displayScale: screen.backingScaleFactor, gameLike: gameLike),
                 excluding: ownApp
             ))
-            // G.6: nothing of ours belongs over a game. begin() orders the stop pill up
+            // Nothing of ours belongs over a game. begin() orders the stop pill up
             // with no await after it, so dismissing it here removes it before it draws —
             // the start/stop sounds and the same hotkey are the whole interface there.
             if gameLike { indicator.hide() }
@@ -657,7 +657,7 @@ final class RecordingController: NSObject {
                 // Denied mic must not kill the recording -- proceed without it.
                 logger.warning("Microphone permission denied; recording without the mic track")
                 settings.microphone = false
-                onToast?(ToastRequest(text: "Mikrofon izni yok — sesin kaydedilmeyecek", systemSymbol: "mic.slash", tint: .systemOrange, important: true))
+                onToast?(ToastRequest(text: String(localized: "No microphone permission — your voice won't be recorded", comment: "Recording toast"), systemSymbol: "mic.slash", tint: .systemOrange, important: true))
             }
         }
         guard !isTerminating, requireStudioLayersReady(), preparedGenerationIsCurrent(preparedGeneration) else { return }
@@ -670,7 +670,7 @@ final class RecordingController: NSObject {
             }
             if !granted {
                 settings.camera.enabled = false
-                onToast?(ToastRequest(text: "Kamera izni yok — ekran kaydı kamerasız başlayacak", systemSymbol: "video.slash", tint: .systemOrange, important: true))
+                onToast?(ToastRequest(text: String(localized: "No camera permission — the recording will start without the camera", comment: "Recording toast"), systemSymbol: "video.slash", tint: .systemOrange, important: true))
             }
         }
         guard !isTerminating, requireStudioLayersReady(), preparedGenerationIsCurrent(preparedGeneration) else { return }
@@ -813,7 +813,7 @@ final class RecordingController: NSObject {
             }
             indicator.updateHub(elapsed: Self.formatElapsed(0))
             pushCameraState()
-            onToast?(ToastRequest(text: "Kayıt başladı", systemSymbol: "record.circle.fill", tint: .systemRed, important: true))
+            onToast?(ToastRequest(text: String(localized: "Recording started", comment: "Recording toast"), systemSymbol: "record.circle.fill", tint: .systemRed, important: true))
         } catch RecordingError.incompleteRecording(let url, _) {
             reportPreservedPartial(url)
         } catch is CancellationError {
@@ -837,13 +837,13 @@ final class RecordingController: NSObject {
         if limits.maxSeconds > 0, currentElapsed >= limits.maxSeconds {
             didHitLimit = true
             logger.notice("Max duration reached; auto-stopping and keeping the file")
-            Task { await self.autoStop(message: "Süre sınırına ulaşıldı — kayıt kaydedildi", symbol: "clock.badge.checkmark") }
+            Task { await self.autoStop(message: String(localized: "Time limit reached — recording saved", comment: "Recording toast"), symbol: "clock.badge.checkmark") }
             return
         }
         if limits.diskGuard, let free = Self.freeBytes(on: limits.volumeURL), free < limits.lowDiskThresholdBytes {
             didHitLimit = true
             logger.notice("Low disk (\(free) bytes free); auto-stopping and keeping the file")
-            Task { await self.autoStop(message: "Disk doldu — kayıt kaydedildi", symbol: "externaldrive.badge.exclamationmark") }
+            Task { await self.autoStop(message: String(localized: "Disk full — recording saved", comment: "Recording toast"), symbol: "externaldrive.badge.exclamationmark") }
         }
     }
 
@@ -959,7 +959,7 @@ final class RecordingController: NSObject {
     private func reportPreservedPartial(_ url: URL) {
         logger.error("Incomplete recording retained for recovery: \(url.path, privacy: .public)")
         onRecordingFinished?(url)
-        onToast?(ToastRequest(text: "Kayıt kesildi · kaydedilen kısım korundu", systemSymbol: "externaldrive.badge.exclamationmark", tint: .systemOrange, important: true))
+        onToast?(ToastRequest(text: String(localized: "Recording interrupted · the recorded part was kept", comment: "Recording toast"), systemSymbol: "externaldrive.badge.exclamationmark", tint: .systemOrange, important: true))
     }
 
     // MARK: - Do Not Disturb
@@ -1024,7 +1024,7 @@ final class RecordingController: NSObject {
     /// a recording it simply chooses whether the next one has the camera.
     func toggleCameraInRecording() {
         if uiState != .idle, !recordsCamera {
-            onToast?(ToastRequest(text: "Bu kayıt kamerasız başladı — kamera eklenemez", systemSymbol: "video.slash",
+            onToast?(ToastRequest(text: String(localized: "This recording started without the camera — it can't be added now", comment: "Recording toast"), systemSymbol: "video.slash",
                                   tint: .systemOrange, important: true))
             return
         }
@@ -1074,22 +1074,24 @@ final class RecordingController: NSObject {
         if !didWarnAudio, missingMicrophone || processingFailed {
             didWarnAudio = true
             onToast?(ToastRequest(
-                text: missingMicrophone ? "Mikrofondan ses gelmiyor — ses girişini kontrol et" : "Ses kaydında sorun var — ses ayarlarını kontrol et",
+                text: missingMicrophone
+                    ? String(localized: "No sound from the microphone — check the audio input", comment: "Recording toast")
+                    : String(localized: "Audio isn't recording properly — check the audio settings", comment: "Recording toast"),
                 systemSymbol: "mic.badge.xmark", tint: .systemOrange, important: true
             ))
         }
         let audio = [health.microphone.samples, health.systemAudio.samples]
         if !didWarnDroppedSamples, audio.contains(where: { $0.delivered > 100 && Double($0.dropped) / Double($0.delivered) > 0.02 }) {
             didWarnDroppedSamples = true
-            onToast?(ToastRequest(text: "Ses kesintileri algılandı — kayıt devam ediyor", systemSymbol: "waveform.badge.exclamationmark", tint: .systemOrange, important: true))
+            onToast?(ToastRequest(text: String(localized: "Audio dropouts detected — still recording", comment: "Recording toast"), systemSymbol: "waveform.badge.exclamationmark", tint: .systemOrange, important: true))
         }
     }
 
     private func showFinishedToast() {
         if audioMixFailed {
-            onToast?(ToastRequest(text: "Kayıt kaydedildi; sesler ayrı kanallarda korundu", systemSymbol: "waveform.badge.exclamationmark", tint: .systemOrange, important: true))
+            onToast?(ToastRequest(text: String(localized: "Recording saved; the audio was kept on separate tracks", comment: "Recording toast"), systemSymbol: "waveform.badge.exclamationmark", tint: .systemOrange, important: true))
         } else {
-            onToast?(ToastRequest(text: "Kayıt kaydedildi", systemSymbol: "film.circle.fill"))
+            onToast?(ToastRequest(text: String(localized: "Recording saved"), systemSymbol: "film.circle.fill"))
         }
     }
 
@@ -1120,8 +1122,8 @@ final class RecordingController: NSObject {
 
     private func fail(_ message: String) {
         logger.error("\(message, privacy: .public)")
-        // The diagnostic string is for the log; the toast stays user-facing Turkish.
-        onToast?(ToastRequest(text: "Kayıt başarısız oldu", systemSymbol: "exclamationmark.triangle", tint: .systemRed, important: true))
+        // The diagnostic string is for the log; the toast stays user-facing and localized.
+        onToast?(ToastRequest(text: String(localized: "Recording failed", comment: "Recording toast"), systemSymbol: "exclamationmark.triangle", tint: .systemRed, important: true))
         FeedbackSound.error.play(in: defaults)
         onFailure?()
         PermissionRecovery.noteCaptureFailure()

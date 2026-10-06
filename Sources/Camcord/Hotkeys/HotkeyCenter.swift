@@ -4,7 +4,7 @@ import KeyboardShortcuts
 /// Tier 1 of the hotkey engine: global keyboard shortcuts via `KeyboardShortcuts`
 /// (Carbon `RegisterEventHotKey` under the hood). Zero TCC permissions required.
 ///
-/// NONE of these ship with a default shortcut — the owner assigns every one from
+/// NONE of these ship with a default shortcut — the user assigns every one from
 /// Settings. The primary surfaces are the mouse (side buttons) and the menu-bar
 /// panel; keyboard is an opt-in convenience.
 extension KeyboardShortcuts.Name {
@@ -23,19 +23,19 @@ extension KeyboardShortcuts.Name {
     static let toggleCameraRecording = Self("toggleCameraRecording")
 }
 
-/// Every shortcut the app offers, in the order Settings lists them, with the label the owner
+/// Every shortcut the app offers, in the order Settings lists them, with the label the user
 /// reads. One list so the recorders and the conflict check can never drift apart.
 enum ShortcutCatalogue {
     static let all: [(name: KeyboardShortcuts.Name, label: String)] = [
-        (.captureRegion, "Bölge çek"),
-        (.captureActiveWindow, "Aktif pencere çek"),
-        (.captureFullScreen, "Tüm ekranı çek"),
-        (.captureTextRegion, "Metni çek (OCR)"),
-        (.captureScrolling, "Kaydırmalı çekim"),
-        (.toggleRecording, "Kayıt başlat / bitir"),
-        (.pauseRecording, "Kaydı duraklat / sürdür"),
-        (.toggleCameraPreview, "Kamera önizlemesi aç / kapat"),
-        (.toggleCameraRecording, "Kamerayı kayda göm aç / kapat"),
+        (.captureRegion, String(localized: "Capture a region", comment: "Action: capture a region")),
+        (.captureActiveWindow, String(localized: "Capture a window", comment: "Action: capture a window")),
+        (.captureFullScreen, String(localized: "Capture the screen", comment: "Action: capture the whole screen")),
+        (.captureTextRegion, String(localized: "Capture text", comment: "Action: recognise the text in a region")),
+        (.captureScrolling, String(localized: "Start a scroll capture", comment: "Action: start a scroll capture")),
+        (.toggleRecording, String(localized: "Start or stop recording", comment: "Shortcut action")),
+        (.pauseRecording, String(localized: "Pause or resume recording", comment: "Shortcut action")),
+        (.toggleCameraPreview, String(localized: "Show or hide the camera preview", comment: "Shortcut action")),
+        (.toggleCameraRecording, String(localized: "Add or remove the camera in the recording", comment: "Shortcut action")),
     ]
 
     static func label(for name: KeyboardShortcuts.Name) -> String {
@@ -97,7 +97,7 @@ final class HotkeyCenter {
     /// The panel may well be closed when this fires, so the shortcuts say what they did.
     var onToast: ((ToastRequest) -> Void)?
 
-    /// Flips "Kamerayı kaydet" through the same field the panel toggle writes — and refuses
+    /// Flips "Record the camera" through the same field the panel toggle writes — and refuses
     /// mid-recording exactly like that toggle does. The engine binds its camera source when
     /// the recording starts: turning the flag on afterwards composites nothing, so a toast
     /// promising a camera in the file would be a lie.
@@ -105,7 +105,7 @@ final class HotkeyCenter {
     static func toggleCameraRecording(isBusy: Bool) -> ToastRequest {
         guard !isBusy else {
             return ToastRequest(
-                text: "Kayıt sürerken değiştirilemez",
+                text: String(localized: "Can't change this while recording", comment: "Toast: the camera shortcut pressed mid-recording"),
                 systemSymbol: "exclamationmark.circle.fill",
                 tint: .systemOrange,
                 important: true
@@ -115,14 +115,16 @@ final class HotkeyCenter {
         settings.camera.enabled.toggle()
         settings.save(to: .standard)
         return ToastRequest(
-            text: settings.camera.enabled ? "Kamera kayda gömülecek" : "Kamera kayda gömülmeyecek",
+            text: settings.camera.enabled
+                ? String(localized: "Camera will be added to the recording", comment: "Toast: the camera shortcut turned the camera on")
+                : String(localized: "Camera won't be added to the recording", comment: "Toast: the camera shortcut turned the camera off"),
             systemSymbol: settings.camera.enabled ? "video.fill" : "video.slash.fill",
             tint: .systemBlue,
             important: true
         )
     }
 
-    /// What the record hotkey does (Phase G.6 lite). A game confines the cursor and sits
+    /// What the record hotkey does. A game confines the cursor and sits
     /// over every panel we can draw, so an idle trigger there records the covered display
     /// outright instead of opening a picker; anything else — including stopping the run
     /// this started — is the ordinary toggle. The mouse/menu/panel paths are unchanged.
@@ -136,9 +138,9 @@ final class HotkeyCenter {
     }
 
     /// Every binding logs itself before it runs: in a fullscreen game the first question
-    /// is whether the trigger reached us at all (Phase G.1). The measured context is
+    /// is whether the trigger reached us at all. The measured context is
     /// handed to the action so routing on it costs no second window-list sweep.
-    /// Every name this process has bound a handler to. A shortcut the owner can record in
+    /// Every name this process has bound a handler to. A shortcut the user can record in
     /// Settings but that nothing listens for is a dead key, and nothing else would catch it.
     private(set) static var boundNames: Set<String> = []
 

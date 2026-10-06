@@ -2,10 +2,10 @@ import AppKit
 import QuartzCore
 import SwiftUI
 
-// RUN UI-1 C2: a hidden Design Lab that renders four specimens — the recording hub, a camera
-// tile, a panel card and a sidebar row — in REAL Liquid Glass, with blur-motion, in each design
-// direction's key tokens. Its job is to prove (or disprove) that native can match the HTML
-// prototypes in docs/design/directions/. Opened from the status menu with ⌥ held.
+// A hidden Design Lab that renders four specimens — the recording hub, a camera tile, a panel
+// card and a sidebar row — in REAL Liquid Glass, with blur-motion, in each design direction's
+// key tokens. Its job is to prove (or disprove) that native can match the directions' HTML
+// prototypes. Opened from the status menu with ⌥ held.
 
 /// One design direction's key tokens, as far as the four specimens need them.
 struct LabDirection: Identifiable, Hashable {
@@ -86,7 +86,7 @@ final class FrameMeter: ObservableObject {
         link = nil
         proxy = nil
         guard !intervals.isEmpty else {
-            summary = "ÖLÇÜLMEDİ: no display frames (screen locked or window hidden)"
+            summary = "UNMEASURED: no display frames (screen locked or window hidden)"
             DiagnosticsLog.append("design-lab frames=0")
             return
         }
@@ -154,8 +154,10 @@ struct DesignLabView: View {
 
     private var header: some View {
         HStack(spacing: selected.spacing * 2) {
-            Picker("Direction", selection: $selected) {
+            Picker(selection: $selected) {
                 ForEach(directions) { Text($0.name).tag($0) }
+            } label: {
+                Text(verbatim: "Direction")
             }
             .pickerStyle(.segmented)
             .frame(maxWidth: 480)
@@ -220,7 +222,7 @@ struct DesignLabView: View {
         .accessibilityLabel(Text(verbatim: "Recording hub"))
     }
 
-    /// The camera tile: video, the one-device-pixel specular hairline (A7) and a lift.
+    /// The camera tile: video, the one-device-pixel specular hairline and a lift.
     private var tile: some View {
         VStack(alignment: .leading, spacing: selected.spacing) {
             let height = tileWidth * 9 / 16
@@ -246,7 +248,7 @@ struct DesignLabView: View {
     /// The panel card: glass surface, glass buttons, and the blur-motion arrival.
     private var panel: some View {
         VStack(alignment: .leading, spacing: selected.spacing * 2) {
-            Button(panelShown ? "Hide panel" : "Show panel") { animate { panelShown.toggle() } }
+            Button { animate { panelShown.toggle() } } label: { Text(verbatim: panelShown ? "Hide panel" : "Show panel") }
                 .buttonStyle(.glass)
             if panelShown {
                 VStack(alignment: .leading, spacing: selected.spacing * 1.5) {
@@ -355,7 +357,7 @@ private struct HostView: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
-/// The Lab's pages: the RUN UI-2 token and component galleries, and the UI-1 direction spike.
+/// The Lab's pages: the token and component galleries, and the design-direction specimens.
 enum DesignLabPage: String, CaseIterable, Identifiable {
     case tokens, components, directions
     var id: String { rawValue }
@@ -400,7 +402,7 @@ final class DesignLabWindowController {
 
     var windowForTesting: NSWindow? { window }
 
-    /// `activate: false` (LiveCheck) puts the window behind the owner's windows, without focus.
+    /// `activate: false` (LiveCheck) puts the window behind the user's windows, without focus.
     func show(page: DesignLabPage? = nil, activate: Bool = true) {
         if let page { state.page = page }
         let window = window ?? {

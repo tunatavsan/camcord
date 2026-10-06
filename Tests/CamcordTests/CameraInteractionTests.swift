@@ -515,7 +515,7 @@ struct CameraInteractionTests {
 
         // begin(): the same rect the file is composited against.
         overlay.prepareRecording(cgRect: window, options: CameraOptions(enabled: true))
-        // The owner places the camera from the settings/stage surface while it records.
+        // The user places the camera from the settings/stage surface while it records.
         let placed = CameraOptions(enabled: true, widthFraction: 0.32,
                                    position: CameraPosition(x: 0.8, y: 0.2))
         overlay.applyPlacement(placed, source: .settings)
@@ -527,14 +527,14 @@ struct CameraInteractionTests {
         #expect(composited.last == placed.resolved())
         #expect(RecordingSettings.load(from: defaults).camera == placed.resolved())
 
-        // stop(): the confinement goes, the owner's "closed" survives.
+        // stop(): the confinement goes, the user's "closed" survives.
         overlay.recordingEnded()
         #expect(!overlay.previewVisible)
         #expect(!overlay.isVisible)
         #expect(!monitor.isRunning && !monitor.isStarting)
     }
 
-    @Test("the tile's close button is a legitimate writer of the owner's switch, and says so")
+    @Test("the tile's close button is a legitimate writer of the user's switch, and says so")
     @MainActor func closingFromTheTileAnnouncesItself() {
         _ = NSApplication.shared
         let overlay = CameraOverlayController.shared
@@ -580,7 +580,7 @@ struct CameraInteractionTests {
         let on = HotkeyCenter.toggleCameraRecording(isBusy: false)
         #expect(RecordingSettings.load(from: defaults).camera.enabled)
         #expect(on.systemSymbol == "video.fill")
-        // Important, or the owner's own toast preference would silence the only feedback a
+        // Important, or the user's own toast preference would silence the only feedback a
         // shortcut has when the panel is closed.
         #expect(on.important)
 
@@ -595,16 +595,16 @@ struct CameraInteractionTests {
         settings.save(to: defaults)
         let busy = HotkeyCenter.toggleCameraRecording(isBusy: true)
         #expect(RecordingSettings.load(from: defaults).camera.enabled)
-        #expect(busy.text.contains("Kayıt sürerken"))
+        #expect(busy.text.contains("while recording"))
     }
 
-    /// Tile sizes the owner can actually produce: the camera is 15-60 % of the recorded
+    /// Tile sizes the user can actually produce: the camera is 15-60 % of the recorded
     /// frame's width at 16:9, and the frame is anything from a small window to a 4K display.
     private static let reachableTiles: [CGSize] = [96, 160, 227, 320, 454, 583, 760, 907,
                                                   1037, 1152, 1536, 2304]
         .map { (width: CGFloat) in CGSize(width: width, height: (width * 9 / 16).rounded()) }
 
-    @Test("hover zones contain the chips they reveal, at every size the owner can reach")
+    @Test("hover zones contain the chips they reveal, at every size the user can reach")
     func zonesContainTheirBadges() throws {
         for size in Self.reachableTiles {
             let bounds = CGRect(origin: .zero, size: size)
@@ -612,7 +612,7 @@ struct CameraInteractionTests {
             let tile = CGPath(roundedRect: bounds, cornerWidth: radius, cornerHeight: radius, transform: nil)
 
             for corner in CameraCorner.allCases {
-                // The chip is what the owner presses to resize: all of it inside the zone that
+                // The chip is what the user presses to resize: all of it inside the zone that
                 // resizes, inside the tile's own rounded corner, and in its own corner.
                 let zone = CameraResizeGeometry.hitRect(corner, in: bounds)
                 let chip = CameraResizeGeometry.resizeChipFrame(corner, in: bounds)
@@ -750,7 +750,7 @@ struct CameraInteractionTests {
                                  options: CameraOptions(enabled: true))
 
         // Up, laid out and confined — but showing nothing, because a camera that has not
-        // produced a frame yet would otherwise flash a black tile at the owner. It also
+        // produced a frame yet would otherwise flash a black tile at the user. It also
         // must not eat the click of whatever it is floating over meanwhile.
         let panel = try #require(NSApp.windows.first { $0.contentView is FloatingCameraView })
         #expect(overlay.isVisible)

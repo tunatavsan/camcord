@@ -189,7 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.screenshotDeliveryFanout = deliveryFanout
         coordinator.onScreenshotDelivery = { [weak deliveryFanout] event in deliveryFanout?.receive(event) }
 
-        // macOS Services: "Camcord ile Metni Çıkar" on any image selection.
+        // macOS Services: "Extract Text with Camcord" on any image selection.
         let servicesProvider = ServicesProvider(coordinator: coordinator)
         self.servicesProvider = servicesProvider
         NSApp.servicesProvider = servicesProvider
@@ -235,7 +235,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         firstRun.showIfNeeded(activate: NSApp.isActive)
     }
 
-    /// Focus-safe surfaces for the run's screenshots (LiveCheck); never activates the app.
+    /// Focus-safe surfaces for the live check's screenshots (LiveCheck); never activates the app.
     private func performLiveCheck(_ command: LiveCheck.Command) {
         switch command {
         case .window(let module):
@@ -296,12 +296,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let open = applicationMenu.addItem(withTitle: String(localized: "Open Camcord", comment: "Opens the main window"),
                                            action: #selector(openMainWindow(_:)), keyEquivalent: "0")
         open.target = self
-        let controls = applicationMenu.addItem(withTitle: "Kontrol Paneli", action: #selector(showControlPanel(_:)), keyEquivalent: "")
+        let controls = applicationMenu.addItem(withTitle: String(localized: "Control Panel", comment: "App menu: opens the menu bar panel"), action: #selector(showControlPanel(_:)), keyEquivalent: "")
         controls.target = self
-        let settings = applicationMenu.addItem(withTitle: "Ayarlar…", action: #selector(showSettings(_:)), keyEquivalent: ",")
+        let settings = applicationMenu.addItem(withTitle: String(localized: "Settings…", comment: "Menu item: opens Settings"), action: #selector(showSettings(_:)), keyEquivalent: ",")
         settings.target = self
         applicationMenu.addItem(.separator())
-        applicationMenu.addItem(withTitle: "Camcord’dan Çık", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        applicationMenu.addItem(withTitle: String(localized: "Quit Camcord", comment: "App menu"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         applicationItem.submenu = applicationMenu
         menu.addItem(applicationItem)
         menu.addItem(AppMenus.editingMenuItem())
@@ -319,7 +319,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainWindowController?.show(module: id)
     }
 
-    /// ⌘, opens the main window on Settings (K7).
+    /// ⌘, opens the main window on Settings.
     @objc private func showSettings(_ sender: Any?) {
         showSettingsModule()
     }
@@ -370,7 +370,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // The picker is a window of its own and would otherwise open on top of the still-
         // open panel, hiding half the grid. Close first, like every overlay-opening
-        // capture action; the arming that follows a pick has its own on-screen Başlat.
+        // capture action; the arming that follows a pick has its own on-screen Start.
         actions.recordWindow = { [weak recordingController] in
             afterClosingPanel { await recordingController?.recordWindow() }
         }
@@ -444,19 +444,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             guard reachable else {
                 self.hudToast?.show(
-                    text: "Dosya bulunamadı · taşınmış veya silinmiş olabilir",
+                    text: String(localized: "File not found · it may have been moved or deleted", comment: "Toast when a capture's file is missing"),
                     systemSymbol: "exclamationmark.triangle", tint: .systemOrange, respectsSetting: false
                 )
                 return
             }
             // Empty-library destinations are directory URLs: open their contents,
-            // matching the panel's “Klasörü aç” action. Saved files are selected.
+            // matching the panel's “Show in Finder” action. Saved files are selected.
             if open || url.hasDirectoryPath {
                 do {
                     _ = try await NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration())
                 } catch {
                     self.hudToast?.show(
-                        text: "Dosya veya klasör açılamadı · Finder’dan tekrar deneyebilirsin",
+                        text: String(localized: "Couldn't open the file or folder · try again from Finder", comment: "Toast when a file or folder cannot be opened"),
                         systemSymbol: "exclamationmark.triangle", tint: .systemOrange, respectsSetting: false
                     )
                     return
