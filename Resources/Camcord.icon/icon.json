@@ -17,11 +17,11 @@
   },
   "groups": [
     {
-      "name": "Kay\u0131t \u0131\u015f\u0131\u011f\u0131",
+      "name": "Recording light",
       "layers": [
         {
-          "name": "G\u00f6z bebe\u011fi",
-          "image-name": "00-00-G\u00f6z_bebe\u011fi.svg",
+          "name": "Pupil",
+          "image-name": "00-00-pupil.svg",
           "fill": {
             "linear-gradient": [
               "display-p3:1.0000,0.4500,0.3800,1.0000",
@@ -41,8 +41,8 @@
           "glass": true
         },
         {
-          "name": "Par\u0131lt\u0131 1",
-          "image-name": "00-01-Par\u0131lt\u0131_1.svg",
+          "name": "Glint 1",
+          "image-name": "00-01-glint-1.svg",
           "fill": {
             "solid": "display-p3:1.0000,0.3000,0.2800,1.0000"
           },
@@ -50,8 +50,8 @@
           "opacity": 0.16
         },
         {
-          "name": "Par\u0131lt\u0131 2",
-          "image-name": "00-02-Par\u0131lt\u0131_2.svg",
+          "name": "Glint 2",
+          "image-name": "00-02-glint-2.svg",
           "fill": {
             "solid": "display-p3:1.0000,0.3000,0.2800,1.0000"
           },
@@ -59,8 +59,8 @@
           "opacity": 0.08
         },
         {
-          "name": "Par\u0131lt\u0131 3",
-          "image-name": "00-03-Par\u0131lt\u0131_3.svg",
+          "name": "Glint 3",
+          "image-name": "00-03-glint-3.svg",
           "fill": {
             "solid": "display-p3:1.0000,0.3000,0.2800,1.0000"
           },
@@ -80,11 +80,11 @@
       }
     },
     {
-      "name": "Mercek",
+      "name": "Lens",
       "layers": [
         {
-          "name": "Ana yans\u0131ma",
-          "image-name": "01-00-Ana_yans\u0131ma.svg",
+          "name": "Main reflection",
+          "image-name": "01-00-main-reflection.svg",
           "fill": {
             "solid": "display-p3:1.0000,1.0000,1.0000,1.0000"
           },
@@ -92,8 +92,8 @@
           "opacity": 0.78
         },
         {
-          "name": "Kaplama",
-          "image-name": "01-01-Kaplama.svg",
+          "name": "Coating",
+          "image-name": "01-01-coating.svg",
           "fill": {
             "linear-gradient": [
               "display-p3:0.3000,0.9500,0.8000,1.0000",
@@ -114,8 +114,8 @@
           "opacity": 0.7
         },
         {
-          "name": "Eleman",
-          "image-name": "01-02-Eleman.svg",
+          "name": "Element",
+          "image-name": "01-02-element.svg",
           "fill": {
             "solid": "display-p3:0.3000,0.4200,0.7200,1.0000"
           },
@@ -123,8 +123,8 @@
           "opacity": 0.55
         },
         {
-          "name": "Mercek",
-          "image-name": "01-03-Mercek.svg",
+          "name": "Lens",
+          "image-name": "01-03-lens.svg",
           "fill": {
             "linear-gradient": [
               "display-p3:0.1300,0.2400,0.5200,1.0000",
@@ -156,11 +156,11 @@
       }
     },
     {
-      "name": "Halkalar",
+      "name": "Rings",
       "layers": [
         {
-          "name": "\u0130\u00e7 halka",
-          "image-name": "02-00-\u0130\u00e7_halka.svg",
+          "name": "Inner ring",
+          "image-name": "02-00-inner-ring.svg",
           "fill": {
             "linear-gradient": [
               "display-p3:0.9200,0.9200,0.9800,1.0000",
@@ -181,8 +181,8 @@
           "opacity": 0.9
         },
         {
-          "name": "D\u0131\u015f halka",
-          "image-name": "02-01-D\u0131\u015f_halka.svg",
+          "name": "Outer ring",
+          "image-name": "02-01-outer-ring.svg",
           "fill": {
             "linear-gradient": [
               "display-p3:1.0000,1.0000,1.0000,1.0000",
@@ -214,11 +214,11 @@
       }
     },
     {
-      "name": "G\u00f6vde",
+      "name": "Body",
       "layers": [
         {
-          "name": "G\u00f6vde",
-          "image-name": "03-00-G\u00f6vde.svg",
+          "name": "Body",
+          "image-name": "03-00-body.svg",
           "fill": {
             "linear-gradient": [
               "display-p3:0.1400,0.1200,0.2200,1.0000",
