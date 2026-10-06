@@ -1,126 +1,137 @@
-# Camcord
+<p align="center">
+  <img src="docs/images/icon.png" width="160" height="160" alt="Camcord app icon">
+</p>
 
-Camcord, menü çubuğunda yaşayan native bir macOS ekran görüntüsü ve ekran kaydı
-uygulamasıdır. Swift 6 ile yazılmıştır ve macOS 26 veya yenisini gerektirir.
+<h1 align="center">Camcord</h1>
 
-## Özellikler
+<p align="center">
+  <strong>Native screenshots, scrolling captures and screen recording for your Mac.</strong><br>
+  Capture with one shortcut, mark it up in place, and record with your camera and sound. Nothing leaves your Mac.
+</p>
 
-- **Ekran görüntüsü:** Bölge, pencere veya tüm ekranı PNG olarak panoya kopyalar.
-  İstenirse ayrıca `~/Pictures/camcord/` veya seçilen başka bir klasöre kaydeder.
-- **Donmuş seçim görüntüsü:** Bölge/pencere seçici açılmadan önce masaüstünün değişmez
-  bir kopyası alınır. Tetikleme anında görünen hover durumu, tooltip ve menü pikselleri
-  seçim sırasında kaybolsa bile sonuçta korunur. Ekran düzeni değişirse işlem iptal edilir.
-- **Metin çıkarma:** Seçilen ekran alanındaki metni, QR kodunu ve barkodu panoya
-  aktarır. Finder veya başka bir uygulamadaki mevcut görseller için de Servisler menüsü
-  üzerinden çalışır.
-- **Kaydırmalı çekim:** Elle kaydırırken ara kareleri sırayla toplar; birleştirme ve
-  önizlemeyi günceller. Görünümün yaklaşık %40’ı kaydırılınca ve kaydırma durulunca
-  yeni kare alır. Kopuklukta kısa bir ipucu gösterip yakalamaya devam eder.
-  Önizlemedeki **Bitti** sonucu kopyalar; **İptal** veya `Esc`
-  çekimden çıkar. HUD’daki otomatik kaydırma düğmesi sayfayı ilerletir (Erişilebilirlik izni gerekir).
-- **Ekran kaydı:** Ekran veya pencereyi kaydeder; duraklatma/sürdürme, geri sayım,
-  imleç, pencere göstergesi, düşük disk alanında güvenli durdurma ve isteğe bağlı süre
-  sınırı sunar.
-- **Ses:** Sistem sesi ve mikrofon için bağımsız canlı seviye göstergeleri ile kazanç
-  kontrolleri vardır. Varsayılan olarak ikisi tek ses parçasında birleştirilir; kurgu
-  için ayrı ses parçaları korunabilir. Mikrofon denemesi yalnızca kullanıcı düğmeye
-  bastığında başlar ve dosya oluşturmaz.
-- **Kamera:** İsteğe bağlı kamera görüntüsünü kaydın bir köşesine gömer; boyut, köşe
-  ve aynalama ayarlanabilir. Ayarlardaki kamera provası yalnızca açıkça başlatıldığında
-  kamerayı açar. Kamera sesi kayda eklenmez.
-- **Native kontroller:** Sol tıklanan menü çubuğu simgesi her durumda paneli açar;
-  kayıt sırasında buradan mikser, duraklatma ve durdurma kontrollerine ulaşılır. Video
-  ve ekran görüntüsü klasörü düğmeleri, klasörler henüz boşken de görünür. Tamamlanan
-  kayıt kartı hedefi, önizlemeyi ve Finder eylemlerini gösterir.
+<p align="center">
+  <a href="https://github.com/tunatavsan/camcord/actions/workflows/ci.yml"><img src="https://github.com/tunatavsan/camcord/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
+  <img src="https://img.shields.io/badge/macOS-26%2B-black.svg?logo=apple" alt="macOS 26 or later">
+  <img src="https://img.shields.io/badge/Swift-6.2-F05138.svg?logo=swift&logoColor=white" alt="Swift 6.2">
+</p>
 
-## Varsayılan çıktı
+Camcord lives in the menu bar for quick captures and opens a main window when you need more: a Library of everything
+you captured, an Editor for screenshots, a Studio for setting up recordings, and Settings. It is written in Swift on
+top of ScreenCaptureKit, AVFoundation and Vision, and it is designed for macOS 26 and Liquid Glass.
 
-Ekran görüntüsü panoya gider; diske kopya yazma başlangıçta kapalıdır. Kayıtlar
-`~/Movies/camcord/` altında oluşturulur; tamamlanınca önizleme kartından açılabilir,
-yeniden adlandırılabilir veya Finder'da gösterilebilir. Kayıt almak panoyu değiştirmez.
-Varsayılan kayıt profili 60 fps, native çözünürlük, SDR, HEVC 20 Mbps ve MP4'tür.
-Sistem sesi ile mikrofon açıktır, tek ses parçasında birleştirilir; kamera kapalıdır.
-ProRes profilleri MOV kullanır. Bunların tamamı Ayarlar'dan değiştirilebilir.
+## Why Camcord
 
-## Kısayollar ve kullanım
+- **Native and fast.** SwiftUI and AppKit, no web views. A capture is taken from pixels sampled before the selection
+  overlay appears, so what you select is exactly what you get.
+- **Your shortcuts.** No shortcut is assigned for you. Choose your own keys in Settings, or hold a mouse side button to
+  select a region.
+- **Windows as you see them.** A translucent terminal or a sidebar with a blurred backdrop is captured and recorded the
+  way it looks on screen, not flattened.
+- **Recordings that hold up.** System audio and microphone are mixed into the first audio track so every player hears
+  both. If something fails mid-recording, the partial file is kept and reported instead of silently discarded.
+- **Private.** Camcord makes no network connections, collects no analytics and needs no account. Text recognition runs
+  on your Mac.
 
-Camcord hazır klavye kısayolu atamaz. Ayarlar'dan bölge, pencere, tüm ekran, OCR,
-kaydırmalı çekim, kayıt başlat/bitir ve kayıt duraklat/sürdür eylemlerine kısayol
-atanabilir. `Kaydırmalı çekim` kısayolu da isteğe bağlıdır ve başlangıçta boştur.
-Atanan kısayollar panelde ilgili eylemin yanında görünür.
+## Features
 
-Menü çubuğu kalabalıksa, çalışan Camcord'u Finder veya Spotlight'tan tekrar açmak
-kontrolleri bağımsız bir macOS panelinde gösterir. Kayıt hazırlanırken ve başladığında
-ekranda bildirim çıkar. Kayıt sayacı ve durdurma düğmesi, pencere çerçevesi kapalı
-olsa veya kaydedilen pencere başka bir pencerenin altında kalsa da erişilebilir kalır.
+| | |
+| --- | --- |
+| **Capture** | A region, a window or the whole screen, from the menu bar, the main window or a global shortcut. After each shot a card slides in: drag the image into another app, save it, pin it or open it in the Editor. |
+| **Scrolling capture** | Stitches a long page, or the part of a window that scrolls, into one image. Scroll by hand or let Camcord scroll for you; sticky headers and footers are detected so they appear once. |
+| **Text** | Recognizes the text in a region with on-device Vision, keeping reading order, paragraphs and code indentation, and decodes QR codes and barcodes in the same pass. |
+| **Pin** | Keeps a screenshot floating above your windows. Pinch on a trackpad to zoom into it. |
+| **Editor** | Arrows, boxes, text, highlights, numbered steps, blur, pixelation, solid redaction and crop. Exports a flattened copy and keeps the original. |
+| **Recording** | Records a display, a window or a region, with system audio, a microphone, an optional floating camera, a countdown, and pause and resume. HEVC or ProRes, in MOV or MP4. |
+| **Studio** | Sets up a recording before you start: pick the source, check the camera and audio levels, and add text or image layers. |
+| **Library** | Every capture in one place, with Quick Look, sharing, Finder actions and controls for how long cached screenshots are kept. |
 
-Bölge seçiminde sürükleyerek alan seçilir, pencereye tıklayarak o pencere seçilir ve
-`Esc` işlemi iptal eder. Menü çubuğu simgesine sağ tıklamak veya Control-tıklamak bağlam
-menüsünü açar. Fare yan tuşları, orta tık ve çift Sağ Command gibi ek girişler Ayarlar'dan
-atanabilir.
+Camcord is available in English and Turkish.
 
-## Derleme ve çalıştırma
+## Getting started
 
-Xcode Command Line Tools ve geçerli, kalıcı bir codesign kimliği gerekir. Hazırlık
-betiği ortamı denetler ve eksikse izlenecek adımları gösterir:
+Camcord is an early preview. Signed and notarized downloads are not available yet, so for now you build it from
+source.
 
-```bash
-./scripts/dev-setup.sh
-./scripts/build.sh
+**Requirements:** macOS 26 or later and Xcode 26.5 or later (Swift 6.2).
+
+```sh
+git clone https://github.com/tunatavsan/camcord.git
+cd camcord
+scripts/build.sh --ad-hoc
 open dist/Camcord.app
 ```
 
-Yerel `/Applications` kopyasını güncelleyip açmak için:
+`scripts/build.sh` builds a release copy into `dist/Camcord.app`. `--ad-hoc` signs it without a certificate, which is
+enough to try Camcord. macOS ties capture permissions to the app's signature, so an ad hoc build may ask for Screen
+Recording permission again after every rebuild.
 
-```bash
-./scripts/build.sh --install
+For day-to-day use, sign with a stable certificate from your keychain (an Apple Development certificate works) and
+install into `/Applications`:
+
+```sh
+CAMCORD_SIGN_IDENTITY="Apple Development: Your Name (TEAMID)" scripts/build.sh --install
 ```
 
-`--install`, çalışan Camcord'dan önce normal biçimde çıkmasını ister ve bekler. Kayıt
-sonlandırması süre içinde bitmezse uygulamayı zorla kapatıp dosyayı riske atmak yerine
-kurulumu durdurur. Bu komut yerel bir geliştirici kurulumu yapar; README herhangi bir
-dağıtılmış veya yayınlanmış sürüm iddiasında bulunmaz.
+Without `CAMCORD_SIGN_IDENTITY` the script reuses the identity of the installed copy, or the only signing identity in
+your keychain. `scripts/dev-setup.sh` checks your setup. Installation refuses to replace a running Camcord and keeps the
+previous copy as a backup.
 
-Geliştirme sırasında hızlı kontroller:
+### Permissions
 
-```bash
-swift build
-swift test
+| Permission | Needed for |
+| --- | --- |
+| Screen Recording | Every screenshot and recording. Camcord asks for it on first run. |
+| Microphone | Recording your voice, only when you turn the microphone on. |
+| Camera | The floating camera and camera recording, only when you turn the camera on. |
+| Accessibility | Automatic scrolling, mouse side-button capture and trackpad gestures on pinned screenshots. |
+
+You can review each one in **System Settings › Privacy & Security**. Camcord never changes them for you.
+
+Screenshots are copied to the clipboard; saving a file as well is a setting. Recordings are saved to the folder you
+choose. To silence notifications while you record, point Camcord at your own Shortcuts for turning a Focus on and off;
+macOS has no public API for changing Focus directly.
+
+## Development
+
+Camcord is a Swift package with no Xcode project. Its only third-party code is
+[KeyboardShortcuts](https://github.com/sindresorhus/KeyboardShortcuts), vendored under `Packages/`, so a build never
+downloads anything.
+
+```sh
+swift build          # build the app
+swift test           # run the test suites
+scripts/check.sh     # what CI runs: a build that treats warnings as errors, then every test
 ```
 
-## İzinler
+Tests use Swift Testing. They run without Screen Recording permission and never touch your real settings, Library or
+clipboard; tests that need a live display or devices only run when you opt in.
 
-Kullanılan özelliğe göre macOS Ekran Kaydı, Mikrofon, Kamera veya Erişilebilirlik izni
-isteyebilir. Mikrofon ve kamera provaları izni yalnızca kullanıcı ilgili düğmeye
-bastığında ister. Kalıcı imza kimliği, yeniden derlemelerde uygulamanın aynı code-signing
-kimliğini taşımasını sağlar; macOS'un izin kararları yine Sistem Ayarları tarafından
-yönetilir.
+| Folder | Purpose |
+| --- | --- |
+| `Sources/Camcord/Capture` | Screenshots, window and region geometry, scrolling capture and stitching, text and barcode recognition. |
+| `Sources/Camcord/Recording` | The ScreenCaptureKit stream, the `AVAssetWriter` pipeline, audio mixing, the camera and its compositor. |
+| `Sources/Camcord/Overlay` | Everything drawn over other apps: the selection overlay, the screenshot card, pins and the recording controls. |
+| `Sources/Camcord/Hotkeys` | Global keyboard shortcuts and the event tap for mouse buttons. |
+| `Sources/Camcord/App` | The menu-bar panel, the main window and its Library, Editor, Studio and Settings, and the design system. |
 
-Bir izin kaydı sorunluysa Sistem Ayarları › Gizlilik ve Güvenlik bölümünü kontrol edin.
-Geliştirici kurulumu için gerekirse ilgili kaydı sıfırlayabilirsiniz:
+[ARCHITECTURE.md](ARCHITECTURE.md) explains how a capture and a recording flow through these parts.
 
-```bash
-tccutil reset ScreenCapture dev.tavsan.camcord
-tccutil reset Accessibility dev.tavsan.camcord
-tccutil reset Microphone dev.tavsan.camcord
-tccutil reset Camera dev.tavsan.camcord
-```
+## Roadmap
 
-## Bildirimleri susturma
+- [ ] Signed, notarized releases and a Homebrew cask
+- [ ] Screenshots of the app in this README, once the interface settles
+- [ ] A timeline for trimming recordings
+- [ ] More languages
 
-macOS, Focus durumunu değiştirmek için genel bir API sunmadığından Camcord bunu isteğe
-bağlı olarak Kısayollar uygulaması üzerinden yapar. Kısayollar'da Focus'u açan ve kapatan
-iki kısayol hazırlayıp adlarını Ayarlar › Kayıt › Bildirimler bölümüne girin. Alanlar
-boşsa bu adım atlanır.
+Ideas and bug reports are welcome in [Issues](https://github.com/tunatavsan/camcord/issues).
 
-## Teknik yapı ve doğrulama sınırı
+## Contributing
 
-Uygulama yaşam döngüsü, menü çubuğu ve overlay pencereleri AppKit; panel ve ayarlar
-native SwiftUI/AppKit kontrolleri kullanır. Ekran yakalama ScreenCaptureKit, medya
-yazımı ve kamera AVFoundation, OCR Vision ile çalışır. Paket Swift Package Manager ile
-derlenir; Xcode projesi yoktur.
+Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request, and report
+security or privacy problems privately as described in [SECURITY.md](SECURITY.md).
 
-Birim ve medya testleri donmuş seçim geometrisini, kaydırmalı birleştirmeyi, zaman
-damgalarını, ses işleme/miksajı ve kamera kompozisyonunu kapsar. Offscreen render'lar
-yerleşim kontrolü içindir; gerçek masaüstü hover/tooltip yakalamasını, fiziksel kamera
-ve mikrofon kalitesini, izin akışlarını veya uzun süreli termal performansı doğrulamaz.
+## License
+
+Camcord is released under the [MIT License](LICENSE). Third-party components are listed in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
