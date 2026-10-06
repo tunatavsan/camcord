@@ -105,7 +105,8 @@ scripts/check.sh     # what CI runs: a build that treats warnings as errors, the
 ```
 
 Tests use Swift Testing. They run without Screen Recording permission and never touch your real settings, Library or
-clipboard; tests that need a live display or devices only run when you opt in.
+clipboard; tests that need a live display or devices only run when you opt in. CI runs the suites serially and skips
+the few pixel, window-placement and sampler checks that need a real Mac's display and GPU.
 
 | Folder | Purpose |
 | --- | --- |
