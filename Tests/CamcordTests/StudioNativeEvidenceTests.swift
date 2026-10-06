@@ -33,31 +33,31 @@ private enum StudioEvidenceFailure: Error {
     case forbiddenResource, deadline, recordingFailed, invalidOutput, decoderFailed
 }
 
-private struct StudioEvidenceOwnerPolicy: Sendable {
-    let allowActiveOwner: Bool
+private struct StudioEvidenceUserPolicy: Sendable {
+    let allowActiveUser: Bool
     init(environment: [String: String]) {
-        allowActiveOwner = environment["CAMCORD_STUDIO_ALLOW_ACTIVE_OWNER"] == "1"
+        allowActiveUser = environment["CAMCORD_STUDIO_ALLOW_ACTIVE_USER"] == "1"
     }
-    func permitsIdle(_ seconds: Double) -> Bool { allowActiveOwner || seconds >= 600 }
+    func permitsIdle(_ seconds: Double) -> Bool { allowActiveUser || seconds >= 600 }
     func permitsActivity(idleSeconds: Double, frontmostUnchanged: Bool, cursorUnchanged: Bool) -> Bool {
-        permitsIdle(idleSeconds) && (allowActiveOwner || (frontmostUnchanged && cursorUnchanged))
+        permitsIdle(idleSeconds) && (allowActiveUser || (frontmostUnchanged && cursorUnchanged))
     }
 }
 
-@Suite("Native Studio owner activity policy")
-struct StudioNativeEvidenceOwnerPolicyTests {
-    @Test("Active owner allowance requires the exact opt-in and preserves the strict default")
+@Suite("Native Studio user activity policy")
+struct StudioNativeEvidenceUserPolicyTests {
+    @Test("Active user allowance requires the exact opt-in and preserves the strict default")
     func explicitAllowance() {
         for value in [nil, "0", "true"] as [String?] {
-            let policy = StudioEvidenceOwnerPolicy(environment: value.map { ["CAMCORD_STUDIO_ALLOW_ACTIVE_OWNER": $0] } ?? [:])
-            #expect(!policy.allowActiveOwner)
+            let policy = StudioEvidenceUserPolicy(environment: value.map { ["CAMCORD_STUDIO_ALLOW_ACTIVE_USER": $0] } ?? [:])
+            #expect(!policy.allowActiveUser)
             #expect(!policy.permitsActivity(idleSeconds: 599, frontmostUnchanged: true, cursorUnchanged: true))
             #expect(!policy.permitsActivity(idleSeconds: 600, frontmostUnchanged: false, cursorUnchanged: true))
             #expect(!policy.permitsActivity(idleSeconds: 600, frontmostUnchanged: true, cursorUnchanged: false))
             #expect(policy.permitsActivity(idleSeconds: 600, frontmostUnchanged: true, cursorUnchanged: true))
         }
-        let authorized = StudioEvidenceOwnerPolicy(environment: ["CAMCORD_STUDIO_ALLOW_ACTIVE_OWNER": "1"])
-        #expect(authorized.allowActiveOwner)
+        let authorized = StudioEvidenceUserPolicy(environment: ["CAMCORD_STUDIO_ALLOW_ACTIVE_USER": "1"])
+        #expect(authorized.allowActiveUser)
         #expect(authorized.permitsActivity(idleSeconds: 0, frontmostUnchanged: false, cursorUnchanged: false))
     }
 }
@@ -72,7 +72,7 @@ private final class StudioEvidenceDiagnostics: Sendable {
     private let output: URL
     private let commandURL: URL
     private let sentinel: URL
-    private let ownerPolicy: StudioEvidenceOwnerPolicy
+    private let userPolicy: StudioEvidenceUserPolicy
     private let nonce = UUID().uuidString
     private let baselineFrontmost: pid_t
     private let baselineCursor: CGPoint
@@ -100,7 +100,7 @@ private final class StudioEvidenceDiagnostics: Sendable {
 
     init() throws {
         let env = ProcessInfo.processInfo.environment
-        ownerPolicy = StudioEvidenceOwnerPolicy(environment: env)
+        userPolicy = StudioEvidenceUserPolicy(environment: env)
         guard let sentinelPath = env["CAMCORD_STUDIO_GUI_SENTINEL"], sentinelPath.hasPrefix("/"),
               let outputPath = env["CAMCORD_STUDIO_OUTPUT"], outputPath.hasPrefix("/"),
               let commandPath = env["CAMCORD_STUDIO_PHASE_COMMAND"], commandPath.hasPrefix("/") else {
@@ -117,7 +117,7 @@ private final class StudioEvidenceDiagnostics: Sendable {
               try FileManager.default.contentsOfDirectory(atPath: output.path).isEmpty else {
             throw StudioEvidenceFailure.unsafePath
         }
-        try Self.preflight(sentinel: sentinel, ownerPolicy: ownerPolicy)
+        try Self.preflight(sentinel: sentinel, userPolicy: userPolicy)
         baselineFrontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
         baselineCursor = CGEvent(source: nil)?.location ?? .zero
         _ = NSApplication.shared
@@ -158,7 +158,7 @@ private final class StudioEvidenceDiagnostics: Sendable {
         let exactSourceID = CGWindowID(sourceWindowID)
         let exactPID = ProcessInfo.processInfo.processIdentifier
         let guardSentinel = sentinel
-        let guardOwnerPolicy = ownerPolicy
+        let guardUserPolicy = userPolicy
         let microphone = MicrophoneMonitor(operations: .init(authorize: { false }))
         let camera = CameraPreviewMonitor(operations: .init(authorize: { _ in false }, start: { _, _, _ in
             throw StudioEvidenceFailure.forbiddenResource
@@ -166,9 +166,9 @@ private final class StudioEvidenceDiagnostics: Sendable {
         session = StudioSession(defaults: isolated, controller: controller, recordingState: state, coordinator: coordinator,
             microphoneMonitor: microphone, cameraMonitor: camera,
             operations: .init(screenCaptureAuthorized: { CGPreflightScreenCaptureAccess() }, content: { _ in
-                try Self.preflight(sentinel: guardSentinel, ownerPolicy: guardOwnerPolicy)
+                try Self.preflight(sentinel: guardSentinel, userPolicy: guardUserPolicy)
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-                try Self.preflight(sentinel: guardSentinel, ownerPolicy: guardOwnerPolicy)
+                try Self.preflight(sentinel: guardSentinel, userPolicy: guardUserPolicy)
                 guard content.windows.contains(where: { $0.windowID == exactSourceID && $0.owningApplication?.processID == exactPID }) else {
                     throw StudioEvidenceFailure.sourceLost
                 }
@@ -189,10 +189,10 @@ private final class StudioEvidenceDiagnostics: Sendable {
         try publish()
     }
 
-    private static func preflight(sentinel: URL, ownerPolicy: StudioEvidenceOwnerPolicy) throws {
+    private static func preflight(sentinel: URL, userPolicy: StudioEvidenceUserPolicy) throws {
         let facts = try sentinel.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
         guard facts.isRegularFile == true, facts.isSymbolicLink != true,
-              CGPreflightScreenCaptureAccess(), ownerPolicy.permitsIdle(idleSeconds), !Task.isCancelled else {
+              CGPreflightScreenCaptureAccess(), userPolicy.permitsIdle(idleSeconds), !Task.isCancelled else {
             throw StudioEvidenceFailure.unsafeEnvironment
         }
     }
@@ -203,10 +203,10 @@ private final class StudioEvidenceDiagnostics: Sendable {
     }
 
     private func checkEnvironment() throws {
-        try Self.preflight(sentinel: sentinel, ownerPolicy: ownerPolicy)
+        try Self.preflight(sentinel: sentinel, userPolicy: userPolicy)
         guard output.path == LibraryFiles.physicalPath(output),
               !NSApp.isActive, !sourceWindow.isKeyWindow, !studioWindow.isKeyWindow,
-              ownerPolicy.permitsActivity(idleSeconds: Self.idleSeconds,
+              userPolicy.permitsActivity(idleSeconds: Self.idleSeconds,
                 frontmostUnchanged: (NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0) == baselineFrontmost,
                 cursorUnchanged: CGEvent(source: nil)?.location == baselineCursor),
               sourceWindow.isVisible, studioWindow.isVisible else { throw StudioEvidenceFailure.unsafeEnvironment }
@@ -354,8 +354,8 @@ private final class StudioEvidenceDiagnostics: Sendable {
     private var activityFacts: [String: Any] {
         let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
         let cursor = CGEvent(source: nil)?.location
-        return ["allowActiveOwner": ownerPolicy.allowActiveOwner,
-            "ownerActivityMode": ownerPolicy.allowActiveOwner ? "authorized-active-owner" : "strict-idle",
+        return ["allowActiveUser": userPolicy.allowActiveUser,
+            "userActivityMode": userPolicy.allowActiveUser ? "authorized-active-user" : "strict-idle",
             "idleSeconds": Self.idleSeconds, "frontmostPID": frontmost,
             "cursor": cursor.map { [$0.x, $0.y] as Any } ?? NSNull(),
             "frontmostUnchanged": frontmost == baselineFrontmost,
