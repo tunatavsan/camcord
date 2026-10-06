@@ -1,10 +1,5 @@
 .build/
 dist/
-.superpowers/
 .DS_Store
 *.mov
 *.mp4
-
-.playwright-mcp/
-.claude/
-skills-lock.json
