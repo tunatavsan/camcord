@@ -38,7 +38,7 @@
 			<key>NSMenuItem</key>
 			<dict>
 				<key>default</key>
-				<string>Camcord ile Metni Çıkar</string>
+				<string>Extract Text with Camcord</string>
 			</dict>
 			<key>NSMessage</key>
 			<string>extractText</string>
