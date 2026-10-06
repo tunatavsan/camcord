@@ -4,8 +4,8 @@ import SwiftUI
 
 // A hidden Design Lab that renders four specimens — the recording hub, a camera tile, a panel
 // card and a sidebar row — in REAL Liquid Glass, with blur-motion, in each design direction's
-// key tokens. Its job is to prove (or disprove) that native can match the directions' HTML
-// prototypes. Opened from the status menu with ⌥ held.
+// key tokens, so the directions can be compared natively side by side. Opened from the status
+// menu with ⌥ held.
 
 /// One design direction's key tokens, as far as the four specimens need them.
 struct LabDirection: Identifiable, Hashable {

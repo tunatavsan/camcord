@@ -1,9 +1,9 @@
 import SwiftUI
 
-// The design directions' key tokens, taken from each direction's HTML prototype. Backdrops are
-// the prototypes' own window backgrounds, light then dark.
+// The design directions' key tokens. Backdrops are each direction's window backgrounds, light
+// then dark.
 extension LabDirection {
-    /// Graphite first: it is the reference direction.
+    /// Graphite first: the app's window shape and spacing come from it.
     static let all: [LabDirection] = [graphite, frost, console, candy]
 
     static let graphite = LabDirection(
