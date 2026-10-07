@@ -359,7 +359,7 @@ private struct HostView: NSViewRepresentable {
 
 /// The Lab's pages: the token and component galleries, and the design-direction specimens.
 enum DesignLabPage: String, CaseIterable, Identifiable {
-    case tokens, components, directions
+    case tokens, components, window, directions
     var id: String { rawValue }
 }
 
@@ -386,6 +386,7 @@ struct DesignLabRoot: View {
             switch state.page {
             case .tokens: TokenGallery()
             case .components: ComponentGallery()
+            case .window: WindowKitGallery()
             case .directions: DesignLabView(directions: LabDirection.all)
             }
         }
