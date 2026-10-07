@@ -12,6 +12,8 @@ struct DesignTokenLiteralTests {
     /// Files and folders (relative to the package root) whose Swift must use tokens.
     static let enforced = [
         "Sources/Camcord/App/Design/Components",
+        "Sources/Camcord/App/Design/Window",
+        "Sources/Camcord/App/DesignLab/WindowKitGallery.swift",
         "Sources/Camcord/App/DesignLab/TokenGallery.swift",
         "Sources/Camcord/App/DesignLab/ComponentGallery.swift",
         "Sources/Camcord/App/MainWindow",
