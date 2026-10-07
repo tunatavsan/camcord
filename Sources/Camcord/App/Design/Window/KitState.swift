@@ -162,28 +162,50 @@ private struct KitStyledLabel: View {
     }
 }
 
-/// What lies under a kit control's content: the selection fill, the pressed tone (the panel's
-/// pressed ink) and the keyboard focus ring, in the control's own shape. `radius` nil is a capsule.
+/// What lies under a kit control's content: the selection fill and the pressed tone (the
+/// panel's pressed ink), in the control's own shape, and the keyboard focus ring just outside
+/// it. Fill means chosen or pressed; hover is light, never a fill. `radius` nil is a capsule.
 struct KitControlBackground: View {
     var radius: CGFloat?
     var selected = false
-    var hovered = false
+    var pressedFill = true
     @Environment(\.kitButtonPressed) private var pressed
     @Environment(\.kitButtonFocused) private var focused
 
     var body: some View {
+        // Nothing at all at rest: an empty shape still costs a layer and edges in a capture.
         ZStack {
-            shape.fill(pressed ? Theme.Palette.pressed.color
-                       : selected ? Theme.Palette.selection.color
-                       : hovered ? Theme.Palette.hover.color : .clear)
-            if focused {
-                shape.stroke(Theme.Window.Ink.focusRing, lineWidth: Theme.Window.Layout.focusRing)
+            if pressed && pressedFill {
+                shape.fill(Theme.Palette.pressed.color)
+            } else if selected {
+                shape.fill(Theme.Palette.selection.color)
             }
+            if focused { KitFocusRing(radius: radius) }
         }
     }
 
     private var shape: AnyShape {
         if let radius { AnyShape(RoundedRectangle(cornerRadius: radius, style: .continuous)) } else { AnyShape(Capsule()) }
+    }
+}
+
+/// The system focus ring, concentric with the control and drawn wholly outside it.
+struct KitFocusRing: View {
+    var radius: CGFloat?
+    private let outset = Theme.Window.Layout.focusRing + 1
+
+    var body: some View {
+        Group {
+            if let radius {
+                RoundedRectangle(cornerRadius: radius + outset, style: .continuous)
+                    .strokeBorder(Theme.Window.Ink.focusRing, lineWidth: Theme.Window.Layout.focusRing)
+            } else {
+                Capsule().strokeBorder(Theme.Window.Ink.focusRing, lineWidth: Theme.Window.Layout.focusRing)
+            }
+        }
+        .padding(-outset)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 

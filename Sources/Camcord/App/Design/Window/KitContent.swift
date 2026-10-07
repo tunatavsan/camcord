@@ -103,6 +103,12 @@ struct KitCard<Picture: View, Badge: View>: View {
             .aspectRatio(aspect, contentMode: .fit)
             .overlay(alignment: .topLeading) { badge.padding(Theme.Library.badgeInset) }
             .clipShape(.rect(cornerRadius: Theme.Radius.thumb, style: .continuous))
+            // Outside the selection ring, so a focused chosen card shows both.
+            .overlay {
+                if state.focused {
+                    KitFocusRing(radius: Theme.Radius.thumb + Theme.Space.xs).padding(-Theme.Space.xs)
+                }
+            }
             .overlay {
                 RoundedRectangle(cornerRadius: Theme.Radius.thumb + Theme.Space.xs, style: .continuous)
                     .strokeBorder(Theme.Palette.ink.color, lineWidth: Theme.Library.selectionLine)
@@ -171,8 +177,7 @@ struct KitListRow<Leading: View, Trailing: View>: View {
         }
         .padding(.horizontal, Theme.Space.m)
         .padding(.vertical, Theme.Space.s - 2)
-        .background(KitControlBackground(radius: Theme.Window.Layout.rowRadius, selected: state.selected,
-                                         hovered: state.lifted))
+        .background(KitControlBackground(radius: Theme.Window.Layout.rowRadius, selected: state.selected))
         .overlay(alignment: .leading) {
             if state.selected {
                 Capsule().fill(Theme.Palette.ink.color)
