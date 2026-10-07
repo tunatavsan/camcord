@@ -4,7 +4,7 @@ import SwiftUI
 /// hovered, a sibling hovered, pressed, chosen, disabled. The top row is live, to try with the
 /// pointer; the rows below draw each state from `KitState`.
 struct WindowKitGallery: View {
-    static let size = CGSize(width: 1340, height: 900)
+    static let size = CGSize(width: 1480, height: 1220)
 
     private static let states: [(String, KitState)] = [
         ("rest", KitState()),
@@ -12,6 +12,7 @@ struct WindowKitGallery: View {
         ("sibling", KitState(focus: false)),
         ("pressed", KitState(focus: true, pressed: true)),
         ("selected", KitState(selected: true)),
+        ("focused", KitState(focused: true)),
         ("disabled", KitState(enabled: false)),
     ]
 
@@ -39,6 +40,7 @@ struct WindowKitGallery: View {
         .padding(Theme.Window.Layout.ring)
         .frame(width: Self.size.width, height: Self.size.height)
         .foregroundStyle(Theme.Palette.ink.color)
+        .tint(Theme.Palette.ink.color)
         .kitTray()
     }
 
@@ -84,7 +86,8 @@ struct WindowKitGallery: View {
             HStack(spacing: Theme.Space.l) {
                 HStack(spacing: Theme.Space.xs) {
                     ForEach(["all", "screenshots", "recordings"], id: \.self) { id in
-                        KitChip(symbol: nil, title: Text(verbatim: id.capitalized), count: id.count * 7,
+                        KitChip(symbol: nil, title: Text(verbatim: id.capitalized),
+                                count: ["all": 376, "screenshots": 337, "recordings": 39][id],
                                 selected: filter == id, mark: chipMark) {
                             withAnimation(Theme.Window.Motion.select) { filter = id }
                         }
@@ -115,20 +118,19 @@ struct WindowKitGallery: View {
                              preview: state) {}
             KitCapsuleButton(title: Text(verbatim: "Export"), symbol: "square.and.arrow.up", preview: state) {}
             KitLinkButton(title: Text(verbatim: "All"), preview: state) {}
-            KitCard(title: Text(verbatim: "Screenshot 17:30"), detail: Text(verbatim: "1920×1080"), selected: state.selected,
-                    preview: state) {
+            KitCard(title: Text(verbatim: "Screenshot Oct 7, 2026 at 17.30.12"), detail: Text(verbatim: "1920×1080"),
+                    selected: state.selected, preview: state) {
                 Image(systemName: "photo").foregroundStyle(Theme.Palette.ink3.color)
             }
-            .frame(width: 120)
-            KitListRow(title: Text(verbatim: "Recording 12:04"), detail: Text(verbatim: "01:24 · 2.4 MB"),
+            .frame(width: 170)
+            KitListRow(title: Text(verbatim: "Recording Oct 7, 2026 at 12.04.55"), detail: Text(verbatim: "01:24 · 2.4 MB"),
                        selected: state.selected, preview: state) {
                 Image(systemName: "video").foregroundStyle(Theme.Palette.ink2.color)
             } trailing: {
-                KitKeyBadge(key: "⌘O", lit: state.lifted)
+                Text(verbatim: "12:04").font(Theme.Window.Font.data).foregroundStyle(Theme.Palette.ink3.color)
             }
-            .frame(width: 210)
-            .disabled(!state.enabled)
+            .frame(width: 280)
         }
-        .frame(height: 92)
+        .frame(height: 126)
     }
 }

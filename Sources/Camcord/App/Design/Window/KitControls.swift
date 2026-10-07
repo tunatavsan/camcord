@@ -5,7 +5,7 @@ import SwiftUI
 // pointer, its hover group and the environment.
 
 /// An icon-only button: the panel's destination icons. Hovered it rises and glows; the other
-/// members of its group step back.
+/// members of its group step back. Chosen (a toggle that is on) it sits on the selection fill.
 struct KitIconButton: View {
     let symbol: String
     let title: Text
@@ -25,9 +25,11 @@ struct KitIconButton: View {
                 .foregroundStyle(state.selected ? Theme.Palette.ink.color : Theme.Palette.ink2.color)
                 .kitLift(lift)
                 .frame(width: Theme.Window.Layout.iconButton, height: Theme.Window.Layout.iconButton)
+                .background(KitControlBackground(radius: Theme.Window.Layout.iconRadius, selected: state.selected))
                 .opacity(lift.opacity)
                 .contentShape(.rect)
                 .kitPressed(state.pressed)
+                .kitPreview(preview)
         }
         .buttonStyle(KitPressStyle())
         .onHover { hover.update(inside: $0) }
@@ -39,7 +41,7 @@ struct KitIconButton: View {
 }
 
 /// A symbol over its name: the panel's capture tools. Hovered, the symbol rises and its detail
-/// (a shortcut) takes the name's place.
+/// (a shortcut) takes the name's place, as in the panel; the name stays in the tooltip.
 struct KitToolButton: View {
     let symbol: String
     let title: Text
@@ -73,16 +75,19 @@ struct KitToolButton: View {
                 }
                 KitMark(visible: state.selected, mark: mark)
             }
-            .foregroundStyle(state.selected || mark == nil ? Theme.Palette.ink.color : Theme.Palette.ink2.color)
-            .padding(.horizontal, Theme.Space.xs)
+            .foregroundStyle(state.selected || mark == nil ? Theme.Palette.ink.color : Theme.Palette.ink3.color)
+            .padding(.horizontal, Theme.Space.s)
             .frame(height: Theme.Window.Layout.toolHeight)
+            .background(KitControlBackground(radius: Theme.Radius.box))
             .opacity(lift.opacity)
             .contentShape(.rect)
             .kitPressed(state.pressed)
+            .kitPreview(preview)
         }
         .buttonStyle(KitPressStyle())
         .onHover { hover.update(inside: $0) }
         .animation(reduceMotion ? nil : Theme.Window.Motion.liftTool, value: state)
+        .help(Text(verbatim: detail ?? ""))
         .accessibilityLabel(title)
         .accessibilityHint(Text(verbatim: detail ?? ""))
         .accessibilityAddTraits(state.selected ? .isSelected : [])
@@ -117,6 +122,7 @@ struct KitChip: View {
     var preview: KitState?
     let action: () -> Void
     @State private var hover = KitHover()
+    @Namespace private var fallbackMark
     @Environment(\.isEnabled) private var enabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -142,9 +148,11 @@ struct KitChip: View {
             }
             .padding(.horizontal, Theme.Space.s - 2)
             .frame(height: Theme.Window.Layout.chipHeight)
+            .background(KitControlBackground(radius: Theme.Radius.control))
             .opacity(lift.opacity)
             .contentShape(.rect)
             .kitPressed(state.pressed)
+            .kitPreview(preview)
         }
         .buttonStyle(KitPressStyle())
         .onHover { hover.update(inside: $0) }
@@ -152,8 +160,6 @@ struct KitChip: View {
         .accessibilityLabel(title)
         .accessibilityAddTraits(state.selected ? .isSelected : [])
     }
-
-    @Namespace private var fallbackMark
 }
 
 /// A row of tabs in the panel's tool look, with the mark sliding under the chosen one.
@@ -186,7 +192,8 @@ struct KitTabStrip<ID: Hashable>: View {
 }
 
 /// The panel's call to action: a capsule that blooms on hover. `primary` fills with its tint
-/// (record red by default); `secondary` is the quieter partner.
+/// (record red by default); `secondary` is the quieter partner. Its width never changes: the
+/// shortcut's room is kept while it is hidden, so hovering never pushes a neighbour.
 struct KitCapsuleButton: View {
     enum Role { case primary, secondary }
 
@@ -206,35 +213,48 @@ struct KitCapsuleButton: View {
         let state = preview ?? KitState(focus: hovered ? true : nil, enabled: enabled)
         let bloom = state.lifted
         Button(action: action) {
-            HStack(spacing: Theme.Space.s) {
-                if let symbol {
-                    Image(systemName: symbol).font(Theme.Window.Font.bodyStrong)
-                        .scaleEffect(bloom && !reduceMotion ? Theme.Window.Bloom.symbolScale : 1)
-                }
-                title.font(Theme.Window.Font.bodyStrong).lineLimit(1)
-                if let shortcut, bloom {
-                    Text(verbatim: shortcut).font(Theme.Window.Font.data).opacity(Theme.Window.Bloom.shortcut).transition(.opacity)
-                }
+            // The hidden full content sizes the capsule; the visible content stays centred in it
+            // and makes room for the shortcut when it blooms.
+            ZStack {
+                content(showsShortcut: true, bloom: false).hidden()
+                content(showsShortcut: bloom, bloom: bloom)
             }
             .foregroundStyle(role == .primary ? onTint : Theme.Palette.ink.color)
             .padding(.horizontal, Theme.Space.l)
             .frame(height: Theme.Window.Layout.capsuleHeight)
-            .background(fill(bloom: bloom, enabled: state.enabled), in: .capsule)
+            .background(fill(bloom: bloom), in: .capsule)
+            .background(KitControlBackground())
             .overlay(Capsule().strokeBorder(edge(bloom: bloom), lineWidth: Theme.Window.Layout.hairline))
+            .compositingGroup()
             .shadow(color: glow(bloom: bloom), radius: role == .primary ? Theme.Window.Bloom.radius : Theme.Window.Bloom.quietRadius,
                     y: role == .primary ? Theme.Window.Bloom.drop : Theme.Window.Bloom.quietDrop)
-            .opacity(state.enabled ? 1 : Theme.Window.Bloom.disabledContent)
+            .opacity(state.enabled ? 1 : Theme.Window.Lift.disabled)
             .contentShape(.capsule)
             .kitPressed(state.pressed)
+            .kitPreview(preview)
         }
         .buttonStyle(KitPressStyle())
         .onHover { hovered = $0 }
         .animation(reduceMotion ? nil : Theme.Window.Motion.bloom, value: state)
     }
 
-    private func fill(bloom: Bool, enabled: Bool) -> Color {
+    private func content(showsShortcut: Bool, bloom: Bool) -> some View {
+        HStack(spacing: Theme.Space.s) {
+            if let symbol {
+                Image(systemName: symbol).font(Theme.Window.Font.bodyStrong)
+                    .scaleEffect(bloom && !reduceMotion ? Theme.Window.Bloom.symbolScale : 1)
+            }
+            title.font(Theme.Window.Font.bodyStrong).lineLimit(1)
+            if let shortcut, showsShortcut {
+                Text(verbatim: shortcut).font(Theme.Window.Font.data).opacity(Theme.Window.Bloom.shortcut)
+                    .transition(.opacity)
+            }
+        }
+    }
+
+    private func fill(bloom: Bool) -> Color {
         switch role {
-        case .primary: tint.opacity(enabled ? (bloom ? 1 : Theme.Window.Bloom.restFill) : Theme.Window.Bloom.disabledFill)
+        case .primary: tint.opacity(bloom ? 1 : Theme.Window.Bloom.restFill)
         case .secondary: bloom ? Theme.Palette.pressed.color : Theme.Palette.hover.color
         }
     }
@@ -255,10 +275,12 @@ struct KitLinkButton: View {
     var preview: KitState?
     let action: () -> Void
     @State private var hovered = false
+    @Environment(\.isEnabled) private var enabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let lit = preview?.lifted ?? hovered
+        let state = preview ?? KitState(focus: hovered ? true : nil, enabled: enabled)
+        let lit = state.lifted
         Button(action: action) {
             HStack(spacing: 2) {
                 title
@@ -267,15 +289,21 @@ struct KitLinkButton: View {
             }
             .font(Theme.Window.Font.captionStrong)
             .foregroundStyle(lit ? Theme.Palette.ink.color : Theme.Palette.ink2.color)
+            .padding(.horizontal, Theme.Space.xs)
+            .frame(minHeight: Theme.Window.Layout.linkHeight)
+            .background(KitControlBackground(radius: Theme.Radius.badge))
+            .opacity(state.enabled ? 1 : Theme.Window.Lift.disabled)
             .contentShape(.rect)
+            .kitPressed(state.pressed)
+            .kitPreview(preview)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(KitPressStyle())
         .onHover { hovered = $0 }
         .animation(reduceMotion ? nil : Theme.Window.Motion.bloom, value: lit)
     }
 }
 
-/// A shortcut in a small rounded badge (⌘1).
+/// A shortcut as the panel writes it: plain SF Mono, quiet until its row is lit (⌘1).
 struct KitKeyBadge: View {
     let key: String
     var lit = false
@@ -284,9 +312,6 @@ struct KitKeyBadge: View {
         Text(verbatim: key)
             .font(Theme.Window.Font.data)
             .foregroundStyle(lit ? Theme.Palette.ink2.color : Theme.Palette.ink3.color)
-            .padding(.horizontal, Theme.Window.Layout.keyBadgeInset)
-            .frame(height: Theme.Window.Layout.keyBadgeHeight)
-            .background(Theme.Window.Ink.keyBadge.color, in: .rect(cornerRadius: Theme.Radius.badge, style: .continuous))
             .accessibilityHidden(true)
     }
 }

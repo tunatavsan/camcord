@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// A sidebar row: the panel's tool rise on its symbol, its siblings stepping back, and the
-/// chosen row marked by a short ink bar that slides between rows (never the user's accent).
+/// chosen row in full ink beside a short ink bar that slides between rows (no fill, never the
+/// user's accent).
 struct KitNavRow: View {
     let symbol: String
     let title: Text
@@ -19,25 +20,25 @@ struct KitNavRow: View {
         let lift = KitLift.resolve(state, kind: .row, reduceMotion: reduceMotion)
         Button(action: action) {
             HStack(spacing: Theme.Space.s + 1) {
-                InkSymbol(name: symbol, pointSize: Theme.Window.Layout.symbolPoint, canvas: Theme.Window.Layout.symbolCanvas)
+                InkSymbol(name: symbol, pointSize: Theme.Window.Layout.symbolPoint,
+                          weight: state.selected ? .semibold : .medium, canvas: Theme.Window.Layout.symbolCanvas)
                     .kitLift(lift)
-                title.font(Theme.Window.Font.row).lineLimit(1)
-                Spacer(minLength: Theme.Space.xs)
-                if let key { KitKeyBadge(key: key, lit: state.lifted || state.selected) }
+                    .opacity(lift.opacity)
+                Group {
+                    title.font(state.selected ? Theme.Window.Font.bodyStrong : Theme.Window.Font.row).lineLimit(1)
+                    Spacer(minLength: Theme.Space.xs)
+                    if let key { KitKeyBadge(key: key, lit: state.lifted || state.selected) }
+                }
+                .opacity(lift.textOpacity)
             }
             .foregroundStyle(state.selected ? Theme.Palette.ink.color : Theme.Palette.ink2.color)
             .padding(.horizontal, Theme.Window.Layout.rowInset)
             .frame(height: Theme.Window.Layout.rowHeight)
-            .background {
-                if state.selected {
-                    RoundedRectangle(cornerRadius: Theme.Window.Layout.rowRadius, style: .continuous)
-                        .fill(Theme.Palette.hover.color)
-                }
-            }
+            .background(KitControlBackground(radius: Theme.Window.Layout.rowRadius))
             .overlay(alignment: .leading) { selectionMark(visible: state.selected) }
-            .opacity(lift.opacity)
             .contentShape(.rect)
             .kitPressed(state.pressed, wide: true)
+            .kitPreview(preview)
         }
         .buttonStyle(KitPressStyle(wide: true))
         .onHover { hover.update(inside: $0) }
@@ -88,10 +89,11 @@ struct KitCard<Picture: View, Badge: View>: View {
     @ViewBuilder var picture: Picture
     @ViewBuilder var badge: Badge
     @State private var hovered = false
+    @Environment(\.isEnabled) private var enabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let state = preview ?? KitState(focus: hovered ? true : nil, selected: selected)
+        let state = preview ?? KitState(focus: hovered ? true : nil, selected: selected, enabled: enabled)
         let lifted = state.lifted && !reduceMotion
         VStack(alignment: .leading, spacing: Theme.Space.s - 1) {
             ZStack {
@@ -112,11 +114,14 @@ struct KitCard<Picture: View, Badge: View>: View {
             .scaleEffect(lifted ? Theme.Window.Lift.tileScale : 1)
             .offset(y: lifted ? -Theme.Window.Lift.tileRise : 0)
             VStack(alignment: .leading, spacing: 1) {
-                title.font(Theme.Window.Font.row).foregroundStyle(Theme.Palette.ink.color).lineLimit(1)
+                title.font(Theme.Window.Font.row).foregroundStyle(Theme.Palette.ink.color)
+                    .lineLimit(1).truncationMode(.middle)
                 detail.font(Theme.Window.Font.dataBody).foregroundStyle(Theme.Palette.ink3.color).lineLimit(1)
             }
             .padding(.horizontal, Theme.Library.metaInset)
         }
+        .opacity(state.enabled ? 1 : Theme.Window.Lift.disabled)
+        .kitPressed(state.pressed, wide: true)
         .contentShape(.rect)
         .onHover { hovered = $0 }
         .animation(reduceMotion ? nil : (state.lifted ? Theme.Window.Motion.lift : Theme.Window.Motion.settle),
@@ -134,8 +139,9 @@ extension KitCard where Badge == EmptyView {
     }
 }
 
-/// A list row: leading picture or symbol, a name over a detail, trailing content. Hover lays
-/// the panel's faint hover fill under it; chosen, the selection fill.
+/// A list row: leading picture or symbol, a name over a detail, trailing content. Hovered, its
+/// leading symbol rises and glows over the faint hover fill; chosen, the row is marked by the
+/// sidebar's ink bar over the selection fill.
 struct KitListRow<Leading: View, Trailing: View>: View {
     let title: Text
     var detail: Text?
@@ -144,30 +150,42 @@ struct KitListRow<Leading: View, Trailing: View>: View {
     @ViewBuilder var leading: Leading
     @ViewBuilder var trailing: Trailing
     @State private var hovered = false
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let state = preview ?? KitState(focus: hovered ? true : nil, selected: selected)
+        let state = preview ?? KitState(focus: hovered ? true : nil, selected: selected, enabled: enabled)
+        let lift = KitLift.resolve(state, kind: .symbol, reduceMotion: reduceMotion)
         HStack(spacing: Theme.Space.m) {
-            leading
+            leading.kitLift(lift)
             VStack(alignment: .leading, spacing: 1) {
-                title.font(Theme.Window.Font.row).foregroundStyle(Theme.Palette.ink.color).lineLimit(1)
+                title.font(Theme.Window.Font.row).foregroundStyle(Theme.Palette.ink.color)
+                    .lineLimit(1).truncationMode(.middle)
                 if let detail {
                     detail.font(Theme.Window.Font.dataBody).foregroundStyle(Theme.Palette.ink3.color).lineLimit(1)
                 }
             }
+            .layoutPriority(1)
             Spacer(minLength: Theme.Space.s)
-            trailing
+            trailing.fixedSize()
         }
         .padding(.horizontal, Theme.Space.m)
         .padding(.vertical, Theme.Space.s - 2)
-        .background {
-            RoundedRectangle(cornerRadius: Theme.Window.Layout.rowRadius, style: .continuous)
-                .fill(state.selected ? Theme.Palette.selection.color
-                      : state.lifted ? Theme.Palette.hover.color : .clear)
+        .background(KitControlBackground(radius: Theme.Window.Layout.rowRadius, selected: state.selected,
+                                         hovered: state.lifted))
+        .overlay(alignment: .leading) {
+            if state.selected {
+                Capsule().fill(Theme.Palette.ink.color)
+                    .frame(width: Theme.Window.Layout.markWidth, height: Theme.Window.Layout.markHeight)
+                    .padding(.leading, Theme.Space.xs - 1)
+            }
         }
+        .opacity(state.enabled ? 1 : Theme.Window.Lift.disabled)
+        .kitPressed(state.pressed, wide: true)
+        .kitPreview(preview)
         .contentShape(.rect)
         .onHover { hovered = $0 }
-        .animation(Theme.Window.Motion.swap, value: state)
+        .animation(reduceMotion ? nil : Theme.Window.Motion.lift, value: state)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(state.selected ? .isSelected : [])
     }

@@ -6,10 +6,10 @@ import Testing
 @Suite("Window kit")
 @MainActor
 struct WindowKitTests {
-    @Test("a hovered control rises and glows; its siblings step back, rows less than symbols")
+    @Test("a hovered control rises and glows; its siblings step back, a row's words less than its symbol")
     func liftFollowsThePanel() {
         let rest = KitLift.resolve(KitState(), kind: .symbol, reduceMotion: false)
-        #expect(rest == KitLift(scale: 1, rise: 0, glow: 0, opacity: 1))
+        #expect(rest == KitLift(scale: 1, rise: 0, glow: 0, opacity: 1, textOpacity: 1))
 
         let hovered = KitLift.resolve(KitState(focus: true), kind: .symbol, reduceMotion: false)
         #expect(hovered.scale == Theme.Window.Lift.symbolScale)
@@ -20,14 +20,16 @@ struct WindowKitTests {
         #expect(tool.scale == Theme.Window.Lift.toolScale && tool.rise == -Theme.Window.Lift.toolRise)
 
         #expect(KitLift.resolve(KitState(focus: false), kind: .symbol, reduceMotion: false).opacity == Theme.Window.Lift.sibling)
-        #expect(KitLift.resolve(KitState(focus: false), kind: .row, reduceMotion: false).opacity == Theme.Window.Lift.rowSibling)
-        #expect(Theme.Window.Lift.rowSibling > Theme.Window.Lift.sibling)
+        let row = KitLift.resolve(KitState(focus: false), kind: .row, reduceMotion: false)
+        #expect(row.opacity == Theme.Window.Lift.sibling)
+        #expect(row.textOpacity == Theme.Window.Lift.rowTextSibling && row.textOpacity > row.opacity)
     }
 
     @Test("a disabled control never rises and stays quiet even when hovered")
     func disabledStaysDown() {
         let lift = KitLift.resolve(KitState(focus: true, enabled: false), kind: .symbol, reduceMotion: false)
-        #expect(lift == KitLift(scale: 1, rise: 0, glow: 0, opacity: Theme.Window.Lift.disabled))
+        #expect(lift == KitLift(scale: 1, rise: 0, glow: 0, opacity: Theme.Window.Lift.disabled,
+                                textOpacity: Theme.Window.Lift.disabled))
     }
 
     @Test("Reduce Motion keeps the glow and the stepping back, never the movement")
@@ -87,7 +89,54 @@ struct WindowKitTests {
         let hovered = try Self.render(row(KitState(focus: true)), size: size, dark: true, name: nil)
         let sibling = try Self.render(row(KitState(focus: false)), size: size, dark: true, name: nil)
         #expect(Self.difference(rest, hovered) > 0.005)
-        #expect(Self.difference(rest, sibling) > 0.005)
+        // A sibling dims its symbol to half and its words to three quarters: a smaller, real change.
+        #expect(Self.difference(rest, sibling) > 0.002)
+    }
+
+    @Test("quiet text stays readable on the opaque cells in every appearance")
+    func quietTextContrast() {
+        for variant in ThemeColor.Variant.allCases {
+            for cell in [Theme.Palette.glassSolidSidebar, Theme.Palette.glassSolidChrome] {
+                for ink in [Theme.Palette.ink2, Theme.Palette.ink3] {
+                    let base = cell.value(variant)
+                    let ratio = ThemeColor.RGBA.contrast(ink.value(variant).over(base), base)
+                    #expect(ratio >= 4.5, "\(ink.name) on \(cell.name), \(variant): \(ratio)")
+                }
+            }
+        }
+    }
+
+    @Test("hovering a capsule never changes its width, so it never pushes a neighbour")
+    func capsuleKeepsItsWidth() {
+        func width(_ state: KitState) -> CGFloat {
+            NSHostingView(rootView: KitCapsuleButton(title: Text(verbatim: "Record"), symbol: "record.circle",
+                                                     role: .primary, shortcut: "⌃⇧R", preview: state) {}).fittingSize.width
+        }
+        #expect(width(KitState()) == width(KitState(focus: true)))
+        #expect(width(KitState()) == width(KitState(focus: true, pressed: true)))
+    }
+
+    @Test("a chosen icon button, a focused row and a pressed row each draw differently from rest")
+    func statesAreVisible() throws {
+        let iconSize = CGSize(width: 46, height: 46)
+        func icon(_ state: KitState) -> some View {
+            KitIconButton(symbol: "sidebar.right", title: Text(verbatim: "Inspector"), preview: state) {}
+                .padding(Theme.Space.s)
+        }
+        let rest = try Self.render(icon(KitState()), size: iconSize, dark: true, name: nil)
+        let chosen = try Self.render(icon(KitState(selected: true)), size: iconSize, dark: true, name: nil)
+        #expect(Self.difference(rest, chosen) > 0.02)
+
+        let rowSize = CGSize(width: 216, height: 48)
+        func row(_ state: KitState) -> some View {
+            KitNavRow(symbol: "rectangle.stack", title: Text(verbatim: "Library"), key: "⌘1", selected: false,
+                      preview: state) {}
+                .frame(width: 200)
+                .padding(Theme.Space.s)
+        }
+        let restRow = try Self.render(row(KitState()), size: rowSize, dark: false, name: nil)
+        #expect(Self.difference(restRow, try Self.render(row(KitState(focused: true)), size: rowSize, dark: false, name: nil)) > 0.01)
+        #expect(Self.difference(restRow, try Self.render(row(KitState(pressed: true)), size: rowSize, dark: false, name: nil)) > 0.01)
     }
 
     // MARK: - Rendering

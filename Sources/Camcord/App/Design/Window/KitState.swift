@@ -13,12 +13,15 @@ struct KitState: Equatable, Sendable {
     var pressed = false
     var selected = false
     var enabled = true
+    /// Keyboard focus: the system's focus ring around the control.
+    var focused = false
 
-    init(focus: Bool? = nil, pressed: Bool = false, selected: Bool = false, enabled: Bool = true) {
+    init(focus: Bool? = nil, pressed: Bool = false, selected: Bool = false, enabled: Bool = true, focused: Bool = false) {
         self.focus = focus
         self.pressed = pressed
         self.selected = selected
         self.enabled = enabled
+        self.focused = focused
     }
 
     /// Only an enabled control rises.
@@ -41,21 +44,19 @@ struct KitLift: Equatable, Sendable {
     var rise: CGFloat
     var glow: Double
     var opacity: Double
+    /// A row's words: they step back less than its symbol.
+    var textOpacity: Double
 
     static func resolve(_ state: KitState, kind: Kind, reduceMotion: Bool) -> KitLift {
         typealias L = Theme.Window.Lift
         let moves = state.lifted && !reduceMotion
-        let opacity: Double = if !state.enabled {
-            L.disabled
-        } else if state.focus == false {
-            kind == .row ? L.rowSibling : L.sibling
-        } else {
-            1
-        }
+        let sibling = state.enabled && state.focus == false
+        let opacity: Double = !state.enabled ? L.disabled : sibling ? L.sibling : 1
         return KitLift(scale: moves ? (kind == .tool ? L.toolScale : L.symbolScale) : 1,
                        rise: moves ? -(kind == .tool ? L.toolRise : L.symbolRise) : 0,
                        glow: state.lifted ? L.glowOpacity : 0,
-                       opacity: opacity)
+                       opacity: opacity,
+                       textOpacity: kind == .row && sibling ? L.rowTextSibling : opacity)
     }
 
     /// How much a pressed control gives: a symbol the panel's 8 %, a wide surface 2 %.
@@ -134,10 +135,66 @@ private struct KitPressEffect: ViewModifier {
     }
 }
 
-/// Every window control gives a little under the pointer, like the panel's.
+extension EnvironmentValues {
+    /// Set by `KitPressStyle` on its label, so the label can draw its pressed tone and focus ring.
+    @Entry var kitButtonPressed = false
+    @Entry var kitButtonFocused = false
+}
+
+/// Every window control gives a little under the pointer, like the panel's, and tells its
+/// label whether it is pressed or has keyboard focus.
 struct KitPressStyle: ButtonStyle {
     var wide = false
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label.kitPressed(configuration.isPressed, wide: wide)
+    func makeBody(configuration: Configuration) -> some View { KitStyledLabel(configuration: configuration, wide: wide) }
+}
+
+private struct KitStyledLabel: View {
+    let configuration: ButtonStyleConfiguration
+    let wide: Bool
+    @Environment(\.isFocused) private var focused
+
+    var body: some View {
+        configuration.label
+            .environment(\.kitButtonPressed, configuration.isPressed)
+            .environment(\.kitButtonFocused, focused)
+            .kitPressed(configuration.isPressed, wide: wide)
+            .focusEffectDisabled()
+    }
+}
+
+/// What lies under a kit control's content: the selection fill, the pressed tone (the panel's
+/// pressed ink) and the keyboard focus ring, in the control's own shape. `radius` nil is a capsule.
+struct KitControlBackground: View {
+    var radius: CGFloat?
+    var selected = false
+    var hovered = false
+    @Environment(\.kitButtonPressed) private var pressed
+    @Environment(\.kitButtonFocused) private var focused
+
+    var body: some View {
+        ZStack {
+            shape.fill(pressed ? Theme.Palette.pressed.color
+                       : selected ? Theme.Palette.selection.color
+                       : hovered ? Theme.Palette.hover.color : .clear)
+            if focused {
+                shape.stroke(Theme.Window.Ink.focusRing, lineWidth: Theme.Window.Layout.focusRing)
+            }
+        }
+    }
+
+    private var shape: AnyShape {
+        if let radius { AnyShape(RoundedRectangle(cornerRadius: radius, style: .continuous)) } else { AnyShape(Capsule()) }
+    }
+}
+
+extension View {
+    /// A previewed control (the gallery, the tests) draws its pressed tone and focus ring from
+    /// its state; a live one takes them from its button style.
+    @ViewBuilder func kitPreview(_ state: KitState?) -> some View {
+        if let state {
+            environment(\.kitButtonPressed, state.pressed).environment(\.kitButtonFocused, state.focused)
+        } else {
+            self
+        }
     }
 }

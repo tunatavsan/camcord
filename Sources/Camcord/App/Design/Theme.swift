@@ -579,7 +579,8 @@ extension Theme {
             static let toolGlowRadius: CGFloat = 7
             /// A sibling of the hovered control. Rows carrying words step back less, to stay legible.
             static let sibling: Double = 0.5
-            static let rowSibling: Double = 0.6
+            /// A sibling row's words step back less than its symbol, so they stay readable.
+            static let rowTextSibling: Double = 0.75
             static let disabled: Double = 0.35
             static let press: CGFloat = 0.92
             /// A wide surface (a row, a card) gives less than a symbol: 8 % of 200 pt is a lurch.
@@ -603,7 +604,7 @@ extension Theme {
             static let rowSpacing: CGFloat = 2
             static let rowRadius: CGFloat = 9
             static let markWidth: CGFloat = 3
-            static let markHeight: CGFloat = 14
+            static let markHeight: CGFloat = 16
             static let chipMarkWidth: CGFloat = 16
             static let chipMarkHeight: CGFloat = 2
             static let symbolCanvas: CGFloat = 20
@@ -615,9 +616,10 @@ extension Theme {
             static let chipHeight: CGFloat = 30
             static let chipSymbolPoint: CGFloat = 11
             static let chipSymbolCanvas: CGFloat = 16
-            static let capsuleHeight: CGFloat = 36
-            static let keyBadgeHeight: CGFloat = 18
-            static let keyBadgeInset: CGFloat = 5
+            static let capsuleHeight: CGFloat = 40
+            static let linkHeight: CGFloat = 28
+            static let iconRadius: CGFloat = Radius.control
+            static let focusRing: CGFloat = 2
             static let headerHeight: CGFloat = 52
             static let hairline: CGFloat = 1
         }
@@ -625,8 +627,6 @@ extension Theme {
         /// The capsule's bloom (CapturePanelView's primary and secondary buttons).
         enum Bloom {
             static let restFill: Double = 0.92
-            static let disabledFill: Double = 0.5
-            static let disabledContent: Double = 0.5
             static let glow: Double = 0.45
             static let quietGlow: Double = 0.18
             static let radius: CGFloat = 10
@@ -644,7 +644,8 @@ extension Theme {
             static let rim = ThemeColor("windowRim", dark: C(0xFFFFFF, alpha: 0.16), light: C(0xFFFFFF, alpha: 0.55))
             static let capsuleEdge = ThemeColor("windowCapsuleEdge", dark: C(0xFFFFFF, alpha: 0.18), light: C(0xFFFFFF, alpha: 0.35))
             static let quietEdge = ThemeColor("windowQuietEdge", dark: C(0xFFFFFF, alpha: 0.08), light: C(0x14181E, alpha: 0.08))
-            static let keyBadge = ThemeColor("windowKeyBadge", dark: C(0xFFFFFF, alpha: 0.07), light: C(0x14181E, alpha: 0.06))
+            /// The system's keyboard focus colour: focus is the one place the window follows the user's accent.
+            static let focusRing = SwiftUI.Color(nsColor: .keyboardFocusIndicatorColor)
         }
     }
 }
