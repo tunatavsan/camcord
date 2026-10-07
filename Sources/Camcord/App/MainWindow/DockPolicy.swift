@@ -12,15 +12,17 @@ enum DockPolicy {
     }
 }
 
-/// Applies `DockPolicy` as the main window opens and closes and the setting changes. Only a
-/// CHANGE is applied: switching the policy is visible (the Dock animates, the menu bar swaps).
+/// Applies `DockPolicy` as Camcord's windows (the main window, Settings) open and close and the
+/// setting changes. Only a CHANGE is applied: switching the policy is visible (the Dock
+/// animates, the menu bar swaps).
 @MainActor
 final class DockController {
     typealias PolicySetter = @MainActor (NSApplication.ActivationPolicy) -> Void
 
     private let defaults: UserDefaults
     private let setPolicy: PolicySetter
-    private(set) var windowOpen = false
+    private var openWindows: Set<String> = []
+    var windowOpen: Bool { !openWindows.isEmpty }
     private(set) var applied: NSApplication.ActivationPolicy?
     private var observer: NSObjectProtocol?
 
@@ -42,13 +44,14 @@ final class DockController {
 
     var mode: DockIconMode { DockIconMode.load(from: defaults) }
 
-    func windowDidOpen() {
-        windowOpen = true
+    /// `window` names which of Camcord's windows opened; the icon stays while any is open.
+    func windowDidOpen(_ window: String = "main") {
+        openWindows.insert(window)
         apply()
     }
 
-    func windowDidClose() {
-        windowOpen = false
+    func windowDidClose(_ window: String = "main") {
+        openWindows.remove(window)
         apply()
     }
 
