@@ -90,43 +90,47 @@ struct EditorWorkspace: View {
             EditorBackgroundInspector(session: session)
                 .inspectorColumnWidth(Theme.Editor.inspectorWidth)
         }
-        .toolbar {
+        .safeAreaInset(edge: .top, spacing: 0) {
             if isActive {
-                ToolbarItemGroup(placement: .navigation) {
-                    Button("Undo", systemImage: "arrow.uturn.backward", action: { if session.isActive { session.undo() } })
-                        .disabled(!session.canUndo).keyboardShortcut("z", modifiers: .command)
-                    Button("Redo", systemImage: "arrow.uturn.forward", action: { if session.isActive { session.redo() } })
-                        .disabled(!session.canRedo).keyboardShortcut("z", modifiers: [.command, .shift])
-                }
-                ToolbarItem(placement: .principal) { EditorToolCapsule(session: session) }
-                ToolbarItemGroup(placement: .primaryAction) {
-                    Button("Background and frame", systemImage: "square.on.square") { guard session.isActive else { return }; session.showsBackgroundInspector.toggle() }
-                        .disabled(session.document == nil)
-                    Button { activity.perform { _ = await session.copy() } } label: { Label("Copy", systemImage: "doc.on.doc") }
-                        .labelStyle(.titleAndIcon).buttonStyle(.glassProminent).tint(Theme.Palette.ink.color)
-                        .keyboardShortcut("c", modifiers: .command).disabled(unavailable)
-                    Button("Save…", systemImage: "square.and.arrow.down", action: { if session.isActive { session.chooseExport() } })
-                        .keyboardShortcut("s", modifiers: .command).disabled(unavailable)
-                    EditorShareButton(session: session).frame(width: Theme.Editor.toolWidth, height: Theme.Editor.toolHeight)
-                    Menu {
-                        Button("Open image…", systemImage: "folder", action: { if session.isActive { session.chooseImage() } })
-                        Divider()
-                        Button("Pin to Screen", systemImage: "pin") { activity.perform { await session.pin() } }.disabled(unavailable)
-                        Button("Quick Look", systemImage: "eye", action: showQuickLook).disabled(unavailable)
-                        Button("Show in Finder", systemImage: "folder") {
-                            if session.isActive, let url = session.document?.sourceURL { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-                        }.disabled(session.document?.sourceURL == nil)
-                        Divider()
-                        Button("Find sensitive text", systemImage: "text.viewfinder", action: { if session.isActive { session.findSensitiveText() } })
-                            .disabled(unavailable || session.isFindingText)
-                        Button("Reset crop") {
-                            if session.isActive, let bounds = session.document?.bounds { session.edit { $0.crop = bounds } }
-                        }.disabled(unavailable)
-                        if let hex = session.pixelHex {
-                            Button("Copy pixel color") { if session.isActive { session.copyHex(hex) } }
-                                .keyboardShortcut("c", modifiers: [.command, .shift])
-                        }
-                    } label: { Label("More", systemImage: "ellipsis") }
+                EditorChromeBar {
+                    Group {
+                        Button("Undo", systemImage: "arrow.uturn.backward", action: { if session.isActive { session.undo() } })
+                            .disabled(!session.canUndo).keyboardShortcut("z", modifiers: .command)
+                        Button("Redo", systemImage: "arrow.uturn.forward", action: { if session.isActive { session.redo() } })
+                            .disabled(!session.canRedo).keyboardShortcut("z", modifiers: [.command, .shift])
+                    }
+                    Spacer(minLength: Theme.Space.s)
+                    EditorToolCapsule(session: session)
+                    Spacer(minLength: Theme.Space.s)
+                    Group {
+                        Button("Background and frame", systemImage: "square.on.square") { guard session.isActive else { return }; session.showsBackgroundInspector.toggle() }
+                            .disabled(session.document == nil)
+                        Button { activity.perform { _ = await session.copy() } } label: { Label("Copy", systemImage: "doc.on.doc") }
+                            .labelStyle(.titleAndIcon).buttonStyle(.glassProminent).tint(Theme.Palette.ink.color)
+                            .keyboardShortcut("c", modifiers: .command).disabled(unavailable)
+                        Button("Save…", systemImage: "square.and.arrow.down", action: { if session.isActive { session.chooseExport() } })
+                            .keyboardShortcut("s", modifiers: .command).disabled(unavailable)
+                        EditorShareButton(session: session).frame(width: Theme.Editor.toolWidth, height: Theme.Editor.toolHeight)
+                        Menu {
+                            Button("Open image…", systemImage: "folder", action: { if session.isActive { session.chooseImage() } })
+                            Divider()
+                            Button("Pin to Screen", systemImage: "pin") { activity.perform { await session.pin() } }.disabled(unavailable)
+                            Button("Quick Look", systemImage: "eye", action: showQuickLook).disabled(unavailable)
+                            Button("Show in Finder", systemImage: "folder") {
+                                if session.isActive, let url = session.document?.sourceURL { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                            }.disabled(session.document?.sourceURL == nil)
+                            Divider()
+                            Button("Find sensitive text", systemImage: "text.viewfinder", action: { if session.isActive { session.findSensitiveText() } })
+                                .disabled(unavailable || session.isFindingText)
+                            Button("Reset crop") {
+                                if session.isActive, let bounds = session.document?.bounds { session.edit { $0.crop = bounds } }
+                            }.disabled(unavailable)
+                            if let hex = session.pixelHex {
+                                Button("Copy pixel color") { if session.isActive { session.copyHex(hex) } }
+                                    .keyboardShortcut("c", modifiers: [.command, .shift])
+                            }
+                        } label: { Label("More", systemImage: "ellipsis") }
+                    }
                 }
             }
         }
@@ -282,4 +286,17 @@ struct EditorOpeningConfirmationModifier: ViewModifier {
     }
     func waitForAutoOpen() async { await autoOpenTask?.value }
     isolated deinit { autoOpenTask?.cancel(); for task in actionTasks.values { task.cancel() } }
+}
+
+/// The editor's controls in a bar along the top of its cell: undo and redo, the tools, the
+/// output actions. The window has no toolbar of its own.
+private struct EditorChromeBar<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        HStack(spacing: Theme.Space.s) { content }
+            .buttonStyle(.borderless)
+            .padding(.horizontal, Theme.Space.m)
+            .frame(height: Theme.Window.Layout.headerHeight)
+    }
 }
