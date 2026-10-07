@@ -78,7 +78,7 @@ struct KitToolButton: View {
             .foregroundStyle(state.selected || mark == nil ? Theme.Palette.ink.color : Theme.Palette.ink3.color)
             .padding(.horizontal, Theme.Space.s)
             .frame(height: Theme.Window.Layout.toolHeight)
-            .background(KitControlBackground(radius: Theme.Radius.box))
+            .background(KitControlBackground(radius: Theme.Radius.control))
             .opacity(lift.opacity)
             .contentShape(.rect)
             .kitPressed(state.pressed)
@@ -225,9 +225,9 @@ struct KitCapsuleButton: View {
             .background(fill(bloom: bloom), in: .capsule)
             .background(KitControlBackground())
             .overlay(Capsule().strokeBorder(edge(bloom: bloom), lineWidth: Theme.Window.Layout.hairline))
-            .compositingGroup()
-            .shadow(color: glow(bloom: bloom), radius: role == .primary ? Theme.Window.Bloom.radius : Theme.Window.Bloom.quietRadius,
-                    y: role == .primary ? Theme.Window.Bloom.drop : Theme.Window.Bloom.quietDrop)
+            .shadow(color: glow(bloom: bloom),
+                    radius: bloom ? (role == .primary ? Theme.Window.Bloom.radius : Theme.Window.Bloom.quietRadius) : 0,
+                    y: bloom ? (role == .primary ? Theme.Window.Bloom.drop : Theme.Window.Bloom.quietDrop) : 0)
             .opacity(state.enabled ? 1 : Theme.Window.Lift.disabled)
             .contentShape(.capsule)
             .kitPressed(state.pressed)
@@ -291,7 +291,7 @@ struct KitLinkButton: View {
             .foregroundStyle(lit ? Theme.Palette.ink.color : Theme.Palette.ink2.color)
             .padding(.horizontal, Theme.Space.xs)
             .frame(minHeight: Theme.Window.Layout.linkHeight)
-            .background(KitControlBackground(radius: Theme.Radius.badge))
+            .background(KitControlBackground(radius: Theme.Radius.control, pressedFill: false))
             .opacity(state.enabled ? 1 : Theme.Window.Lift.disabled)
             .contentShape(.rect)
             .kitPressed(state.pressed)
