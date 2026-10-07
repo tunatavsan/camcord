@@ -64,14 +64,6 @@ struct ComponentGallery: View {
                     }
                 }
                 .foregroundStyle(Theme.Palette.ink.color)
-                List {
-                    SidebarRow(title: "Library", symbol: "photo.on.rectangle", key: "⌘1")
-                    SidebarRow(title: "Studio", symbol: "video.badge.waveform", key: "⌘2")
-                    SidebarRow(title: "Edit", symbol: "scissors", tag: "Later", key: "⌘3")
-                    SidebarRow(title: "Settings", symbol: "gearshape", key: "⌘4")
-                }
-                .listStyle(.sidebar)
-                .frame(width: 230, height: 150)
             }
         }
     }
