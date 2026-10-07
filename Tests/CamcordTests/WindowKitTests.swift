@@ -67,13 +67,33 @@ struct WindowKitTests {
         #expect(Theme.Motion.resolve(Theme.Window.Motion.lift, reduceMotion: false) == Theme.Window.Motion.lift)
     }
 
-    @Test("every state renders, and light and dark differ", arguments: [false, true])
-    func galleryRenders(dark: Bool) throws {
-        let image = try Self.render(WindowKitGallery(), size: WindowKitGallery.size, dark: dark,
-                                    name: "window-kit-\(dark ? "dark" : "light")")
-        let other = try Self.render(WindowKitGallery(), size: WindowKitGallery.size, dark: !dark, name: nil)
-        #expect(Self.distinctColours(in: image) > 40)
-        #expect(Self.difference(image, other) > 0.1)
+    @Test("a kit sample renders in light and dark, and the two differ")
+    func lightAndDark() throws {
+        let sample = VStack(spacing: Theme.Space.s) {
+            KitNavRow(symbol: "rectangle.stack", title: Text(verbatim: "Library"), key: "⌘1", selected: true) {}
+            KitCapsuleButton(title: Text(verbatim: "Record"), symbol: "record.circle", role: .primary) {}
+            KitChip(symbol: "photo", title: Text(verbatim: "Screens"), selected: false) {}
+        }
+        .padding(Theme.Space.l)
+        .frame(width: 240)
+        .kitCell()
+        let size = CGSize(width: 240, height: 180)
+        let dark = try Self.render(sample, size: size, dark: true, name: nil)
+        let light = try Self.render(sample, size: size, dark: false, name: nil)
+        #expect(Self.distinctColours(in: dark) > 10)
+        #expect(Self.difference(dark, light) > 0.1)
+    }
+
+    /// The whole gallery, for review: large, so it renders only when CAMCORD_KIT_SHOTS asks for
+    /// the PNGs (a multi-second render on the main actor would hold up other suites).
+    @Test("every state of every component renders for review",
+          .enabled(if: ProcessInfo.processInfo.environment["CAMCORD_KIT_SHOTS"] != nil))
+    func galleryShots() throws {
+        for dark in [true, false] {
+            let image = try Self.render(WindowKitGallery(), size: WindowKitGallery.size, dark: dark,
+                                        name: "window-kit-\(dark ? "dark" : "light")")
+            #expect(Self.distinctColours(in: image) > 40)
+        }
     }
 
     @Test("a hovered sidebar row draws differently from the same row at rest")
