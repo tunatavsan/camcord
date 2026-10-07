@@ -512,3 +512,139 @@ extension Theme {
         static let switchBlur: CGFloat = 3
     }
 }
+
+// MARK: - Main window
+
+extension Theme {
+    /// The main window speaks the menu-bar panel's language. The panel keeps its numbers inline
+    /// (CapturePanelView); these are the same numbers, named, so every window surface reads them
+    /// from one place. Text is SF Pro: the window is read at 11–13 pt, where the system face
+    /// is the sharpest and its digits are tabular.
+    enum Window {
+        enum Font {
+            static let label = SwiftUI.Font.system(size: Size.label, weight: .medium)
+            static let caption = SwiftUI.Font.system(size: Size.caption)
+            static let captionStrong = SwiftUI.Font.system(size: Size.caption, weight: .semibold)
+            static let body = SwiftUI.Font.system(size: Size.body)
+            static let bodyStrong = SwiftUI.Font.system(size: Size.body, weight: .semibold)
+            static let row = SwiftUI.Font.system(size: Size.body, weight: .medium)
+            static let headline = SwiftUI.Font.system(size: Size.headline, weight: .semibold)
+            static let title = SwiftUI.Font.system(size: Size.title, weight: .bold)
+            static let display = SwiftUI.Font.system(size: Size.display, weight: .semibold)
+            static let data = SwiftUI.Font.system(size: Size.label, weight: .medium).monospacedDigit()
+            static let dataBody = SwiftUI.Font.system(size: Size.caption).monospacedDigit()
+            static let symbolEmpty = SwiftUI.Font.system(size: Size.emptySymbol, weight: .ultraLight)
+
+            enum Size {
+                static let label: CGFloat = 11
+                static let caption: CGFloat = 12
+                static let body: CGFloat = 13
+                static let headline: CGFloat = 15
+                static let title: CGFloat = 22
+                static let display: CGFloat = 26
+                static let emptySymbol: CGFloat = 44
+            }
+        }
+
+        /// The panel's springs (CapturePanelView), by role.
+        enum Motion {
+            /// A symbol rising under the pointer, a sibling stepping back.
+            static let lift = Animation.spring(response: 0.32, dampingFraction: 0.62)
+            /// The larger tool button's rise.
+            static let liftTool = Animation.spring(response: 0.34, dampingFraction: 0.62)
+            /// Giving under the pointer.
+            static let press = Animation.spring(response: 0.2, dampingFraction: 0.7)
+            /// The selection mark sliding to a new choice.
+            static let select = Animation.spring(response: 0.36, dampingFraction: 0.72)
+            /// A switch turning on or off.
+            static let toggle = Animation.spring(response: 0.3, dampingFraction: 0.6)
+            /// A capsule's bloom, a link's arrow, a menu's pop.
+            static let bloom = Animation.spring(response: 0.3, dampingFraction: 0.7)
+            /// Words trading places.
+            static let swap = Animation.easeOut(duration: 0.16)
+            /// Large content arriving.
+            static let arrive = Animation.spring(response: 0.42, dampingFraction: 0.84)
+            /// A tile settling back after the pointer leaves.
+            static let settle = Animation.spring(response: 0.32, dampingFraction: 0.85)
+        }
+
+        /// How far things rise, glow, give and step back.
+        enum Lift {
+            static let symbolScale: CGFloat = 1.18
+            static let toolScale: CGFloat = 1.16
+            static let symbolRise: CGFloat = 1.5
+            static let toolRise: CGFloat = 2
+            static let glowOpacity: Double = 0.45
+            static let glowRadius: CGFloat = 6
+            static let toolGlowRadius: CGFloat = 7
+            /// A sibling of the hovered control. Rows carrying words step back less, to stay legible.
+            static let sibling: Double = 0.5
+            static let rowSibling: Double = 0.6
+            static let disabled: Double = 0.35
+            static let press: CGFloat = 0.92
+            /// A wide surface (a row, a card) gives less than a symbol: 8 % of 200 pt is a lurch.
+            static let widePress: CGFloat = 0.98
+            static let tileScale: CGFloat = 1.03
+            static let tileRise: CGFloat = 3
+            static let detailRise: CGFloat = 3
+            static let arriveScale: CGFloat = 0.985
+        }
+
+        /// The window's frame: glass cells on the tray, as in the panel.
+        enum Layout {
+            static let ring: CGFloat = 8
+            static let gap: CGFloat = 8
+            static let cellPadding: CGFloat = 12
+            static let cellRadius: CGFloat = Radius.floating
+            static let sidebarWidth: CGFloat = 212
+            static let titlebarHeight: CGFloat = 44
+            static let rowHeight: CGFloat = 32
+            static let rowInset: CGFloat = 10
+            static let rowSpacing: CGFloat = 2
+            static let rowRadius: CGFloat = 9
+            static let markWidth: CGFloat = 3
+            static let markHeight: CGFloat = 14
+            static let chipMarkWidth: CGFloat = 16
+            static let chipMarkHeight: CGFloat = 2
+            static let symbolCanvas: CGFloat = 20
+            static let symbolPoint: CGFloat = 14
+            static let toolSymbolPoint: CGFloat = 18
+            static let toolSymbolCanvas: CGFloat = 26
+            static let toolHeight: CGFloat = 56
+            static let iconButton: CGFloat = 30
+            static let chipHeight: CGFloat = 30
+            static let chipSymbolPoint: CGFloat = 11
+            static let chipSymbolCanvas: CGFloat = 16
+            static let capsuleHeight: CGFloat = 36
+            static let keyBadgeHeight: CGFloat = 18
+            static let keyBadgeInset: CGFloat = 5
+            static let headerHeight: CGFloat = 52
+            static let hairline: CGFloat = 1
+        }
+
+        /// The capsule's bloom (CapturePanelView's primary and secondary buttons).
+        enum Bloom {
+            static let restFill: Double = 0.92
+            static let disabledFill: Double = 0.5
+            static let disabledContent: Double = 0.5
+            static let glow: Double = 0.45
+            static let quietGlow: Double = 0.18
+            static let radius: CGFloat = 10
+            static let quietRadius: CGFloat = 8
+            static let drop: CGFloat = 2
+            static let quietDrop: CGFloat = 1
+            static let symbolScale: CGFloat = 1.12
+            static let shortcut: Double = 0.75
+            static let arrowStep: CGFloat = 2
+            static let tileGlow: Double = 0.15
+        }
+
+        /// The panel's capsule edges and glows, as colours over ink and white.
+        enum Ink {
+            static let rim = ThemeColor("windowRim", dark: C(0xFFFFFF, alpha: 0.16), light: C(0xFFFFFF, alpha: 0.55))
+            static let capsuleEdge = ThemeColor("windowCapsuleEdge", dark: C(0xFFFFFF, alpha: 0.18), light: C(0xFFFFFF, alpha: 0.35))
+            static let quietEdge = ThemeColor("windowQuietEdge", dark: C(0xFFFFFF, alpha: 0.08), light: C(0x14181E, alpha: 0.08))
+            static let keyBadge = ThemeColor("windowKeyBadge", dark: C(0xFFFFFF, alpha: 0.07), light: C(0x14181E, alpha: 0.06))
+        }
+    }
+}
