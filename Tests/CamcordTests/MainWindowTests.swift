@@ -109,7 +109,7 @@ struct MainWindowTests {
         #expect(predicate(), "The retained module tree did not reach \(stage)")
     }
 
-    @Test("visited modules retain identity and edits; retained activity updates use the incoming motion policy",
+    @Test("visited modules retain identity and edits; activity flips without animation under either motion policy",
           arguments: [false, true])
     func retainedModuleIdentity(reduceMotion: Bool) async throws {
         _ = NSApplication.shared
@@ -127,7 +127,7 @@ struct MainWindowTests {
         first.changeValue()
         try await settle(host) { first.edits == 1 }
         var outgoing = first
-        for id in [ModuleID.studio, .edit, .settings, .studio, .library] {
+        for id in [ModuleID.studio, .edit, .studio, .library] {
             let alreadyMounted = moduleProbes(in: host).contains { $0.module == id }
             model.select(id)
             try await settle(host) {
@@ -137,14 +137,14 @@ struct MainWindowTests {
             }
             let incoming = try #require(moduleProbes(in: host).first { $0.module == id })
             #expect(outgoing.lastActivityAnimation == nil)
-            // A new native view's transaction does not describe its wrapper's insertion transition.
+            // Activity flips at once: only the arrival (opacity and scale) animates.
             if alreadyMounted {
-                #expect(incoming.lastActivityAnimation == Theme.Motion.resolve(Theme.Motion.moduleSwitch, reduceMotion: reduceMotion))
+                #expect(incoming.lastActivityAnimation == nil)
             }
             outgoing = incoming
         }
         let probes = moduleProbes(in: host)
-        #expect(probes.count == 4)
+        #expect(probes.count == 3)
         #expect(Set(probes.map(\.module)) == Set(ModuleID.allCases))
         let revisited = try #require(probes.first { $0.module == .library })
         #expect(revisited === first)
@@ -183,7 +183,7 @@ struct MainWindowTests {
         #expect(moduleProbes(in: host).filter(\.active).map(\.module) == [.studio])
     }
 
-    @Test("Library and Editor switches leave visited hidden Studio and Settings production bodies untouched")
+    @Test("Library and Editor switches leave a visited hidden Studio production body untouched")
     func registeredModuleIsolation() async throws {
         _ = NSApplication.shared
         let defaults = try freshDefaults()
@@ -201,9 +201,7 @@ struct MainWindowTests {
             library: LibraryStore(defaults: defaults, roots: [], cacheDirectory: cache), editor: editor)
         defer { editor.stop() }
         let model = MainWindowModel(defaults: defaults)
-        let studioProbe = MainWindowStudioBodyProbe(), settingsProbe = SettingsKeyRecorder()
-        SettingsKeyRecorder.active = settingsProbe
-        defer { SettingsKeyRecorder.active = nil }
+        let studioProbe = MainWindowStudioBodyProbe()
         let lifecycle = MainWindowLifecycle(), window = offscreenWindow()
         // The existing native fixture supplies visibility without ordering a real window.
         window.fixtureVisible = true
@@ -214,37 +212,26 @@ struct MainWindowTests {
         host.frame = NSRect(x: 0, y: 0, width: 960, height: 700)
         window.contentView = host
         defer { window.contentView = nil }
-        for id in [ModuleID.studio, .settings, .edit, .library] {
+        for id in [ModuleID.studio, .edit, .library] {
             model.select(id)
             try await settle(host, stage: "warm \(id.rawValue) layout") {
                 model.performanceDiagnostics.generation(for: .module(id)) == nil
             }
         }
-        #expect(studioProbe.reads > 0 && !settingsProbe.stores.isEmpty)
-        let settingsStore = try #require(settingsProbe.stores.last)
-        let studioReads = studioProbe.reads, settingsBodies = settingsProbe.stores.count
+        #expect(studioProbe.reads > 0)
+        let studioReads = studioProbe.reads
         for id in [ModuleID.edit, .library, .edit, .library] {
             model.select(id)
             try await settle(host, stage: "isolated \(id.rawValue) layout") {
                 model.performanceDiagnostics.generation(for: .module(id)) == nil
             }
             #expect(studioProbe.reads == studioReads)
-            #expect(settingsProbe.stores.count == settingsBodies)
         }
         // The outgoing and incoming modules still receive their real active flag.
         model.select(.studio)
         try await settle(host, stage: "Studio re-entry activity") {
             model.performanceDiagnostics.generation(for: .module(.studio)) == nil && studioProbe.reads > studioReads
         }
-        let oldFeedback = settingsStore.feedbackSounds
-        FeedbackSound.setEnabled(!oldFeedback, in: defaults)
-        #expect(settingsStore.feedbackSounds == oldFeedback)
-        model.select(.settings)
-        try await settle(host, stage: "Settings re-entry refresh") {
-            model.performanceDiagnostics.generation(for: .module(.settings)) == nil
-                && settingsStore.feedbackSounds == !oldFeedback
-        }
-        #expect(settingsProbe.stores.allSatisfy { $0 === settingsStore })
         #expect(services.studioSession.previewState == .inactive && services.studioSession.stageImage == nil)
         #expect(!services.studioSession.microphoneTestRequested && !services.studioSession.cameraPreviewRequested)
         #expect(!services.studioSession.systemAudioTestRequested && !recording.isBusy && hardwareCalls == 0)
@@ -275,25 +262,18 @@ struct MainWindowTests {
         #expect(window.firstResponder === probe)
         let active = NSApp.isActive
         let priorResigns = probe.resigns
-        model.select(.settings)
+        model.select(.edit)
         try await settle(host) { window.firstResponder !== probe }
         #expect(probe.resigns == priorResigns + 1)
         #expect(NSApp.isActive == active)
         #expect(other.firstResponder === otherResponder)
-        let settings = try #require(moduleProbes(in: host).first { $0.module == .settings })
-        #expect(window.makeFirstResponder(settings))
-        let pageResigns = settings.resigns
-        model.settingsGroup = model.settingsGroup == .input ? .general : .input
-        // Retire the native shortcut responder before its retained page becomes hidden.
-        #expect(window.firstResponder !== settings)
-        #expect(settings.resigns == pageResigns + 1)
-        #expect(other.firstResponder === otherResponder)
-        #expect(window.makeFirstResponder(settings))
-        let settingsResigns = settings.resigns
+        let edit = try #require(moduleProbes(in: host).first { $0.module == .edit })
+        #expect(window.makeFirstResponder(edit))
+        let editResigns = edit.resigns
         window.fixtureVisible = false
         lifecycle.update(window: nil, temporarilyHidden: false)
-        try await settle(host) { window.firstResponder !== settings }
-        #expect(settings.resigns == settingsResigns + 1)
+        try await settle(host) { window.firstResponder !== edit }
+        #expect(edit.resigns == editResigns + 1)
         #expect(other.firstResponder === otherResponder)
         #expect(NSApp.isActive == active)
         #expect(!window.isVisible && !window.isKeyWindow)
@@ -304,7 +284,7 @@ struct MainWindowTests {
         _ = NSApplication.shared
         let window = offscreenWindow()
         let root = NSView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
-        let marker = ModuleSelectionResponderBridge.SelectionView(selection: .settings, windowActive: true)
+        let marker = ModuleSelectionResponderBridge.SelectionView(selection: .edit, windowActive: true)
         marker.frame = NSRect(x: 200, y: 0, width: 400, height: 400)
         let recorder = RetainedModuleProbe.ProbeView(frame: NSRect(x: 240, y: 100, width: 100, height: 30))
         final class EditingControl: NSTextField, NSTextViewDelegate {}
@@ -371,6 +351,21 @@ struct MainWindowTests {
         #expect(applied == expected)
     }
 
+    @Test("the icon stays while Settings or the main window is still open")
+    func twoWindows() throws {
+        let defaults = try freshDefaults()
+        var applied: [NSApplication.ActivationPolicy] = []
+        let dock = DockController(defaults: defaults) { applied.append($0) }
+        dock.windowDidOpen()
+        dock.windowDidOpen("settings")
+        dock.windowDidClose()
+        #expect(applied == [.regular])
+        #expect(dock.windowOpen)
+        dock.windowDidClose("settings")
+        #expect(applied == [.regular, .accessory])
+        #expect(!dock.windowOpen)
+    }
+
     @Test("changing the setting while the window is open takes effect at once")
     func settingChange() throws {
         let defaults = try freshDefaults()
@@ -398,33 +393,29 @@ struct MainWindowTests {
 
     @Test("the registry: every module once, in order, grouped by section; Edit is the screenshot editor")
     func registry() {
-        #expect(ModuleRegistry.all.map(\.id) == [.library, .studio, .edit, .settings])
+        #expect(ModuleRegistry.all.map(\.id) == [.library, .studio, .edit])
         #expect(Set(ModuleRegistry.all.map(\.id)) == Set(ModuleID.allCases))
-        #expect(ModuleRegistry.sections == [.capture, .create, .app])
+        #expect(ModuleRegistry.sections == [.capture, .create])
         #expect(ModuleRegistry.modules(in: .capture).map(\.id) == [.library, .studio])
         #expect(ModuleRegistry.modules(in: .create).map(\.id) == [.edit])
-        #expect(ModuleRegistry.modules(in: .app).map(\.id) == [.settings])
         #expect(ModuleRegistry.all.allSatisfy { $0.isAvailable })
-        #expect((ModuleRegistry.module(.edit) as? any ModuleBadging)?.badge == nil)
-        let badges = ModuleRegistry.all.compactMap { ($0 as? any ModuleBadging)?.badge }
-        #expect(badges.isEmpty)
-        #expect(ModuleSection.capture < .create && ModuleSection.create < .app)
+        #expect(ModuleSection.capture < .create)
         #expect(ModuleSection.capture.title == nil)
-        #expect(ModuleSection.create.title?.key == "Create" && ModuleSection.app.title?.key == "App")
+        #expect(ModuleSection.create.title?.key == "Create")
         for module in ModuleRegistry.all {
             #expect(NSImage(systemSymbolName: module.symbol, accessibilityDescription: nil) != nil, "\(module.symbol)")
         }
     }
 
-    @Test("⌘1…⌘4 follow the sidebar, in the View menu and on the rows")
+    @Test("⌘1…⌘3 follow the sidebar, in the View menu and on the rows")
     func moduleShortcuts() throws {
-        #expect(ModuleRegistry.all.map { ModuleShortcut.label(for: $0.id) } == ["⌘1", "⌘2", "⌘3", "⌘4"])
+        #expect(ModuleRegistry.all.map { ModuleShortcut.label(for: $0.id) } == ["⌘1", "⌘2", "⌘3"])
         final class Target: NSObject { @objc func go(_ sender: Any?) {} }
         let target = Target()
         let menu = try #require(AppMenus.viewMenuItem(target: target, action: #selector(Target.go(_:))).submenu)
         let modules = menu.items.filter { $0.representedObject != nil }
-        #expect(modules.map(\.keyEquivalent) == ["1", "2", "3", "4"])
-        #expect(modules.compactMap { $0.representedObject as? String } == ["library", "studio", "edit", "settings"])
+        #expect(modules.map(\.keyEquivalent) == ["1", "2", "3"])
+        #expect(modules.compactMap { $0.representedObject as? String } == ["library", "studio", "edit"])
         #expect(modules.allSatisfy { $0.target === target && $0.keyEquivalentModifierMask == .command })
         // The sidebar is always shown: nothing in the menu hides it.
         #expect(!menu.items.contains { $0.keyEquivalent == "s" && $0.keyEquivalentModifierMask == [.command, .control] })
@@ -558,35 +549,24 @@ struct MainWindowTests {
         #expect(ModuleSelection.load(from: defaults) == .library)
         ModuleSelection.save(.studio, to: defaults)
         #expect(ModuleSelection.load(from: defaults) == .studio)
-        ModuleSelection.save(.settings, to: defaults)
-        #expect(ModuleSelection.load(from: defaults) == .settings)
+        // Settings left the window for its own: a remembered Settings selection opens Library.
+        defaults.set("settings", forKey: ModuleSelection.defaultsKey)
+        #expect(ModuleSelection.load(from: defaults) == .library)
         ModuleSelection.save(.edit, to: defaults)
         #expect(ModuleSelection.load(from: defaults) == .edit)
         defaults.set("timeline", forKey: ModuleSelection.defaultsKey)
         #expect(ModuleSelection.load(from: defaults) == .library)
     }
 
-    @Test("native split view normalizes public visibility values and shares View menu intent")
-    func sidebarVisibility() throws {
-        let defaults = try freshDefaults()
-        defer { defaults.removePersistentDomain(forName: Self.suiteName) }
-        let model = MainWindowModel(defaults: defaults)
-        #expect(model.sidebarColumnVisibility == .all)
-        model.sidebarColumnVisibility = .detailOnly
-        #expect(!model.sidebarVisible)
-        model.sidebarColumnVisibility = .automatic
-        #expect(model.sidebarVisible && model.sidebarColumnVisibility == .all)
-        model.sidebarVisible.toggle()
-        #expect(model.sidebarColumnVisibility == .detailOnly)
-        model.sidebarColumnVisibility = .all
-        #expect(model.sidebarColumnVisibility == .all)
-        model.sidebarColumnVisibility = .detailOnly
-        model.sidebarColumnVisibility = .doubleColumn
-        #expect(model.sidebarVisible)
-        model.select(.settings)
-        #expect(model.sidebarColumnVisibility == .all)
-        model.leaveSettings()
-        #expect(model.sidebarVisible && model.selection == .library)
+    @Test("sidebar arrows move one step among the modules and stop at the ends")
+    func sidebarNavigation() {
+        let order = ModuleRegistry.all.map(\.id)
+        #expect(SidebarNavigation.move(from: ModuleID.library, by: 1, in: order) == .studio)
+        #expect(SidebarNavigation.move(from: ModuleID.studio, by: -1, in: order) == .library)
+        #expect(SidebarNavigation.move(from: ModuleID.library, by: -1, in: order) == .library)
+        #expect(SidebarNavigation.move(from: ModuleID.edit, by: 1, in: order) == .edit)
+        #expect(SidebarNavigation.move(from: "timeline", by: 1, in: ["library", "studio"]) == "library")
+        #expect(SidebarNavigation.move(from: "x", by: 1, in: [String]()) == "x")
     }
 
     @Test("sidebar Library facts saturate known byte sizes and ignore unknown negative sizes")
@@ -602,9 +582,9 @@ struct MainWindowTests {
         let defaults = try freshDefaults()
         let model = MainWindowModel(defaults: defaults)
         #expect(model.selection == .library)
-        model.select(.settings)
-        #expect(model.selection == .settings)
-        #expect(ModuleSelection.load(from: defaults) == .settings)
+        model.select(.studio)
+        #expect(model.selection == .studio)
+        #expect(ModuleSelection.load(from: defaults) == .studio)
         let unavailable = ModuleRegistry.all.first { !$0.isAvailable }?.id
         if let unavailable {
             model.select(unavailable)
@@ -783,7 +763,7 @@ struct MainWindowTests {
         #expect(text.performKeyEquivalent(with:redoZ)); #expect(editor.selectedAnnotation?.text == "Two")
         window.makeFirstResponder(button)
         let count = editor.document?.edits.annotations.count
-        controller.model.select(.settings)
+        controller.model.select(.library)
         let standard = try #require(window.undoManager)
         #expect(standard !== editor.editUndoManager)
         #expect(editor.document?.edits.annotations.count == count && editor.canUndo)
@@ -794,12 +774,12 @@ struct MainWindowTests {
         editor.open(CapturedScreenshot(id:UUID(),image:try EditorRendererTests.image(),pointSize:CGSize(width:8,height:6),kind:.screenshot,saveToDiskRequested:false))
         await editor.discardAndOpenPending()
         #expect(!editor.canUndo && standard.canUndo)
-        controller.model.select(.settings); standard.undo(); #expect(button.title == "retained undo")
+        controller.model.select(.library); standard.undo(); #expect(button.title == "retained undo")
         #expect(!window.isVisible && !window.isKeyWindow)
     }
 
-    @Test("the Settings module renders the real settings from the environment's services, the placeholder without")
-    func settingsModuleUsesTheEnvironment() throws {
+    @Test("the Settings window renders the real settings from its services, and nothing without them")
+    func settingsWindowUsesItsServices() throws {
         _ = NSApplication.shared
         let defaults = try freshDefaults()
         let coordinator = CaptureCoordinator()
@@ -814,28 +794,73 @@ struct MainWindowTests {
         let library = LibraryStore(defaults: defaults, roots: [], cacheDirectory: libraryRoot)
         let services = AppServices(defaults: defaults, coordinator: coordinator, recordingController: recording,
                                    eventTapEngine: engine, recordingState: RecordingStateModel(), library: library)
-        let module = SettingsModule()
         let recorder = SettingsKeyRecorder()
         SettingsKeyRecorder.active = recorder
         defer {
             SettingsKeyRecorder.active = nil
             defaults.removePersistentDomain(forName: Self.suiteName)
         }
-        try render(module.makeView())
+        let model = SettingsWindowModel(defaults: defaults)
+        try render(SettingsWindowView(model: model, services: nil, lifecycle: nil))
         #expect(recorder.keys.isEmpty)
         #expect(recorder.stores.isEmpty)
-        try render(module.makeView().environment(\.appServices, services))
+        try render(SettingsWindowView(model: model, services: services, lifecycle: nil))
         #expect(recorder.keys.contains(DockIconMode.defaultsKey))
         #expect(recorder.stores.allSatisfy { $0.defaults === defaults })
         let injectedStore = try #require(recorder.stores.last)
         injectedStore.copyToast = false
         #expect(!HUDToast.isEnabled(in: defaults))
-
-        // The actual window supplies the same services to its Settings module.
-        recorder.reset()
-        ModuleSelection.save(.settings, to: defaults)
-        try render(MainWindowView(defaults: defaults, services: services))
-        #expect(!recorder.stores.isEmpty)
-        #expect(recorder.stores.allSatisfy { $0.defaults === defaults })
     }
+
+    @Test("the Settings tab is remembered, and changing it first retires the page's responder")
+    func settingsWindowTab() throws {
+        let defaults = try freshDefaults()
+        defer { defaults.removePersistentDomain(forName: Self.suiteName) }
+        let model = SettingsWindowModel(defaults: defaults)
+        #expect(model.group == .general)
+        var retired = 0
+        model.selectionWillChange = { retired += 1 }
+        model.group = .camera
+        model.group = .camera
+        #expect(retired == 1)
+        #expect(SettingsWindowModel(defaults: defaults).group == .camera)
+    }
+
+    @Test("the sidebar's content never changes: choosing a module only moves the selection between its rows")
+    func sidebarNeverChanges() throws {
+        _ = NSApplication.shared
+        let size = CGSize(width: Theme.Window.Layout.sidebarWidth, height: 520)
+        func render(_ id: ModuleID) throws -> NSBitmapImageRep {
+            try WindowKitTests.render(MainWindowSidebar(selection: .constant(id), library: nil)
+                .frame(width: size.width, height: size.height).transaction { $0.disablesAnimations = true },
+                size: size, dark: true, name: nil)
+        }
+        let renders = try ModuleID.allCases.map(render)
+        let rowBand = CGFloat(ModuleRegistry.all.count + 1) * (Theme.Window.Layout.rowHeight + Theme.Window.Layout.rowSpacing)
+            + Theme.Space.m + Theme.Space.xs
+        for other in renders.dropFirst() {
+            let changed = try #require(Self.changedRows(renders[0], other))
+            let scale = CGFloat(renders[0].pixelsHigh) / size.height
+            // Only the band of module rows differs; the brand above and everything below stay identical.
+            #expect(CGFloat(changed.upperBound - changed.lowerBound) / scale <= rowBand)
+            #expect(CGFloat(changed.lowerBound) / scale >= Theme.Window.Layout.titlebarHeight)
+        }
+    }
+
+    /// The first and last pixel rows that differ between two renders of one size, if any.
+    private static func changedRows(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep) -> ClosedRange<Int>? {
+        var first: Int?, last: Int?
+        for y in 0..<a.pixelsHigh {
+            for x in stride(from: 0, to: a.pixelsWide, by: 2) {
+                guard let p = a.colorAt(x: x, y: y), let q = b.colorAt(x: x, y: y) else { continue }
+                if abs(p.redComponent - q.redComponent) + abs(p.greenComponent - q.greenComponent)
+                    + abs(p.blueComponent - q.blueComponent) > 0.03 {
+                    first = first ?? y; last = y; break
+                }
+            }
+        }
+        guard let first, let last else { return nil }
+        return first...last
+    }
+
 }

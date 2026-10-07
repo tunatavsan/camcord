@@ -211,15 +211,15 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         let frame = window.frame
         let host = EditorUndoHostingController(rootView: MainWindowView(model: model, services: services, lifecycle: lifecycle))
         // The controller owns native outer limits; SwiftUI content measurements must not
-        // replace them as modules mount or toolbar items change.
+        // replace them as modules mount.
         host.sizingOptions = []
         host.activeEditor = { [weak self] in self?.model.selection == .edit ? self?.services?.editor : nil }
-        // SwiftUI's .toolbar and .navigationTitle become the NSWindow's own toolbar and title.
-        host.sceneBridgingOptions = [.toolbars, .title]
+        // The window has no toolbar: every control lives in a cell, so switching modules never
+        // rebuilds window chrome.
+        host.sceneBridgingOptions = []
         window.contentViewController = host
         window.setFrame(frame, display: false)
         observeMinimum(in: window)
-        SidebarToggleSuppressor.watch(window)
     }
 
     private func observeMinimum(in window: NSWindow) {
@@ -233,10 +233,6 @@ final class MainWindowController: NSObject, NSWindowDelegate {
             window.observe(\.contentMinSize, options: [.new]) { [weak self] window, _ in
                 MainActor.assumeIsolated { self?.enforceMinimum(in: window) }
             },
-            // SwiftUI installs (and replaces) the toolbar after the content mounts.
-            window.observe(\.toolbar, options: [.initial, .new]) { window, _ in
-                MainActor.assumeIsolated { SidebarToggleSuppressor.watch(window) }
-            }
         ]
         enforceMinimum(in: window)
     }
@@ -264,8 +260,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         window.title = "Camcord"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
-        window.toolbarStyle = .unified
-        // The system sidebar and the detail's one behind-window backdrop sample the desktop.
+        // The tray behind the cells samples the desktop.
         window.isOpaque = false
         window.backgroundColor = .clear
         window.isReleasedWhenClosed = false

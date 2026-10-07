@@ -66,7 +66,6 @@ private struct ShellConfiguration {
             ? CGSize(width: 980, height: 640) : CGSize(width: 1180, height: 772)
         appearance = environment["CAMCORD_SHELL_APPEARANCE"] == "light" ? .aqua : .darkAqua
         module = environment["CAMCORD_SHELL_MODULE"] == "edit" ? .edit
-            : environment["CAMCORD_SHELL_MODULE"] == "settings" ? .settings
             : environment["CAMCORD_SHELL_MODULE"] == "studio" ? .studio : .library
         let requestedStudioState = environment["CAMCORD_STUDIO_STATE"] ?? "permission"
         studioState = ["setup", "recording", "done", "permission"].contains(requestedStudioState) ? requestedStudioState : "permission"
@@ -200,7 +199,6 @@ private final class ShellFixture {
             defaults: defaults, dock: DockController(defaults: defaults) { _ in }, services: services,
             frameAutosaveName: nil, present: { _ in Issue.record("Shell evidence must not activate") })
         services.mainWindow = controller
-        controller.model.settingsGroup = .general
     }
 
     func present() async throws {
@@ -302,7 +300,6 @@ private final class ShellFixture {
             "increaseContrast": NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast,
             "reduceMotion": NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
             "appActive": NSApp.isActive, "module": controller.model.selection.rawValue,
-            "sidebarVisible": controller.model.sidebarVisible,
             "studioWindowVisible": window.isVisible && !window.isMiniaturized,
             "studioWindowOccluded": !window.occlusionState.contains(.visible),
             "studioPreviewState": String(describing: services.studioSession.previewState),
@@ -321,7 +318,6 @@ private final class ShellFixture {
             "studioPresentationPeaks": studioPresentation.map { [$0.snapshot.systemAudioLevels?.peakDBFS ?? 0, $0.snapshot.microphoneLevels?.peakDBFS ?? 0] } ?? [],
             "studioPresentationMeter": studioPresentation == nil ? "actual native meter lifecycle" : "static readonly MeterScale snapshot; no timer or live signal",
             "studioPresentationAssets": studioPresentation?.assetURLs.map(\.lastPathComponent) ?? [],
-            "settingsGroup": controller.model.settingsGroup.rawValue,
             "captureCount": services.library.items.count,
             "libraryState": configuration.libraryState as Any? ?? NSNull(),
             "actualRecordingBusy": services.recordingController.isBusy,
@@ -336,9 +332,9 @@ private final class ShellFixture {
             "appearance": configuration.appearance.rawValue,
             "frameAutosaveName": window.frameAutosaveName,
             "underlay": "owned reference-wall gradient; no foreground overlay",
-            "sidebarContentWidth": Theme.Navigation.sidebarWidth,
+            "sidebarContentWidth": Theme.Window.Layout.sidebarWidth,
             "referenceSidebarBoundary": Theme.Navigation.sidebarBoundary,
-            "measuredNativeSidebarInset": Theme.Navigation.nativeSidebarInset
+            "windowRing": Theme.Window.Layout.ring
             , "editorState": configuration.editorState,
             "editorDimensions": services.editor.document.map { [$0.source.width, $0.source.height] } ?? [],
             "editorAnnotations": services.editor.document?.edits.annotations.count ?? 0,

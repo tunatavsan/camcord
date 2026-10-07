@@ -20,40 +20,8 @@ struct SettingsActivity: DynamicProperty {
     }
 }
 
-// The Settings module's pages: a display title and cards of rows, in place of the old Settings
-// window, with the same keys (SettingsParityTests holds them to it).
-
-/// The Settings module's content: the page of the group the sidebar has selected.
-struct SettingsModuleView: View {
-    @Environment(\.appServices) private var services
-    @Environment(\.mainWindowModel) private var windowModel
-    private var activity = SettingsActivity()
-    @State private var store: SettingsStore?
-
-    var body: some View {
-        Group {
-            if let store {
-                SettingsPageView(group: windowModel?.settingsGroup ?? .general, store: store)
-            } else if services == nil {
-                ModulePlaceholder(symbol: "gearshape", title: LocalizedStringResource("Settings", comment: "Main window module"),
-                                  message: LocalizedStringResource("Settings are loading.", comment: "Settings placeholder"))
-            } else {
-                Color.clear
-            }
-        }
-        .onChange(of: activity.isActive, initial: true) { _, active in
-            guard active else { return }
-            if store == nil, let services {
-                store = SettingsStore(defaults: services.defaults, eventTapEngine: services.eventTapEngine)
-            } else {
-                store?.refresh()
-            }
-        }
-        .onChange(of: services.map(ObjectIdentifier.init)) { _, _ in
-            store = activity.isActive ? services.map { SettingsStore(defaults: $0.defaults, eventTapEngine: $0.eventTapEngine) } : nil
-        }
-    }
-}
+// The Settings window's pages: a display title and cards of rows, with the settings' own keys
+// (SettingsParityTests holds them to it).
 
 struct SettingsPageView: View {
     let group: SettingsGroup
@@ -87,7 +55,7 @@ struct RetainedSettingsPageStack<Content: View>: View {
     private let content: (SettingsGroup) -> Content
     private let reduceMotionOverride: Bool?
     @State private var visited: Set<SettingsGroup>
-    @Environment(\.mainWindowModel) private var windowModel
+    @Environment(\.navigationDiagnostics) private var diagnostics
     @Environment(\.mainWindowModuleActive) private var moduleActive
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     private var activity = SettingsActivity()
@@ -113,7 +81,7 @@ struct RetainedSettingsPageStack<Content: View>: View {
                 let active = selected && moduleActive
                 content(group)
                     .background(PerformanceLayoutCompletionBridge(target: .settings(group),
-                        active: selected && activity.isActive, diagnostics: windowModel?.performanceDiagnostics))
+                        active: selected && activity.isActive, diagnostics: diagnostics))
                     .environment(\.mainWindowModuleActive, active)
                     .environment(\.formPageSelected, selected)
                     .disabled(!active)

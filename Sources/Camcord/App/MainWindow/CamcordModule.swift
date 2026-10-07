@@ -3,10 +3,10 @@ import SwiftUI
 // The main window's module contract: the module ids and sections, the protocol every module
 // implements, the registry, and the persisted selection and Dock icon mode.
 
-enum ModuleID: String, CaseIterable, Codable { case library, studio, edit, settings }
+enum ModuleID: String, CaseIterable, Codable { case library, studio, edit }
 
 enum ModuleSection: Int, Comparable {
-    case capture, create, app
+    case capture, create
 
     static func < (lhs: ModuleSection, rhs: ModuleSection) -> Bool { lhs.rawValue < rhs.rawValue }
 }
@@ -32,7 +32,6 @@ enum ModuleRegistry {
         LibraryModule(),
         StudioModule(),
         EditModule(),
-        SettingsModule(),
     ]
 
     static func module(_ id: ModuleID) -> (any CamcordModule)? {
