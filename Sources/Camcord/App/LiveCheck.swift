@@ -5,7 +5,7 @@ import AppKit
 /// set the app's own appearance, so dark and light screenshots never take the user's focus or touch their system setting.
 ///
 ///     defaults write dev.tavsan.camcord liveCheck -bool true
-///     post "dev.tavsan.camcord.livecheck" with object "window library" | "appearance dark" | …
+///     post "dev.tavsan.camcord.livecheck" with object "window library" | "settings camera" | "appearance dark" | …
 @MainActor
 final class LiveCheck {
     static let notificationName = Notification.Name("dev.tavsan.camcord.livecheck")
@@ -14,6 +14,8 @@ final class LiveCheck {
     enum Command: Equatable {
         /// Show the main window on a module, without activating.
         case window(ModuleID)
+        /// Show the Settings window on a group (or the last one), without activating.
+        case settings(SettingsGroup?)
         /// The app's appearance: dark, light, or nil for the system's.
         case appearance(NSAppearance.Name?)
         /// The app's own Increase Contrast: high, normal, or nil for the system's.
@@ -33,6 +35,9 @@ final class LiveCheck {
             switch verb {
             case "window":
                 return ModuleID(rawValue: argument ?? "library").map(Command.window)
+            case "settings":
+                guard let argument else { return .settings(nil) }
+                return SettingsGroup(rawValue: argument).map(Command.settings)
             case "appearance":
                 switch argument {
                 case "dark": return .appearance(.darkAqua)

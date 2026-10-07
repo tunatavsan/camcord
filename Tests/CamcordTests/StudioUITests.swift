@@ -88,7 +88,7 @@ struct StudioUITests {
         #expect(previewHosts(host).first === originalHost)
         camera.setVisible(true, owner: "foreign")
         await camera.start(deviceID: "foreign", format: .auto)
-        model.select(.settings)
+        model.select(.library)
         try await settle { !session.cameraPreviewRequested }
         #expect(camera.isRunning && starts == 3 && stops == 2)
         fixture.contentView = nil

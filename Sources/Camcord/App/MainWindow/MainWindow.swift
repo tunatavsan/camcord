@@ -2,8 +2,8 @@ import AppKit
 import Observation
 import SwiftUI
 
-/// The window's module selection, owned by the controller so the menu (⌘, and ⌘1…⌘4) and the
-/// live check can move it from outside the view tree. Every change is persisted.
+/// The window's module selection, owned by the controller so the menu (⌘1…⌘3) and the live
+/// check can move it from outside the view tree. Every change is persisted.
 @MainActor @Observable
 final class MainWindowModel {
     @ObservationIgnored let defaults: UserDefaults
@@ -13,53 +13,19 @@ final class MainWindowModel {
         willSet {
             if newValue != selection {
                 performanceDiagnostics.request(.module(newValue))
-                if newValue == .settings { performanceDiagnostics.request(.settings(settingsGroup)) }
                 selectionWillChange?()
             }
         }
         didSet {
             guard selection != oldValue else { return }
             ModuleSelection.save(selection, to: defaults)
-            if oldValue != .settings { returnModule = oldValue }
         }
     }
-
-    /// The sidebar is shown (the toolbar button and ⌃⌘S hide it).
-    var sidebarVisible = true
-
-    /// The native split view and View menu mutate the same visibility value.
-    var sidebarColumnVisibility: NavigationSplitViewVisibility {
-        get { sidebarVisible ? .all : .detailOnly }
-        set {
-            // In this SwiftUI runtime, .automatic compares equal to .doubleColumn.
-            // Both resolve to the shown two-column shell; only .detailOnly hides it.
-            sidebarVisible = newValue != .detailOnly
-        }
-    }
-
-    /// The Settings group on screen; while Settings is open the sidebar lists the groups.
-    var settingsGroup: SettingsGroup {
-        willSet {
-            if selection == .settings, newValue != settingsGroup {
-                performanceDiagnostics.request(.settings(newValue))
-                // Retained shortcut fields must end editing before their page becomes hidden.
-                selectionWillChange?()
-            }
-        }
-        didSet { defaults.set(settingsGroup.rawValue, forKey: SettingsGroup.defaultsKey) }
-    }
-
-    /// Where "← Camcord" in the Settings sidebar goes back to.
-    private(set) var returnModule: ModuleID = .library
 
     init(defaults: UserDefaults) {
         self.defaults = defaults
         selection = ModuleSelection.load(from: defaults)
-        settingsGroup = SettingsGroup.load(from: defaults)
     }
-
-    /// Leaves Settings for the module it was opened from.
-    func leaveSettings() { select(returnModule == .settings ? .library : returnModule) }
 
     /// Selects `id`, or the first available module when `id` cannot be selected.
     func select(_ id: ModuleID) { selection = ModuleRegistry.selectable(id) }
@@ -80,16 +46,15 @@ final class MainWindowLifecycle {
     }
 }
 
-/// The native inset sidebar and unified toolbar frame the module's lightly frosted content.
-/// Window chrome belongs to the split view; toolbar actions belong to the current module.
+/// The window is built like the menu-bar panel: a frosted tray with two glass cells on it, the
+/// sidebar and the module. The sidebar lists the modules and never changes; the module fills
+/// the other cell. The window buttons sit over the sidebar's top corner.
 struct MainWindowView: View {
     @Bindable var model: MainWindowModel
     let services: AppServices?
     let lifecycle: MainWindowLifecycle?
     let studioPresentationProvider: (any StudioPresentationProvider)?
     private let studioCallbacks: StudioRuntimeCallbacks
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     init(model: MainWindowModel, services: AppServices? = nil, lifecycle: MainWindowLifecycle? = nil,
          studioPresentationProvider: (any StudioPresentationProvider)? = nil) {
@@ -105,43 +70,26 @@ struct MainWindowView: View {
         self.init(model: MainWindowModel(defaults: defaults), services: services)
     }
 
-    private var module: any CamcordModule { ModuleRegistry.module(model.selection) ?? ModuleRegistry.all[0] }
-
     var body: some View {
-        // The sidebar is always shown: no toggle, no collapse.
-        NavigationSplitView(columnVisibility: .constant(.all)) {
-            ZStack {
-                if model.selection == .settings {
-                    SettingsSidebar(model: model)
-                        .transition(.opacity)
-                } else {
-                    MainWindowSidebar(selection: $model.selection)
-                        .transition(.opacity)
-                }
-            }
-            .animation(Theme.Motion.resolve(Theme.Motion.panel, reduceMotion: reduceMotion),
-                       value: model.selection == .settings)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if let library = services?.library { LibrarySidebarFooter(store: library) }
-            }
-            .navigationSplitViewColumnWidth(Theme.Navigation.sidebarWidth)
-        } detail: {
+        HStack(spacing: Theme.Window.Layout.gap) {
+            MainWindowSidebar(selection: $model.selection, library: services?.library)
+                .frame(width: Theme.Window.Layout.sidebarWidth)
+                .frame(maxHeight: .infinity)
+                .kitCell()
             RetainedModuleStack(selection: model.selection, model: model) { id in
                 RegisteredModuleView(id: id, services: services, studioCallbacks: studioCallbacks)
                     .equatable()
             }
+            // Content stays below the title-bar band, where a drag moves the window.
+            .padding(.top, Theme.Window.Layout.titlebarSafe)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .windowBackdrop(.content)
-            .navigationTitle(Text(module.title))
+            .kitCell()
         }
-        .navigationSplitViewStyle(.balanced)
-        // One frosted tray under the whole window; the sidebar and the module float on it.
-        .background {
-            if !reduceTransparency { TrayBlur().ignoresSafeArea() }
-        }
-        .animation(Theme.Motion.resolve(Theme.Motion.panel, reduceMotion: reduceMotion), value: model.sidebarVisible)
-        // AppKit owns the outer minimum height; a content minimum would add toolbar chrome.
+        .padding(Theme.Window.Layout.ring)
+        .ignoresSafeArea()
+        .kitTray()
         .frame(minWidth: MainWindowGeometry.minimumSize.width)
+        .foregroundStyle(Theme.Palette.ink.color)
         .tint(Theme.Palette.ink.color)
         .environment(\.appServices, services)
         .environment(\.screenshotEditorSession, services?.editor)
@@ -152,32 +100,6 @@ struct MainWindowView: View {
         .environment(\.mainWindowLifecycle, lifecycle)
         .background(EditorDocumentEditedBridge(edited: services?.editor.hasUnsavedEdits == true)
             .frame(width: 0, height: 0))
-    }
-}
-
-/// The sidebar is always shown, so the split view's own toggle is hidden.
-/// Hidden, not removed: `toolbar(removing: .sidebarToggle)` narrows the native sidebar to
-/// 148 pt even with a fixed column width. SwiftUI re-creates the item as the toolbar changes,
-/// so the window re-checks it on every update; the check is a few items, and idempotent.
-enum SidebarToggleSuppressor {
-    @MainActor private static var observers: [ObjectIdentifier: NSObjectProtocol] = [:]
-
-    @MainActor static func watch(_ window: NSWindow) {
-        hideToggles(in: window.toolbar)
-        let key = ObjectIdentifier(window)
-        guard observers[key] == nil else { return }
-        observers[key] = NotificationCenter.default.addObserver(forName: NSWindow.didUpdateNotification,
-                                                                object: window, queue: .main) { [weak window] _ in
-            MainActor.assumeIsolated { hideToggles(in: window?.toolbar) }
-        }
-    }
-
-    @MainActor static func hideToggles(in toolbar: NSToolbar?) {
-        for item in toolbar?.items ?? [] where isToggle(item) && !item.isHidden { item.isHidden = true }
-    }
-
-    @MainActor static func isToggle(_ item: NSToolbarItem) -> Bool {
-        item.itemIdentifier == .toggleSidebar || item.itemIdentifier.rawValue.localizedCaseInsensitiveContains("toggleSidebar")
     }
 }
 
@@ -238,12 +160,16 @@ extension EnvironmentValues {
 }
 
 /// Each visited module keeps its identity and local state until the window content is removed.
+/// A switch hides the outgoing module at once and lets the incoming one arrive like the panel's
+/// large content (a fade from 98.5 %). An unvisited module is mounted and laid out first, then
+/// arrives on the next pass: no layout work runs inside the animation.
 struct RetainedModuleStack<Content: View>: View {
     let selection: ModuleID
     let model: MainWindowModel?
     private let content: (ModuleID) -> Content
     private let reduceMotionOverride: Bool?
     @State private var visited: Set<ModuleID>
+    @State private var shown: ModuleID
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.mainWindowLifecycle) private var lifecycle
 
@@ -254,6 +180,7 @@ struct RetainedModuleStack<Content: View>: View {
         self.content = content
         self.reduceMotionOverride = reduceMotionOverride
         _visited = State(initialValue: [selection])
+        _shown = State(initialValue: selection)
     }
 
     private var reduceMotion: Bool { reduceMotionOverride ?? systemReduceMotion }
@@ -266,25 +193,27 @@ struct RetainedModuleStack<Content: View>: View {
         ZStack {
             ForEach(mountedModules, id: \.self) { id in
                 let active = id == selection
+                let visible = active && id == shown
                 content(id)
                     .background(PerformanceLayoutCompletionBridge(target: .module(id),
-                        active: active && id != .settings, diagnostics: model?.performanceDiagnostics))
+                        active: active, diagnostics: model?.performanceDiagnostics))
                     .environment(\.mainWindowModuleActive, active)
+                    // The module's activity flips at once, never inside the arrival's animation.
+                    .animation(nil, value: active)
                     .disabled(!active)
                     .allowsHitTesting(active)
                     .accessibilityHidden(!active)
-                    .opacity(active ? 1 : 0)
-                    .offset(y: Theme.Motion.moduleOffset(active: active, reduceMotion: reduceMotion))
-                    // Hide the outgoing content immediately; only the incoming module fades in.
-                    .animation(active ? Theme.Motion.resolve(Theme.Motion.moduleSwitch, reduceMotion: reduceMotion) : nil,
-                               value: active)
-                    .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .offset(y: Theme.Motion.moduleOffset(active: false, reduceMotion: reduceMotion))),
-                        removal: .identity))
+                    .opacity(visible ? 1 : 0)
+                    .scaleEffect(visible || reduceMotion ? 1 : Theme.Window.Lift.arriveScale)
+                    .animation(visible ? Theme.Motion.resolve(Theme.Window.Motion.arrive, reduceMotion: reduceMotion) : nil,
+                               value: visible)
             }
         }
-        .animation(Theme.Motion.resolve(Theme.Motion.moduleSwitch, reduceMotion: reduceMotion), value: mountedModules)
-        .onChange(of: selection) { _, id in visited.insert(id) }
+        .onChange(of: selection) { _, id in
+            visited.insert(id)
+            // The next main-queue turn runs after this pass's layout has been committed.
+            DispatchQueue.main.async { shown = id }
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ModuleSelectionResponderBridge(selection: selection,
             windowActive: lifecycle?.allowsLivePreview ?? true, model: model, lifecycle: lifecycle))
@@ -374,7 +303,6 @@ struct ModuleSelectionResponderBridge: NSViewRepresentable {
 }
 
 enum MainWindowLayout {
-    static let sidebarWidth = Theme.Navigation.sidebarWidth
 
     static func totalKnownBytes(_ sizes: some Sequence<Int64>) -> Int64 {
         sizes.reduce(Int64(0)) { total, size in
@@ -384,33 +312,84 @@ enum MainWindowLayout {
     }
 }
 
-/// The sidebar: the mark, then the modules by section, each with its ⌘ key, on its own
-/// frosted backdrop. The rows draw the ink selection capsule, never the user's accent.
-private struct MainWindowSidebar: View {
+/// Pure keyboard movement through the sidebar: one step up or down among the modules,
+/// stopping at the ends (as Finder's sidebar does).
+enum SidebarNavigation {
+    static func move<ID: Equatable>(from current: ID, by step: Int, in order: [ID]) -> ID {
+        guard let index = order.firstIndex(of: current) else { return order.first ?? current }
+        let next = min(max(index + step, 0), order.count - 1)
+        return order.isEmpty ? current : order[next]
+    }
+}
+
+/// The sidebar: the mark, then the modules by section, each with its ⌘ key, and the library's
+/// facts at the foot. It lists the same modules whatever the window shows. Rows answer the
+/// pointer like the panel's destinations; ↑/↓ move the selection while it has focus.
+struct MainWindowSidebar: View {
     @Binding var selection: ModuleID
+    let library: LibraryStore?
+    @Namespace private var mark
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var order: [ModuleID] { ModuleRegistry.all.filter(\.isAvailable).map(\.id) }
 
     var body: some View {
-        InkNavigationList(selection: $selection, order: order) { focus in
+        VStack(alignment: .leading, spacing: Theme.Window.Layout.rowSpacing) {
+            SidebarBrand()
+                .padding(.bottom, Theme.Space.m)
             ForEach(ModuleRegistry.sections, id: \.self) { section in
-                if let title = section.title { InkNavigationHeader(title: title) }
+                if let title = section.title {
+                    KitSectionHeader(title: Text(title))
+                        .padding(.horizontal, Theme.Window.Layout.rowInset)
+                        .padding(.top, Theme.Space.m)
+                        .padding(.bottom, Theme.Space.xs)
+                }
                 ForEach(ModuleRegistry.modules(in: section), id: \.id) { module in
-                    InkNavigationRow(id: module.id, selection: $selection, focus: focus) {
-                        SidebarRow(title: module.title, symbol: module.symbol,
-                                   tag: (module as? any ModuleBadging)?.badge,
-                                   key: ModuleShortcut.label(for: module.id))
-                    }
-                    .disabled(!module.isAvailable)
+                    KitNavRow(symbol: module.symbol, title: Text(module.title), key: ModuleShortcut.label(for: module.id),
+                              selected: selection == module.id, mark: mark) { select(module.id) }
+                        .disabled(!module.isAvailable)
                 }
             }
+            Spacer(minLength: Theme.Space.l)
+            if let library { LibrarySidebarFooter(store: library) }
         }
-        .safeAreaInset(edge: .top, spacing: 0) { SidebarBrandHeader() }
+        .kitHoverGroup()
+        .padding(Theme.Window.Layout.ring)
+        .padding(.top, Theme.Window.Layout.titlebarHeight - Theme.Window.Layout.ring)
+        .focusable()
+        .focusEffectDisabled()
+        .onMoveCommand { direction in
+            switch direction {
+            case .up: select(SidebarNavigation.move(from: selection, by: -1, in: order))
+            case .down: select(SidebarNavigation.move(from: selection, by: 1, in: order))
+            default: break
+            }
+        }
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(Text("Modules", comment: "Accessibility: the main window's sidebar"))
+    }
+
+    private func select(_ id: ModuleID) {
+        withAnimation(Theme.Motion.resolve(Theme.Window.Motion.select, reduceMotion: reduceMotion)) { selection = id }
     }
 }
 
-/// Reference shell facts come from the existing Library, without acquiring a watcher lease.
+/// The app's mark and name at the head of the sidebar.
+private struct SidebarBrand: View {
+    var body: some View {
+        HStack(spacing: Theme.Space.s) {
+            CamcordBrandMark()
+                .frame(width: Theme.Navigation.brandSize, height: Theme.Navigation.brandSize)
+            Text(verbatim: "Camcord").font(Theme.Window.Font.headline)
+        }
+        .foregroundStyle(Theme.Palette.ink.color)
+        .padding(.horizontal, Theme.Window.Layout.rowInset)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// The library's size at the foot of the sidebar, read from the store without a watcher lease.
 private struct LibrarySidebarFooter: View {
     @Bindable var store: LibraryStore
 
@@ -421,54 +400,25 @@ private struct LibrarySidebarFooter: View {
     }
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: Theme.Navigation.footerSpacing) {
-                decoration
-                if let version {
-                    Text(verbatim: version)
-                    separator
-                }
-                facts
-            }
-            .fixedSize(horizontal: true, vertical: false)
-            VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                if let version {
-                    HStack(spacing: Theme.Navigation.footerSpacing) {
-                        decoration
-                        Text(verbatim: version)
-                    }
-                }
-                facts
-            }
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            if let version { Text(verbatim: "Camcord \(version)") }
+            facts
         }
-        .font(Theme.Font.dataSmall)
-        .foregroundStyle(Theme.Palette.ink2.color)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, Theme.Space.s + Theme.Navigation.rowInset)
-        .padding(.trailing, Theme.Navigation.rowInset)
-        .padding(.top, Theme.Space.s)
-        .padding(.bottom, Theme.Space.m)
+        .font(Theme.Window.Font.data)
+        .foregroundStyle(Theme.Palette.ink3.color)
+        .lineLimit(1)
+        .padding(.horizontal, Theme.Window.Layout.rowInset)
+        .padding(.bottom, Theme.Space.xs)
         .accessibilityElement(children: .combine)
     }
 
     private var facts: some View {
         HStack(spacing: Theme.Navigation.footerSpacing) {
             Text("\(store.items.count) captures")
-            separator
+            Text(verbatim: "·").accessibilityHidden(true)
             Text(verbatim: ByteCountFormatter.string(
                 fromByteCount: MainWindowLayout.totalKnownBytes(store.items.map(\.byteSize)), countStyle: .file))
         }
-    }
-
-    private var separator: some View {
-        Text(verbatim: "·").accessibilityHidden(true)
-    }
-
-    private var decoration: some View {
-        // Decorative punctuation, with no assertion about device/store health.
-        Circle().fill(Theme.Palette.ink2.color)
-            .frame(width: Theme.Navigation.footerDotSize, height: Theme.Navigation.footerDotSize)
-            .accessibilityHidden(true)
     }
 }
 
@@ -478,12 +428,11 @@ extension ModuleSection {
         switch self {
         case .capture: nil
         case .create: LocalizedStringResource("Create", comment: "Sidebar section: making things from captures")
-        case .app: LocalizedStringResource("App", comment: "Sidebar section: the app itself")
         }
     }
 }
 
-/// ⌘1…⌘4 pick the modules in registry order.
+/// ⌘1…⌘3 pick the modules in registry order.
 enum ModuleShortcut {
     @MainActor static func index(of id: ModuleID) -> Int? {
         ModuleRegistry.all.firstIndex { $0.id == id }.flatMap { $0 < 9 ? $0 + 1 : nil }

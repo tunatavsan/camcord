@@ -599,6 +599,8 @@ extension Theme {
             static let cellRadius: CGFloat = Radius.floating
             static let sidebarWidth: CGFloat = 212
             static let titlebarHeight: CGFloat = 44
+            /// The window's title-bar band (window dragging) that interactive content stays below.
+            static let titlebarSafe: CGFloat = 20
             static let rowHeight: CGFloat = 32
             static let rowInset: CGFloat = 10
             static let rowSpacing: CGFloat = 2

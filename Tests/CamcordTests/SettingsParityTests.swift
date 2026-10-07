@@ -212,20 +212,20 @@ struct SettingsParityTests {
         #expect(missing.isEmpty, "no control for: \(missing.sorted())")
     }
 
-    @Test("the groups are in sidebar order, and the Settings sidebar remembers its group")
+    @Test("the groups are in tab order, and the Settings window remembers its group")
     func groups() throws {
         #expect(SettingsGroup.allCases.map(\.rawValue) == ["general", "screenshot", "recording", "camera", "input", "library", "permissions"])
         let defaults = try #require(UserDefaults(suiteName: Self.suiteName))
         defaults.removePersistentDomain(forName: Self.suiteName)
-        let model = MainWindowModel(defaults: defaults)
-        #expect(model.settingsGroup == .general)
-        model.settingsGroup = .camera
-        #expect(MainWindowModel(defaults: defaults).settingsGroup == .camera)
-        // Opening Settings from Studio and leaving goes back to Studio.
-        model.select(.studio)
-        model.select(.settings)
-        model.leaveSettings()
-        #expect(model.selection == .studio)
+        let model = SettingsWindowModel(defaults: defaults)
+        #expect(model.group == .general)
+        model.group = .camera
+        #expect(SettingsWindowModel(defaults: defaults).group == .camera)
+        // Opening Settings never moves the main window off its module.
+        let window = MainWindowModel(defaults: defaults)
+        window.select(.studio)
+        model.group = .input
+        #expect(window.selection == .studio)
         defaults.removePersistentDomain(forName: Self.suiteName)
     }
 

@@ -188,27 +188,23 @@ struct PerformanceDiagnosticsTests {
         #expect(result.elapsedNanoseconds > 0)
     }
 
-    @MainActor @Test("layout completion waits for a mounted backing view and closes actual Settings content")
+    @MainActor @Test("layout completion waits for a mounted backing view and closes the Settings page it measured")
     func mountedLayoutCompletion() {
         _ = NSApplication.shared
         let diagnostics = NavigationPerformanceDiagnostics()
-        diagnostics.request(.module(.settings))
         diagnostics.request(.settings(.general))
         let view = PerformanceLayoutCompletionBridge.LayoutView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
         view.diagnostics = diagnostics
         view.target = .settings(.general)
         view.generation = diagnostics.generation(for: .settings(.general))
-        view.settingsModuleGeneration = diagnostics.generation(for: .module(.settings))
         view.layout()
         #expect(diagnostics.generation(for: .settings(.general)) != nil)
-        #expect(diagnostics.generation(for: .module(.settings)) != nil)
         let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 600, height: 400),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         defer { window.contentView = nil }
         window.contentView = view
         view.layoutSubtreeIfNeeded()
         #expect(diagnostics.generation(for: .settings(.general)) == nil)
-        #expect(diagnostics.generation(for: .module(.settings)) == nil)
         #expect(!window.isVisible && !window.isKeyWindow)
     }
 

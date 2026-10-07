@@ -206,7 +206,7 @@ struct MainWindowGeometryTests {
         #expect(!window.isVisible && !window.isKeyWindow && NSApp.isActive == active)
         // Hosting updates run after initial installation; test the eventual constraint
         // as modules/toolbar items change and after a new host is installed on reopen.
-        for module in [ModuleID.settings, .studio, .edit, .library] {
+        for module in [ModuleID.studio, .edit, .library] {
             controller.model.select(module)
             for _ in 0..<5 {
                 window.contentView?.layoutSubtreeIfNeeded()

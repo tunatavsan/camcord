@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var servicesProvider: ServicesProvider?
     private var dockController: DockController?
     private var mainWindowController: MainWindowController?
+    private var settingsWindowController: SettingsWindowController?
     private let designLab = DesignLabWindowController()
     private var liveCheck: LiveCheck?
     private var firstRun: FirstRunWindowController?
@@ -81,6 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let mainWindowController = MainWindowController(dock: dockController, services: services)
         services.mainWindow = mainWindowController
         self.mainWindowController = mainWindowController
+        settingsWindowController = SettingsWindowController(dock: dockController, services: services)
 
         recordingController.onUIChange = { [weak self, weak statusItemController, weak recordingStateModel] state, elapsed in
             statusItemController?.setRecordingUI(state, elapsed: elapsed)
@@ -208,7 +210,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         statusItemController.onOpenMainWindow = { [weak self] in self?.showMainWindow() }
-        statusItemController.onOpenSettings = { [weak self] in self?.showSettingsModule() }
+        statusItemController.onOpenSettings = { [weak self] in self?.showSettingsWindow() }
         statusItemController.onOpenDesignLab = { [weak self] in self?.designLab.show() }
         statusItemController.onShowPanel = { [weak panelController, weak statusItemController] in
             guard let button = statusItemController?.anchorButton else { return }
@@ -249,6 +251,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let appearance = NSApp.appearance
             NSApp.appearance = NSAppearance(named: .aqua)
             NSApp.appearance = appearance
+        case .settings(let group):
+            panelController?.close()
+            settingsWindowController?.show(group: group, activate: false)
         case .lab(let page):
             designLab.show(page: page, activate: false)
         case .firstRun(let simulatedGrant):
@@ -256,6 +261,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             firstRun?.show(activate: false)
         case .close:
             mainWindowController?.close()
+            settingsWindowController?.close()
             designLab.close()
             firstRun?.permission.simulated = nil
             firstRun?.close()
@@ -312,21 +318,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = menu
     }
 
-    /// View › Library / Studio / Edit / Settings (⌘1…⌘4).
+    /// View › Library / Studio / Edit (⌘1…⌘3).
     @objc private func showModule(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let id = ModuleID(rawValue: raw) else { return }
         panelController?.close()
         mainWindowController?.show(module: id)
     }
 
-    /// ⌘, opens the main window on Settings.
+    /// ⌘, opens the Settings window.
     @objc private func showSettings(_ sender: Any?) {
-        showSettingsModule()
+        showSettingsWindow()
     }
 
-    private func showSettingsModule() {
+    private func showSettingsWindow() {
         panelController?.close()
-        mainWindowController?.show(module: .settings)
+        settingsWindowController?.show()
     }
 
     @objc private func showControlPanel(_ sender: Any?) {
@@ -429,7 +435,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         actions.quit = { NSApp.terminate(nil) }
         actions.openMainWindow = { [weak self] in self?.showMainWindow() }
         actions.openSettings = { [weak self] in
-            self?.showSettingsModule()
+            self?.showSettingsWindow()
         }
         return actions
     }

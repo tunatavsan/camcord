@@ -292,8 +292,6 @@ struct PerformanceLayoutCompletionBridge: NSViewRepresentable {
         view.diagnostics = diagnostics
         view.target = active ? target : nil
         view.generation = active ? diagnostics?.generation(for: target) : nil
-        view.settingsModuleGeneration = active && !target.isModule
-            ? diagnostics?.generation(for: .module(.settings)) : nil
         view.needsLayout = true
     }
 
@@ -301,7 +299,6 @@ struct PerformanceLayoutCompletionBridge: NSViewRepresentable {
         weak var diagnostics: NavigationPerformanceDiagnostics?
         var target: NavigationPerformanceDiagnostics.Target?
         var generation: UInt64?
-        var settingsModuleGeneration: UInt64?
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             needsLayout = true
@@ -310,10 +307,7 @@ struct PerformanceLayoutCompletionBridge: NSViewRepresentable {
             super.layout()
             guard window != nil, !bounds.isEmpty, let target else { return }
             diagnostics?.complete(target, generation: generation)
-            if !target.isModule {
-                diagnostics?.complete(.module(.settings), generation: settingsModuleGeneration)
-            }
-            generation = nil; settingsModuleGeneration = nil
+            generation = nil
         }
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
