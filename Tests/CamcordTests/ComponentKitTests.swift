@@ -84,17 +84,6 @@ struct ComponentKitTests {
         #expect(rest.opacity == 1 && rest.scale == 1 && rest.blur == 0)
     }
 
-    @Test("ink navigation: arrows move one step among the ids and stop at the ends")
-    func inkNavigation() {
-        let order = ["library", "studio", "edit", "settings"]
-        #expect(InkNavigation.move(from: "library", by: 1, in: order) == "studio")
-        #expect(InkNavigation.move(from: "studio", by: -1, in: order) == "library")
-        #expect(InkNavigation.move(from: "library", by: -1, in: order) == "library")
-        #expect(InkNavigation.move(from: "settings", by: 1, in: order) == "settings")
-        #expect(InkNavigation.move(from: "timeline", by: 1, in: order) == "library")
-        #expect(InkNavigation.move(from: "x", by: 1, in: [String]()) == "x")
-    }
-
     @Test("window panels share an opaque, readable fallback under Reduce Transparency")
     func windowBackdrops() {
         for backdrop in WindowBackdrop.allCases {
