@@ -2,7 +2,7 @@
 
 Camcord is one executable target, `Camcord`, built with Swift 6 strict concurrency, plus the vendored
 `KeyboardShortcuts` package. The app is an agent (`LSUIElement`): it lives in the menu bar and, by default, shows a Dock
-icon only while its main window is open.
+icon only while its main window or its Settings window is open.
 
 ## Layout
 
@@ -12,7 +12,7 @@ icon only while its main window is open.
 | `Recording` | `RecordingController` (main-actor flow), `RecordingEngine` (one `SCStream` per recording), `StreamWriter` (the `AVAssetWriter` hot path), audio processing and mixing, the camera source and compositor. |
 | `Overlay` | Panels drawn over other apps: the selection overlay, the window picker, the screenshot card, pins, the recording hub, the countdown and the recording frame. |
 | `Hotkeys` | `HotkeyCenter` for keyboard shortcuts and `EventTapEngine` for mouse buttons and double taps. |
-| `App` | App lifecycle, the status item and menu-bar panel, the main window and its modules (Library, Studio, Editor, Settings), the design system and diagnostics. |
+| `App` | App lifecycle, the status item and menu-bar panel, the main window and its modules (Library, Studio, Editor), the Settings window, the design system and diagnostics. |
 
 ## Taking a screenshot
 

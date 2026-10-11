@@ -17,8 +17,9 @@
 </p>
 
 Camcord lives in the menu bar for quick captures and opens a main window when you need more: a Library of everything
-you captured, an Editor for screenshots, a Studio for setting up recordings, and Settings. It is written in Swift on
-top of ScreenCaptureKit, AVFoundation and Vision, and it is designed for macOS 26 and Liquid Glass.
+you captured, an Editor for screenshots and a Studio for setting up recordings. Settings open in a window of their
+own. It is written in Swift on top of ScreenCaptureKit, AVFoundation and Vision, and it is designed for macOS 26 and
+Liquid Glass.
 
 ## Why Camcord
 
@@ -114,7 +115,7 @@ the few pixel, window-placement and sampler checks that need a real Mac's displa
 | `Sources/Camcord/Recording` | The ScreenCaptureKit stream, the `AVAssetWriter` pipeline, audio mixing, the camera and its compositor. |
 | `Sources/Camcord/Overlay` | Everything drawn over other apps: the selection overlay, the screenshot card, pins and the recording controls. |
 | `Sources/Camcord/Hotkeys` | Global keyboard shortcuts and the event tap for mouse buttons. |
-| `Sources/Camcord/App` | The menu-bar panel, the main window and its Library, Editor, Studio and Settings, and the design system. |
+| `Sources/Camcord/App` | The menu-bar panel, the main window and its Library, Editor and Studio, the Settings window, and the design system. |
 
 [ARCHITECTURE.md](ARCHITECTURE.md) explains how a capture and a recording flow through these parts.
 
